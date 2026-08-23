@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Boolean, Index, Integer, JSON, String, Text, delete, inspect, select
+from sqlalchemy import Boolean, Index, Integer, JSON, String, delete, inspect, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -50,21 +50,6 @@ class CloudSubscribeBase(DeclarativeBase):
             column.name: getattr(self, column.name, None)
             for column in self.__table__.columns
         }
-
-
-class DataMigrationState(CloudSubscribeBase):
-    __tablename__ = "data_migration_state"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    source_counts: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
-    target_counts: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
-    source_checksum: Mapped[str] = mapped_column(String(64), default="")
-    target_checksum: Mapped[str] = mapped_column(String(64), default="")
-    migrated_at: Mapped[str] = mapped_column(String(40), default="")
-    source_cleaned: Mapped[bool] = mapped_column(Boolean, default=False)
-    error: Mapped[str] = mapped_column(Text, default="")
 
 
 class HistoryRecord(CloudSubscribeBase):

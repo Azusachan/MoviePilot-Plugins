@@ -1,6 +1,7 @@
 """HDHive WebAPI 资源查询、详情解析与解锁。"""
 
 import copy
+import random
 import re
 import threading
 import time
@@ -11,13 +12,6 @@ from app.log import logger
 
 from .action import ServerActionResponse
 from .client import HDHiveClient, HDHiveWebError
-from .parser import (
-    file_preview_capability,
-    is_challenge_page,
-    resource_detail_path,
-    resource_group_data,
-    response_text,
-)
 from .parser import (
     HDHIVE_DETAIL_RESOURCE_TYPES,
     HDHIVE_RESOURCE_TYPES,
@@ -40,8 +34,90 @@ from .parser import (
     unlock_points,
     valid_share_url,
 )
+from .parser import (
+    file_preview_capability,
+    is_challenge_page,
+    resource_detail_path,
+    resource_group_data,
+    response_text,
+)
 from ...matching import positive_ints
 from ....utils.cache import create_platform_ttl_cache
+
+
+class _UnlockLimiter:
+    """资源服务级解锁节流与账号串行化。"""
+
+    WINDOW_SECONDS = 60.0
+    _STATE_LOCK = threading.RLock()
+    _HISTORIES: Dict[str, deque] = {}
+    _LOCKS: Dict[str, threading.RLock] = {}
+    _READY_ATS: Dict[str, float] = {}
+
+    def __init__(self, session_key: str, per_window: int):
+        self._key = str(session_key or "")
+        self._per_window = max(1, min(int(per_window or 2), 3))
+
+    def lock(self) -> threading.RLock:
+        with self._STATE_LOCK:
+            return self._LOCKS.setdefault(self._key, threading.RLock())
+
+    @property
+    def per_window(self) -> int:
+        return self._per_window
+
+    def record(self) -> None:
+        with self._STATE_LOCK:
+            history = self._HISTORIES.setdefault(self._key, deque())
+            now = time.monotonic()
+            self._evict(history, now)
+            history.append(now)
+
+    def wait_for_slot(self, stop_requested, cooldown_remaining) -> None:
+        def ensure_runnable():
+            if stop_requested():
+                raise HDHiveWebError("HDHive 解锁等待已停止", code="stopped")
+            remaining = cooldown_remaining()
+            if remaining > 0:
+                raise HDHiveWebError(
+                    "HDHive WebAPI 处于风控冷却期，跳过解锁"
+                    f"（剩余 {int(remaining + 0.999)} 秒）",
+                    code="rate_limited",
+                )
+
+        while True:
+            ensure_runnable()
+            wait_seconds = self._next_wait_seconds()
+            if wait_seconds <= 0:
+                return
+            logger.debug(f"HDHive 解锁接口按节奏等待 {wait_seconds:.1f} 秒")
+            deadline = time.monotonic() + wait_seconds
+            while deadline > time.monotonic():
+                ensure_runnable()
+                time.sleep(min(deadline - time.monotonic(), 0.25))
+
+    def _next_wait_seconds(self) -> float:
+        interval = self.WINDOW_SECONDS / self._per_window + random.uniform(1.0, 4.0)
+        with self._STATE_LOCK:
+            history = self._HISTORIES.setdefault(self._key, deque())
+            now = time.monotonic()
+            self._evict(history, now)
+            ready_at = self._READY_ATS.setdefault(
+                self._key, now + random.uniform(3.0, 8.0)
+            )
+            wait_seconds = max(ready_at - now, 0.0)
+            if history:
+                wait_seconds = max(wait_seconds, interval - (now - history[-1]))
+            if len(history) >= self._per_window:
+                wait_seconds = max(
+                    wait_seconds, self.WINDOW_SECONDS - (now - history[0])
+                )
+            return wait_seconds
+
+    @classmethod
+    def _evict(cls, history: deque, now: float) -> None:
+        while history and now - history[0] >= cls.WINDOW_SECONDS:
+            history.popleft()
 
 class HDHiveResourceService:
     """负责 HDHive 资源查询、解析、缓存和解锁。"""
@@ -77,6 +153,7 @@ class HDHiveResourceService:
             client: HDHiveClient,
             torrentclaw_enabled: bool = False,
             torrentclaw_subtitle_languages: Optional[List[str]] = None,
+            unlocks_per_minute: int = 2,
     ):
         self._client = client
         self._torrentclaw_enabled = bool(torrentclaw_enabled)
@@ -85,6 +162,7 @@ class HDHiveResourceService:
         )
         session_key = client.cache_namespace
         self._session_key = session_key
+        self._unlock_limiter = _UnlockLimiter(session_key, unlocks_per_minute)
         self._resource_cache = create_platform_ttl_cache(
             "hdhive:web:rows",
             session_key,
@@ -134,12 +212,15 @@ class HDHiveResourceService:
             client: HDHiveClient,
             torrentclaw_enabled: bool,
             torrentclaw_subtitle_languages: Any,
+            unlocks_per_minute: int = 2,
     ) -> bool:
         return (
                 self._client is client
                 and self._torrentclaw_enabled == bool(torrentclaw_enabled)
                 and self._torrentclaw_subtitle_languages
                 == normalize_languages(torrentclaw_subtitle_languages or ["zh"])
+                and self._unlock_limiter.per_window
+                == max(1, min(int(unlocks_per_minute or 2), 3))
         )
 
     def clear_cache(self) -> Dict[str, int]:
@@ -375,7 +456,6 @@ class HDHiveResourceService:
             self,
             slug: str,
             resource_type: str,
-            listed_points: int,
             is_unlocked: bool,
             target_season: Optional[int],
             target_episodes: Optional[List[int]],
@@ -383,68 +463,16 @@ class HDHiveResourceService:
             detail_path: str,
             log_prefix: str,
     ) -> Dict[str, Any]:
-        """按 HDHive 页面真实流程预览并取得资源链接。"""
+        """复用搜索阶段的 file-list 校验后提交解锁页面请求。"""
         detail_path = self._resolve_detail_path(
             resource_type, slug, detail_path
         )
         if is_unlocked:
-            access_key = f"{resource_type}:{slug}"
-            share_url = self._accessible_url_cache.get(access_key) or ""
-            if share_url and not valid_share_url(share_url, resource_type):
-                self._accessible_url_cache.delete(access_key)
-                share_url = ""
-            if share_url:
-                logger.debug(
-                    f"{log_prefix} 命中已解锁资源链接缓存：slug={slug}"
-                )
-                return {
-                    "url": share_url,
-                    "actual_points": 0,
-                    "preview_episodes": {},
-                    "is_unlocked": True,
-                }
-            lock_key = f"{self._session_key}:{access_key}"
-            access_lock = self._ACCESSIBLE_URL_LOCKS[
-                hash(lock_key) % len(self._ACCESSIBLE_URL_LOCKS)
-                ]
-            with access_lock:
-                share_url = self._accessible_url_cache.get(access_key) or ""
-                if share_url and not valid_share_url(share_url, resource_type):
-                    self._accessible_url_cache.delete(access_key)
-                    share_url = ""
-                if not share_url:
-                    page_started = time.monotonic()
-                    page_response = self._client.request(
-                        "GET",
-                        detail_path,
-                        headers={
-                            "accept": "text/html,application/xhtml+xml",
-                            "referer": f"{self.BASE_URL}/",
-                        },
-                    )
-                    page_text = getattr(page_response, "text", "") or ""
-                    parse_started = time.monotonic()
-                    share_url = share_url_from_values(
-                        page_text, resource_type
-                    )
-                    logger.debug(
-                        f"{log_prefix} 已解锁资源详情读取完成：slug={slug}，"
-                        f"请求={parse_started - page_started:.2f}s，"
-                        f"解析={time.monotonic() - parse_started:.3f}s"
-                    )
-                    if share_url:
-                        self._accessible_url_cache.set(access_key, share_url)
-                if not share_url:
-                    logger.warning(
-                        f"{log_prefix} 已解锁资源详情页未解析到链接：slug={slug}"
-                    )
-                return {
-                    "url": share_url,
-                    "actual_points": 0,
-                    "preview_episodes": {},
-                    "is_unlocked": bool(share_url),
-                }
+            return self._access_unlocked_resource(
+                slug, resource_type, detail_path, log_prefix
+            )
 
+        # file-list 是解锁前的必要资源覆盖校验，避免对缺集或已失效资源
         can_preview = supports_file_preview
         if can_preview is None:
             can_preview = self._resolve_file_preview_capability(
@@ -461,10 +489,11 @@ class HDHiveResourceService:
             season_key = str(max(1, int(target_season or 1)))
             available = positive_ints(preview_episodes.get(season_key))
             if targets and (not available or not (targets & available)):
-                logger.debug(f"{log_prefix} file-list 未覆盖当前缺集，跳过资源：slug={slug}")
+                logger.debug(
+                    f"{log_prefix} file-list 未覆盖当前缺集，跳过资源：slug={slug}"
+                )
                 return {
                     "url": "",
-                    "actual_points": 0,
                     "preview_episodes": preview_episodes,
                     "is_unlocked": False,
                     "skip_reason": "target_not_covered",
@@ -473,7 +502,6 @@ class HDHiveResourceService:
                 logger.debug(f"{log_prefix} file-list 标记资源失效，跳过资源：slug={slug}")
                 return {
                     "url": "",
-                    "actual_points": 0,
                     "preview_episodes": preview_episodes,
                     "is_unlocked": False,
                     "skip_reason": "resource_invalid",
@@ -483,20 +511,103 @@ class HDHiveResourceService:
                 f"{log_prefix} {resource_type.upper()} 不支持 file-list，"
                 f"已按资源卡片 remark 预筛结果继续：slug={slug}"
             )
-        response = self._client.web_unlock_request(
-            detail_path,
-            slug,
-            page_headers={
-                "accept": "text/html,application/xhtml+xml",
-                "referer": f"{self.BASE_URL}/",
-            },
-        )
-        result = self._unlock_response(response, listed_points, resource_type)
+        normalized_path = str(detail_path or "").strip()
+        if not normalized_path:
+            raise HDHiveWebError(
+                "HDHive 资源页路径或标识无效", code="invalid_resource"
+            )
+        with self._unlock_limiter.lock():
+            self._unlock_limiter.wait_for_slot(
+                self._client.stop_requested,
+                lambda: self._client.cooldown_remaining,
+            )
+            response = self._client.web_unlock_request(
+                normalized_path,
+                slug,
+                page_headers={
+                    "accept": "text/html,application/xhtml+xml",
+                    "referer": f"{self.BASE_URL}/",
+                },
+                on_submit=self._unlock_limiter.record,
+            )
+        result = self._unlock_response(response, resource_type)
         return {
             **result,
             "preview_episodes": preview_episodes,
             "is_unlocked": bool(result.get("url")),
         }
+
+    def _access_unlocked_resource(
+            self,
+            slug: str,
+            resource_type: str,
+            detail_path: str,
+            log_prefix: str,
+    ) -> Dict[str, Any]:
+        """读取已解锁资源详情页并解析分享链接（带链接缓存与并发合并）。"""
+
+        def cached_url(access_key: str) -> str:
+            share_url = self._accessible_url_cache.get(access_key) or ""
+            if share_url and not valid_share_url(share_url, resource_type):
+                self._accessible_url_cache.delete(access_key)
+                return ""
+            return share_url
+
+        access_key = f"{resource_type}:{slug}"
+        share_url = cached_url(access_key)
+        if share_url:
+            logger.debug(f"{log_prefix} 命中已解锁资源链接缓存：slug={slug}")
+        else:
+            lock_key = f"{self._session_key}:{access_key}"
+            access_lock = self._ACCESSIBLE_URL_LOCKS[
+                hash(lock_key) % len(self._ACCESSIBLE_URL_LOCKS)
+                ]
+            with access_lock:
+                share_url = cached_url(access_key)
+                if not share_url:
+                    share_url = self._parse_unlocked_share_url(
+                        slug, resource_type, detail_path, log_prefix
+                    )
+        if not share_url:
+            logger.warning(
+                f"{log_prefix} 已解锁资源详情页未解析到链接：slug={slug}"
+            )
+        return {
+            "url": share_url,
+            "preview_episodes": {},
+            "is_unlocked": bool(share_url),
+            "already_owned": True,
+        }
+
+    def _parse_unlocked_share_url(
+            self,
+            slug: str,
+            resource_type: str,
+            detail_path: str,
+            log_prefix: str,
+    ) -> str:
+        """请求详情页并解析分享链接，成功后写入链接缓存。"""
+        access_key = f"{resource_type}:{slug}"
+        page_started = time.monotonic()
+        page_response = self._client.request(
+            "GET",
+            detail_path,
+            headers={
+                "accept": "text/html,application/xhtml+xml",
+                "referer": f"{self.BASE_URL}/",
+            },
+        )
+        page_text = getattr(page_response, "text", "") or ""
+        parse_started = time.monotonic()
+        share_url = share_url_from_values(page_text, resource_type)
+        logger.debug(
+            f"{log_prefix} 已解锁资源详情读取完成：slug={slug}，"
+            f"请求={parse_started - page_started:.2f}s，"
+            f"解析={time.monotonic() - parse_started:.3f}s"
+        )
+        if share_url:
+            self._accessible_url_cache.set(access_key, share_url)
+        return share_url
 
     def _load_resource_rows(
             self,
@@ -943,7 +1054,6 @@ class HDHiveResourceService:
     def unlock_resource(
             self,
             slug: str,
-            unlock_points: int,
             resource_type: str,
             media_page_url: str = "",
             is_unlocked: bool = False,
@@ -953,16 +1063,14 @@ class HDHiveResourceService:
             detail_path: str = "",
             log_prefix: str = "[HDHIVE]",
     ) -> Dict[str, Any]:
-        """按详情页、file-list 预览和 Server Action 顺序获取链接。"""
+        """按详情页、file-list 预览和 HTTP 解锁接口顺序获取链接。"""
         normalized_slug = str(slug or "").strip()
         normalized_type = str(resource_type or "").strip().lower()
         if not normalized_slug or normalized_type not in HDHIVE_DETAIL_RESOURCE_TYPES:
             raise HDHiveWebError("HDHive 资源标识或类型无效", code="invalid_resource")
-        listed_points = max(0, int(unlock_points or 0))
         return self._http_access_resource(
             normalized_slug,
             normalized_type,
-            listed_points,
             bool(is_unlocked),
             target_season,
             target_episodes,
@@ -974,13 +1082,21 @@ class HDHiveResourceService:
     def _unlock_response(
             self,
             response: ServerActionResponse,
-            listed_points: int,
             normalized_type: str,
     ) -> Dict[str, Any]:
         """解析统一的 Server Action 解锁响应。"""
         status_code = response.status_code
         payload = response.payload
         if payload is None:
+            redirect_url = str(getattr(response, "redirect_url", "") or "").strip()
+            if status_code < 400 and valid_share_url(
+                    redirect_url, normalized_type
+            ):
+                self._resource_cache.clear()
+                return {
+                    "url": redirect_url,
+                    "success": True,
+                }
             raise HDHiveWebError(
                 "HDHive 解锁 Server Action 响应格式异常",
                 code="unlock_invalid_response",
@@ -1046,13 +1162,12 @@ class HDHiveResourceService:
                 else []
             )
         )
-        charged_points = 0 if data.get("already_owned") else listed_points
         if urls:
             self._resource_cache.clear()
         return {
             "url": urls if len(urls) > 1 else (urls[0] if urls else ""),
-            "actual_points": charged_points,
             "success": True,
+            "already_owned": bool(data.get("already_owned")),
         }
 
     def _resolve_file_preview_capability(

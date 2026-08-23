@@ -651,13 +651,12 @@ class PlatformIntegrationService(OwnerDelegator):
             self._sync_handler.get_sync_metrics()
             if self._sync_handler else {}
         )
-        queue = {"pending": 0, "active": 0, "operations": 0}
+        queue = {"pending": 0, "active": 0}
         if self._subscribe_search_queue_lock is not None:
             with self._subscribe_search_queue_lock:
                 queue = {
                     "pending": len(self._subscribe_search_pending),
                     "active": len(self._subscribe_search_active),
-                    "operations": int(self._sync_queue_pending or 0),
                 }
         external_calls = 0
         external_elapsed_ms = 0

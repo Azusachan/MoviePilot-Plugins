@@ -100,25 +100,6 @@
       </div>
     </div>
 
-    <v-dialog v-model="confirmVisible" max-width="420" persistent>
-      <v-card rounded="lg">
-        <v-card-title class="text-subtitle-1 d-flex align-center ga-2">
-          <v-icon icon="mdi-alert-outline" color="warning" />
-          {{ confirmationTitle }}
-        </v-card-title>
-        <v-card-text>
-          确认立即执行 {{ pendingProvider?.name || "当前渠道" }} {{ riskyModeLabel(pendingProvider) }}？
-          <v-alert type="warning" variant="tonal" density="compact" class="mt-3">
-            {{ riskWarning(pendingProvider) || "当前模式可能产生负积分奖励，执行后会直接扣除现有积分。" }}
-          </v-alert>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" :disabled="Boolean(runningProvider)" @click="closeConfirmation">取消</v-btn>
-          <v-btn color="warning" :loading="Boolean(runningProvider)" @click="confirmCheckin">确认签到</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
   </div>
 </template>
 
@@ -133,11 +114,8 @@ const props = defineProps({
 const emit = defineEmits(["result"])
 const histories = reactive({})
 const runningProvider = ref("")
-const confirmVisible = ref(false)
-const pendingProvider = ref(null)
 
 const dateColumns = computed(() => buildDateColumns())
-const confirmationTitle = computed(() => "确认执行" + riskyModeLabel(pendingProvider.value))
 
 function unwrapResponse(raw) {
   if (raw?.data && typeof raw.data === "object" && "success" in raw.data) return raw.data
@@ -194,20 +172,6 @@ function providerConfigured(provider) {
 
 function providerMode(provider) {
   return String(props.config[provider.modeKey] || "normal")
-}
-
-function riskWarning(provider) {
-  if (!provider) return ""
-  return provider.riskWarnings?.[providerMode(provider)] || ""
-}
-
-function isRiskyMode(provider) {
-  return Boolean(riskWarning(provider))
-}
-
-function riskyModeLabel(provider) {
-  const mode = provider ? providerMode(provider) : ""
-  return mode === "lucky" ? "运气签到" : "赌狗签到"
 }
 
 function latestRecord(provider) {
@@ -401,23 +365,7 @@ async function loadHistories() {
 
 function requestCheckin(provider) {
   if (runningProvider.value) return
-  if (isRiskyMode(provider)) {
-    pendingProvider.value = provider
-    confirmVisible.value = true
-    return
-  }
   runCheckin(provider)
-}
-
-function closeConfirmation() {
-  confirmVisible.value = false
-  pendingProvider.value = null
-}
-
-function confirmCheckin() {
-  const provider = pendingProvider.value
-  closeConfirmation()
-  if (provider) runCheckin(provider)
 }
 
 function wait(delay) {
@@ -442,7 +390,6 @@ async function runCheckin(provider) {
     const response = unwrapResponse(
       await props.api.post("plugin/CloudSubscribe/checkin/" + encodeURIComponent(provider.key), {
         mode: providerMode(provider),
-        confirm_risky: isRiskyMode(provider),
       }),
     )
     let success = response.success !== false

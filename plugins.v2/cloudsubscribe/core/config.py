@@ -1,13 +1,19 @@
 """Vue 页面需要的配置默认值和选项查询。"""
 
+import datetime
 from typing import Any, Dict, List
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
+from bs4 import BeautifulSoup
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
+from ..utils.http_client import requests
+
+DEFAULT_AUTO_SUBSCRIBE_USERNAME = "网盘订阅助手"
 
 
 class UIConfig:
@@ -15,6 +21,7 @@ class UIConfig:
 
     @staticmethod
     def get_default_config() -> Dict[str, Any]:
+        current_year = datetime.datetime.now().year
         return {
             "enabled": False,
             "show_sidebar_nav": True,
@@ -26,8 +33,69 @@ class UIConfig:
             "webhook_url": "",
             "webhook_method": "POST",
             "webhook_timeout": 10,
-            "onlyonce": False,
             "cron": "30 2,10,18 * * *",
+            "auto_subscribe_enabled": False,
+            "auto_subscribe_onlyonce": False,
+            "auto_subscribe_cron": "0 8 * * *",
+            "auto_subscribe_providers": [],
+            "auto_subscribe_username": DEFAULT_AUTO_SUBSCRIBE_USERNAME,
+            "auto_subscribe_notify": False,
+            "auto_subscribe_skip_subscribed": True,
+            "auto_subscribe_skip_history": True,
+            "auto_subscribe_skip_library": True,
+            "auto_subscribe_skip_season_zero": True,
+            "auto_subscribe_proxy": "",
+            "auto_subscribe_proxy_username": "",
+            "auto_subscribe_proxy_password": "",
+            "auto_subscribe_douban_enabled": False,
+            "auto_subscribe_douban_cron": "0 8 * * *",
+            "auto_subscribe_douban_ranks": ["movie-hot-gaia", "tv-hot"],
+            "auto_subscribe_douban_rsshub_base": "https://rsshub.app",
+            "auto_subscribe_douban_rss_urls": [],
+            "auto_subscribe_douban_proxy": False,
+            "auto_subscribe_douban_min_vote": 6,
+            "auto_subscribe_douban_min_year": current_year,
+            "auto_subscribe_douban_media_type": "all",
+            "auto_subscribe_maoyan_enabled": False,
+            "auto_subscribe_maoyan_cron": "0 9 * * *",
+            "auto_subscribe_maoyan_base_url": "https://piaofang.maoyan.com",
+            "auto_subscribe_maoyan_movie_box": True,
+            "auto_subscribe_maoyan_web_platform_map": {"all": ["tv"]},
+            "auto_subscribe_maoyan_platforms": ["all"],
+            "auto_subscribe_maoyan_categories": ["tv"],
+            "auto_subscribe_maoyan_limit": 10,
+            "auto_subscribe_maoyan_proxy": False,
+            "auto_subscribe_maoyan_min_vote": 6,
+            "auto_subscribe_maoyan_min_year": current_year,
+            "auto_subscribe_maoyan_media_type": "all",
+            "auto_subscribe_netflix_enabled": False,
+            "auto_subscribe_netflix_cron": "0 11 * * 3",
+            "auto_subscribe_netflix_base_url": "https://www.netflix.com",
+            "auto_subscribe_netflix_global": True,
+            "auto_subscribe_netflix_global_dataset": "weekly",
+            "auto_subscribe_netflix_global_media_types": [
+                "Films (English)", "Films (Non-English)",
+                "TV (English)", "TV (Non-English)",
+            ],
+            "auto_subscribe_netflix_country_selections": {},
+            "auto_subscribe_netflix_limit": 10,
+            "auto_subscribe_netflix_proxy": False,
+            "auto_subscribe_netflix_min_vote": 6,
+            "auto_subscribe_netflix_min_year": current_year,
+            "auto_subscribe_netflix_rich_metadata": False,
+            "auto_subscribe_netflix_max_workers": 4,
+            "auto_subscribe_netflix_use_cache": True,
+            "auto_subscribe_mikan_enabled": False,
+            "auto_subscribe_mikan_cron": "0 10 * * 1",
+            "auto_subscribe_mikan_year": current_year,
+            "auto_subscribe_mikan_season": "当前",
+            "auto_subscribe_mikan_resolve_bangumi_id": True,
+            "auto_subscribe_mikan_proxy": False,
+            "auto_subscribe_mikan_min_vote": 6,
+            "auto_subscribe_mikan_min_year": current_year,
+            "auto_subscribe_mikan_base_urls": [
+                "https://mikanani.me", "https://mikanime.tv"
+            ],
             "cookies": "",
             "p123_token": "",
             "p123_request_timeout": 30,
@@ -188,6 +256,99 @@ class UIConfig:
             "alipan_media_path": "/",
             "self_heal_interval": 10,
         }
+
+    @staticmethod
+    def normalize_auto_subscribe_years(config: Dict[str, Any]) -> None:
+        current_year = datetime.datetime.now().year
+        for key in (
+                "auto_subscribe_douban_min_year",
+                "auto_subscribe_maoyan_min_year",
+                "auto_subscribe_netflix_min_year",
+                "auto_subscribe_mikan_year",
+                "auto_subscribe_mikan_min_year",
+        ):
+            try:
+                if int(config.get(key) or 0) == 0:
+                    config[key] = current_year
+            except (TypeError, ValueError):
+                config[key] = current_year
+
+    @staticmethod
+    def get_rsshub_instances() -> List[Dict[str, str]]:
+        """读取 RSSHub 公共实例公告页，仅保留可作为服务根地址的 URL。"""
+        fallback = ["https://rsshub.app"]
+        url = "https://docs.rsshub.app/zh/guide/instances"
+        try:
+            response = requests.get(url, timeout=10, impersonate="chrome")
+            try:
+                response.raise_for_status()
+                content = str(getattr(response, "text", "") or "")
+            finally:
+                response.close()
+            values = []
+            soup = BeautifulSoup(content, "lxml")
+            for row in soup.find_all("tr"):
+                cells = row.find_all(["th", "td"], recursive=False)
+                if len(cells) < 4:
+                    continue
+                address_anchor = cells[0].find("a", href=True)
+                status_badge = cells[-1].find("img", src=True)
+                if not address_anchor or not status_badge:
+                    continue
+                badge_url = urlsplit(str(status_badge.get("src") or "").strip())
+                if (
+                        badge_url.hostname != "img.shields.io"
+                        or not badge_url.path.endswith("website.svg")
+                ):
+                    continue
+                value = UIConfig._normalize_rsshub_instance_url(
+                    address_anchor.get("href")
+                )
+                status_target = UIConfig._normalize_rsshub_instance_url(
+                    parse_qs(badge_url.query).get("url", [""])[0]
+                )
+                if not value or not status_target:
+                    continue
+                if urlsplit(value).hostname != urlsplit(status_target).hostname:
+                    continue
+                if value not in values:
+                    values.append(value)
+            if values:
+                logger.debug(f"获取 RSSHub 公共实例成功：{len(values)} 个")
+                return [{"title": value, "value": value} for value in values]
+        except Exception as error:
+            logger.debug(f"获取 RSSHub 公共实例失败：{error}")
+        return [{"title": value, "value": value} for value in fallback]
+
+    @staticmethod
+    def _normalize_rsshub_instance_url(value: Any) -> str:
+        """规范公告中的实例地址，拒绝维护者主页、查询参数和本地地址。"""
+        try:
+            parsed = urlsplit(str(value or "").strip())
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return ""
+            if (
+                    not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.query
+                    or parsed.fragment
+            ):
+                return ""
+            port = parsed.port
+        except ValueError:
+            return ""
+        hostname = parsed.hostname.rstrip(".").lower()
+        if (
+                "." not in hostname
+                or hostname == "localhost"
+                or hostname.endswith(".local")
+                or any(character.isspace() for character in parsed.path)
+        ):
+            return ""
+        netloc = hostname if port is None else f"{hostname}:{port}"
+        path = parsed.path.rstrip("/")
+        return urlunsplit((parsed.scheme.lower(), netloc, path, "", ""))
 
     @staticmethod
     def _subscribes() -> list:

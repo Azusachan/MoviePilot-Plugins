@@ -5,16 +5,18 @@ import {createNotifySection} from "./fields/notify.js";
 import {createSearchSection} from "./fields/search/index.js";
 import {createTransferSection} from "./fields/transfer.js";
 import {createUpgradeSection} from "./fields/upgrade.js";
+import {createSubscribeSection} from "./fields/subscribe.js";
 
 export function createConfigSections(options, config = {}) {
   const cloudDriveItems = createCloudDriveItems(options);
   const resourceTypeItems = createResourceTypeItems(cloudDriveItems, config);
   return [
     createBasicSection(cloudDriveItems),
+    createSubscribeSection(options),
     createTransferSection(options),
     createDriveSection(options),
     createSearchSection(resourceTypeItems, options),
     createUpgradeSection(options),
     createNotifySection(options),
-  ];
+  ]
 }

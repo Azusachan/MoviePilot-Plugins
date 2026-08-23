@@ -288,14 +288,14 @@
       </v-card>
     </v-dialog>
 
-    <v-snackbar v-model="fallbackVisible" :color="fallbackType" timeout="3000">
+    <v-snackbar v-model="fallbackVisible" :color="fallbackType" location="top" timeout="3000">
       {{ fallbackMessage }}
     </v-snackbar>
   </div>
 </template>
 
 <script setup>
-import {computed, defineAsyncComponent, inject, onMounted, onUnmounted, ref, watch} from "vue";
+import {computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
 import RuntimeCard from "./dashboard/RuntimeCard.vue";
 import HistoryTable from "./dashboard/HistoryTable.vue";
@@ -318,7 +318,6 @@ const props = defineProps({
 const api = props.api
 const display = useDisplay()
 const isMobile = computed(() => display.xs.value)
-const hostToast = inject("moviepilot:toast", null)
 const fallbackVisible = ref(false)
 const fallbackMessage = ref("")
 const fallbackType = ref("success")
@@ -363,10 +362,6 @@ const historySelection = ref({ groupCount: 0, subscribeIds: [], targets: [] })
 
 function notify(text, type = "success") {
   const method = ["success", "info", "warning", "error"].includes(type) ? type : "success"
-  if (typeof hostToast?.[method] === "function") {
-    hostToast[method](text)
-    return
-  }
   fallbackMessage.value = text
   fallbackType.value = method
   fallbackVisible.value = true
@@ -559,9 +554,7 @@ function openClearHistory() {
 async function clearHistory() {
   clearing.value = true
   try {
-    const message = await clearHistoryRequest(
-      forceClearHistory.value, clearPointsHistory.value,
-    );
+    const message = await clearHistoryRequest(forceClearHistory.value, clearPointsHistory.value);
     clearVisible.value = false
     forceClearHistory.value = false
     clearPointsHistory.value = false;

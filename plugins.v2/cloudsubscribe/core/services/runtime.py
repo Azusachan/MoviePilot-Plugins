@@ -599,20 +599,6 @@ class SyncRuntimeService(OwnerDelegator):
     def _serialize_runtime_tasks(self) -> List[Dict[str, Any]]:
         """合并订阅任务与其跨盘子任务，避免同一操作重复展示。"""
         tasks = self._serialize_sync_tasks()
-        if self._sync_queue_lock is not None:
-            with self._sync_queue_lock:
-                queued_operations = sorted(
-                    (
-                        dict(task)
-                        for task in self._sync_queue_tasks.values()
-                    ),
-                    key=lambda item: float(item.get("queued_at") or 0),
-                )
-            for position, task in enumerate(queued_operations, start=1):
-                task["queue_position"] = position
-                if task.get("status") == "queued":
-                    task["phase"] = f"排队中 · 队列位置 {position}"
-                tasks.append(task)
         transfer_manager = getattr(self, "_cross_transfer_manager", None)
         if not transfer_manager:
             return tasks

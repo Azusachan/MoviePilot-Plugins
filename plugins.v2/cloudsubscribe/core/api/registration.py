@@ -64,6 +64,27 @@ class MoviePilotRegistration(OwnerDelegator):
     def get_api(self) -> List[Dict[str, Any]]:
         return [
             {
+                "path": "/auto_subscribe/run",
+                "endpoint": self.api_run_auto_subscribe,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "立即执行榜单自动订阅",
+            },
+            {
+                "path": "/auto_subscribe/test",
+                "endpoint": self.api_test_auto_subscribe,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "测试榜单来源",
+            },
+            {
+                "path": "/auto_subscribe/proxy/test",
+                "endpoint": self.api_test_auto_subscribe_proxy,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "测试榜单代理",
+            },
+            {
                 "path": "/overview",
                 "endpoint": self.api_platform_overview,
                 "methods": ["GET"],
@@ -496,7 +517,7 @@ class MoviePilotRegistration(OwnerDelegator):
             {
                 "cmd": "/cloud_checkin",
                 "event": EventType.PluginAction,
-                "desc": "立即执行签到：渠道 normal|gambler|lucky confirm",
+                "desc": "立即执行签到：渠道 normal|gambler|lucky",
                 "category": "网盘订阅",
                 "data": {"action": "cloudsubscribe_checkin"},
             },
@@ -521,6 +542,29 @@ class MoviePilotRegistration(OwnerDelegator):
             return []
 
         services = []
+
+        if bool(getattr(self, "_auto_subscribe_enabled", False)):
+            schedules = dict(getattr(self, "_auto_subscribe_provider_schedules", {}) or {})
+            if schedules:
+                for provider_id, cron in schedules.items():
+                    if not self._cron_is_valid(cron):
+                        logger.warning(f"榜单自动订阅 {provider_id} Cron 表达式无效：{cron}")
+                        continue
+                    services.append({
+                        "id": f"CloudSubscribe_AutoSubscribe_{provider_id}",
+                        "name": f"{provider_id}榜单自动订阅服务",
+                        "trigger": CronTrigger.from_crontab(cron),
+                        "func": self.run_auto_subscribe,
+                        "kwargs": {"provider_ids": [provider_id]},
+                    })
+            elif self._cron_is_valid(getattr(self, "_auto_subscribe_cron", "")):
+                services.append({
+                    "id": "CloudSubscribe_AutoSubscribe",
+                    "name": "榜单自动订阅服务",
+                    "trigger": CronTrigger.from_crontab(self._auto_subscribe_cron),
+                    "func": self.run_auto_subscribe,
+                    "kwargs": {},
+                })
 
         if self._cron and self._cron_is_valid(self._cron):
             try:

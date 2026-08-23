@@ -45,12 +45,16 @@
                 :api="api"
                 :refreshing-accounts="refreshingAccounts"
                 :testing-source="testingSource"
+                :testing-auto-subscribe="testingAutoSubscribe"
                 :testing-proxy="testingProxy"
+                :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
                 :hdhive-oauth-action="hdhiveOauthAction"
                 @scan="openQrCode"
                 @browse-directory="openDirectoryPicker"
                 @test-source="openSourceTest"
+                @test-auto-subscribe="testAutoSubscribe"
                 @test-proxy="testSearchProxy"
+                @test-auto-subscribe-proxy="testAutoSubscribeProxy"
                 @refresh-account="refreshAccount"
                 @hdhive-oauth-start="startHdhiveOAuth"
                 @hdhive-oauth-exchange="exchangeHdhiveOAuth"
@@ -307,6 +311,46 @@
         </v-form>
       </v-card>
     </v-dialog>
+    <v-dialog v-model="autoSubscribeTestVisible" max-width="560" class="auto-subscribe-test-dialog">
+      <v-card class="auto-subscribe-test-card">
+        <v-card-title class="d-flex align-center ga-2">
+          <v-icon icon="mdi-flask-outline" color="primary" />
+          <span>{{ autoSubscribeProviderNames[autoSubscribeTestProvider] || "榜单" }}测试</span>
+          <v-spacer />
+          <v-btn icon="mdi-close" size="small" variant="text" title="关闭" @click="autoSubscribeTestVisible = false" />
+        </v-card-title>
+        <v-card-text class="auto-subscribe-test-body">
+          <v-alert v-if="autoSubscribeTestError" type="error" variant="tonal" density="compact" class="mb-3">
+            {{ autoSubscribeTestError }}
+          </v-alert>
+          <div v-if="autoSubscribeTestLoading" class="auto-subscribe-test-loading">
+            <v-progress-circular indeterminate color="primary" size="36" />
+            <span class="text-body-2">正在抓取榜单示例</span>
+          </div>
+          <template v-else-if="autoSubscribeTestResult">
+            <div class="text-body-2 mb-2">{{ autoSubscribeTestMessage }}</div>
+            <v-list v-if="autoSubscribeTestItems.length" density="compact" lines="two" class="auto-subscribe-test-list">
+              <v-list-item v-for="(item, index) in autoSubscribeTestItems" :key="`${item.title}-${index}`">
+                <template #prepend>
+                  <v-avatar size="30" color="primary" variant="tonal">{{ index + 1 }}</v-avatar>
+                </template>
+                <v-list-item-title>{{ item.title }}</v-list-item-title>
+                <v-list-item-subtitle>
+                  <span v-if="item.year">{{ item.year }}</span>
+                  <span v-if="item.media_type">· {{ item.media_type === "tv" ? "电视剧" : "电影" }}</span>
+                  <span v-if="item.season != null">· 第 {{ item.season }} 季</span>
+                </v-list-item-subtitle>
+              </v-list-item>
+            </v-list>
+            <v-alert v-else type="info" variant="tonal" density="compact">榜单已连通，但没有示例数据。</v-alert>
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="autoSubscribeTestVisible = false">关闭</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-dialog v-model="previewVisible" max-width="720">
       <v-card class="source-preview-card">
         <v-card-title class="d-flex align-center ga-2">
@@ -436,7 +480,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-    <v-snackbar v-model="messageVisible" :color="messageType" location="top end" timeout="3500" variant="elevated">
+    <v-snackbar v-model="messageVisible" :color="messageType" location="top" timeout="3500" variant="elevated">
       {{ message }}
       <template #actions>
         <v-btn icon="mdi-close" size="small" variant="text" @click="messageVisible = false" />
@@ -461,6 +505,34 @@ const props = defineProps({
 const emit = defineEmits(["save", "close", "switch", "layout"])
 const api = props.api
 const config = reactive(JSON.parse(JSON.stringify(props.initialConfig || {})))
+
+function normalizeAutoSubscribeYears(target) {
+  const currentYear = new Date().getFullYear();
+  if (!String(target.auto_subscribe_username || "").trim()) target.auto_subscribe_username = "网盘订阅助手"
+  ;
+  [
+    "auto_subscribe_douban_min_year",
+    "auto_subscribe_maoyan_min_year",
+    "auto_subscribe_netflix_min_year",
+    "auto_subscribe_mikan_year",
+    "auto_subscribe_mikan_min_year",
+  ].forEach((key) => {
+    const value = Number(target[key]);
+    if (!Number.isFinite(value) || value === 0) target[key] = currentYear;
+  });
+  if (typeof target.auto_subscribe_douban_rss_urls === "string") {
+    target.auto_subscribe_douban_rss_urls = target.auto_subscribe_douban_rss_urls
+      .split(/[\n,，]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+  if (!Array.isArray(target.auto_subscribe_mikan_base_urls)) {
+    const value = String(target.auto_subscribe_mikan_base_urls || "").trim();
+    target.auto_subscribe_mikan_base_urls = value ? [value] : ["https://mikanani.me", "https://mikanime.tv"];
+  }
+}
+
+normalizeAutoSubscribeYears(config);
 if (!Array.isArray(config.online_docs) || !config.online_docs.length) {
   const legacyUrls = Array.isArray(config.online_docs_urls)
     ? config.online_docs_urls
@@ -497,7 +569,14 @@ const qrVisible = ref(false),
   refreshingAccounts = ref([]),
   hdhiveOauthAction = ref(""),
   testingSource = ref(""),
+  testingAutoSubscribe = ref(""),
+  autoSubscribeTestVisible = ref(false),
+  autoSubscribeTestProvider = ref(""),
+  autoSubscribeTestLoading = ref(false),
+  autoSubscribeTestResult = ref(null),
+  autoSubscribeTestError = ref(""),
   testingProxy = ref(false),
+  testingAutoSubscribeProxy = ref(false),
   searchingTmdb = ref(false),
   tmdbSearched = ref(false),
   tmdbCandidates = ref([]),
@@ -545,6 +624,8 @@ const options = reactive({
   accounts: {},
   searchAccounts: {},
   pansou: {},
+  rsshubInstances: [],
+  rsshubLoading: false,
 })
 const sections = computed(() => createConfigSections(options, config))
 const testResourceTabs = computed(() => {
@@ -575,6 +656,19 @@ const sourceNames = {
   pinglian: "盘链",
   online_docs: "在线文档",
 }
+const autoSubscribeProviderNames = {
+  douban: "豆瓣榜单",
+  maoyan: "猫眼榜单",
+  netflix: "Netflix 榜单",
+  mikan: "Mikan 新番",
+};
+const autoSubscribeTestItems = computed(() => {
+  const items = autoSubscribeTestResult.value?.data?.items || autoSubscribeTestResult.value?.items || [];
+  return Array.isArray(items) ? items : [];
+});
+const autoSubscribeTestMessage = computed(() => {
+  return autoSubscribeTestResult.value?.message || "测试完成";
+});
 const sourceTestConfigKeys = {
   pansou: [
     "pansou_url",
@@ -671,6 +765,9 @@ function applyOptions(data) {
   if ("pansou" in data) {
     options.pansou = data.pansou && typeof data.pansou === "object" ? data.pansou : {}
   }
+  if ("rsshub_instances" in data) {
+    options.rsshubInstances = Array.isArray(data.rsshub_instances) ? data.rsshub_instances : [];
+  }
   const configuredSources = Array.isArray(config.search_source_order)
     ? config.search_source_order.filter(Boolean)
     : String(config.search_source_order || "")
@@ -685,6 +782,7 @@ function applyOptions(data) {
       .map((value) => value.trim())
       .filter(Boolean)
   })
+  normalizeAutoSubscribeYears(config);
 }
 
 function notify(text, type = "success") {
@@ -724,6 +822,31 @@ async function testSearchProxy() {
     notify(error?.response?.data?.message || error.message || String(error), "error")
   } finally {
     testingProxy.value = false
+  }
+}
+
+async function testAutoSubscribeProxy() {
+  if (testingAutoSubscribeProxy.value) return;
+  const proxy = String(config.auto_subscribe_proxy || "").trim();
+  if (!proxy) {
+    notify("请先填写榜单代理地址", "warning");
+    return;
+  }
+  testingAutoSubscribeProxy.value = true;
+  try {
+    const response = unwrapResponse(
+      await api.post("plugin/CloudSubscribe/auto_subscribe/proxy/test", {
+        proxy,
+        username: String(config.auto_subscribe_proxy_username || "").trim(),
+        password: String(config.auto_subscribe_proxy_password || ""),
+      }),
+    );
+    if (response.success === false) throw new Error(response.message || "代理测试失败");
+    notify(response.message || "榜单代理连接成功");
+  } catch (error) {
+    notify(error?.response?.data?.message || error.message || String(error), "error");
+  } finally {
+    testingAutoSubscribeProxy.value = false;
   }
 }
 
@@ -840,11 +963,31 @@ async function requestResourceUrl(item) {
   if (response.success === false) throw new Error(response.message || "资源链接获取失败")
   const data = response.data?.data || response.data || {}
   if (!data.url) throw new Error(response.message || "资源链接获取失败")
+  applySearchAccountPoints(item.source, data.deducted_points);
   item.url = data.url
   item.need_access = false
   item.need_unlock = false
   item.is_unlocked = true
   return response.message || "资源链接已获取"
+}
+
+function applySearchAccountPoints(source, deductedPoints) {
+  const normalizedSource = String(source || "").trim().toLowerCase();
+  const points = Number(deductedPoints);
+  if (!normalizedSource || !Number.isFinite(points) || points <= 0) return;
+  const account = options.searchAccounts?.[normalizedSource];
+  const available = Number(account?.points?.available);
+  if (!account || !Number.isFinite(available)) return;
+  options.searchAccounts = {
+    ...options.searchAccounts,
+    [normalizedSource]: {
+      ...account,
+      points: {
+        ...(account.points || {}),
+        available: Math.max(0, available - points),
+      },
+    },
+  };
 }
 
 async function accessResource(item) {
@@ -875,9 +1018,7 @@ async function previewResource(item) {
   previewResourceType.value = String(item.resource_type || "").toLowerCase()
   previewShareUrl.value = shareUrl
   previewSource.value = String(item.source || "").toLowerCase()
-  previewJuyingResourceId.value = String(
-    item.provider_data?.resource_id || "",
-  );
+  previewJuyingResourceId.value = String(item.provider_data?.resource_id || "");
   previewHdhiveResourceRef.value = String(item.resource_ref || "");
   previewProviderData.value = {...(item.provider_data || {})};
   previewPendingResource.value = {
@@ -1086,6 +1227,7 @@ async function loadOptions(scope = "base", { force = false } = {}) {
     return optionScopeRequests.get(normalizedScope)
   }
   const request = (async () => {
+    if (normalizedScope === "base") options.rsshubLoading = true;
     const query = new URLSearchParams({ scope: normalizedScope })
     const response = unwrapResponse(await api.get(`plugin/CloudSubscribe/ui_options?${query}`))
     if (response.success === false) {
@@ -1093,11 +1235,13 @@ async function loadOptions(scope = "base", { force = false } = {}) {
     }
     applyOptions(response.data?.data || response.data || response)
     loadedOptionScopes.add(normalizedScope)
+    if (normalizedScope === "base") options.rsshubLoading = false;
   })()
   optionScopeRequests.set(normalizedScope, request)
   try {
     return await request
   } finally {
+    if (normalizedScope === "base") options.rsshubLoading = false;
     optionScopeRequests.delete(normalizedScope)
   }
 }
@@ -1357,6 +1501,31 @@ async function testSource(candidate) {
   }
 }
 
+async function testAutoSubscribe(provider) {
+  if (testingAutoSubscribe.value) return;
+  testingAutoSubscribe.value = provider;
+  autoSubscribeTestProvider.value = provider;
+  autoSubscribeTestVisible.value = true;
+  autoSubscribeTestLoading.value = true;
+  autoSubscribeTestResult.value = null;
+  autoSubscribeTestError.value = "";
+  try {
+    const response = unwrapResponse(
+      await api.post("plugin/CloudSubscribe/auto_subscribe/test", {
+        provider_id: provider,
+        config: JSON.parse(JSON.stringify(config)),
+      }),
+    );
+    autoSubscribeTestResult.value = response;
+    if (response.success === false) autoSubscribeTestError.value = response.message || "榜单测试失败";
+  } catch (error) {
+    autoSubscribeTestError.value = error?.response?.data?.message || error.message || String(error);
+  } finally {
+    autoSubscribeTestLoading.value = false;
+    testingAutoSubscribe.value = "";
+  }
+}
+
 onMounted(async () => {
   window.addEventListener("message", handleHdhiveOAuthMessage)
   emit("layout", { maxWidth: "62rem" })
@@ -1402,7 +1571,10 @@ watch(previewVisible, (visible) => {
 
 watch(
   () => props.initialConfig,
-  (value) => Object.assign(config, JSON.parse(JSON.stringify(value || {}))),
+  (value) => {
+    Object.assign(config, JSON.parse(JSON.stringify(value || {})));
+    normalizeAutoSubscribeYears(config);
+  },
   { deep: true },
 )
 
@@ -1534,6 +1706,34 @@ watch(
 
 .source-test-card--results {
   height: min(600px, calc(100dvh - 48px));
+}
+
+.auto-subscribe-test-card {
+  max-height: min(620px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.auto-subscribe-test-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.auto-subscribe-test-loading {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auto-subscribe-test-list {
+  max-height: min(420px, 52dvh);
+  overflow-y: auto;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
 }
 
 .source-test-header,

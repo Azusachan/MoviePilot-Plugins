@@ -115,7 +115,7 @@ class QRCodeService(OwnerDelegator):
                 return {"success": True, "provider": key, **result}
 
             credentials = self._apply_qrcode_credentials(key, result)
-            self._update_plugin_config()
+            self._persist_config_values(**credentials)
             self._init_handlers()
             from .account import clear_account_cache
             from .page import clear_ui_options_cache
@@ -161,7 +161,7 @@ class QRCodeService(OwnerDelegator):
                 raise RuntimeError("扫码成功，但115登录状态校验失败")
             if self._p115_manager:
                 self._p115_manager.close()
-            self._cookies = cookies
+            self._p115_cookies = cookies
             self._p115_manager = manager
             self._register_p115_provider()
             return {"cookies": cookies}
@@ -225,6 +225,7 @@ class QRCodeService(OwnerDelegator):
             return {
                 "tianyi_access_token": access_token,
                 "tianyi_refresh_token": refresh_token,
+                "tianyi_session_key": session_key,
             }
 
         raise ValueError(f"不支持扫码登录的网盘提供方：{provider}")

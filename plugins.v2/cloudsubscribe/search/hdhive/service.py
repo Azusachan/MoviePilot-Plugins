@@ -43,7 +43,6 @@ class HDHiveSearchService(OwnerDelegator):
             owner._hdhive_max_points_per_sub,
             unlocked_cache=unlocked_cache,
         ))
-
     @property
     def _hdhive_budget(self):
         return self._budget
@@ -159,7 +158,6 @@ class HDHiveSearchService(OwnerDelegator):
                     self._hdhive_password,
                     proxy,
                     self._hdhive_request_interval,
-                    self._hdhive_unlocks_per_minute,
             ):
                 if client and self._hdhive_web_client_owned:
                     client.close()
@@ -168,7 +166,6 @@ class HDHiveSearchService(OwnerDelegator):
                     password=self._hdhive_password,
                     proxy=proxy,
                     request_interval=self._hdhive_request_interval,
-                    unlocks_per_minute=self._hdhive_unlocks_per_minute,
                     should_stop=self._stop_requested,
                 )
                 self._hdhive_web_client = client
@@ -179,6 +176,7 @@ class HDHiveSearchService(OwnerDelegator):
                     client,
                     self._hdhive_torrentclaw_enabled,
                     self._hdhive_torrentclaw_subtitle_languages,
+                    self._hdhive_unlocks_per_minute,
             ):
                 resources = HDHiveResourceService(
                     client=client,
@@ -186,6 +184,7 @@ class HDHiveSearchService(OwnerDelegator):
                     torrentclaw_subtitle_languages=(
                         self._hdhive_torrentclaw_subtitle_languages
                     ),
+                    unlocks_per_minute=self._hdhive_unlocks_per_minute,
                 )
                 self._hdhive_web_resources = resources
             return resources
@@ -748,7 +747,7 @@ class HDHiveSearchService(OwnerDelegator):
 
         try:
             share_url = ""
-            actual_points = 0
+            deducted_points = 0
             mode_label = "WebAPI" if self._hdhive_query_mode == "web" else "OpenAPI"
             action_label = (
                 "读取已解锁资源链接"
@@ -773,7 +772,6 @@ class HDHiveSearchService(OwnerDelegator):
                 resources = self._get_hdhive_web_resources()
                 unlock_result = resources.unlock_resource(
                     slug,
-                    unlock_points,
                     resource_type=resource_type,
                     media_page_url=media_page_url,
                     is_unlocked=is_unlocked,
@@ -784,9 +782,11 @@ class HDHiveSearchService(OwnerDelegator):
                     log_prefix=search_prefix,
                 )
                 share_url = unlock_result.get("url") or ""
-                actual_points = self._hdhive_budget.normalize_points(
-                    unlock_result.get("actual_points")
-                ) or 0
+                deducted_points = (
+                    0
+                    if is_unlocked or unlock_result.get("already_owned")
+                    else unlock_points
+                )
                 skip_reason = str(unlock_result.get("skip_reason") or "")
                 if skip_reason:
                     reason_label = {
@@ -815,7 +815,14 @@ class HDHiveSearchService(OwnerDelegator):
                     share_url = result_data.get("full_url") or result_data.get("url") or ""
                 actual_points = self._hdhive_budget.normalize_points(
                     unlock_data.get("actual_points")
-                ) or 0
+                )
+                if (
+                        actual_points is None
+                        and share_url
+                        and not is_unlocked
+                ):
+                    actual_points = unlock_points
+                deducted_points = actual_points or 0
 
             if share_url and not self._valid_share_value(
                     share_url, normalized_type
@@ -825,22 +832,22 @@ class HDHiveSearchService(OwnerDelegator):
                     f"已拒绝使用：slug={normalized_slug}"
                 )
                 share_url = ""
-            actual_points, _, _ = self._hdhive_budget.record_result(
-                cache_key, share_url, actual_points
+            recorded_points, _, _ = self._hdhive_budget.record_result(
+                cache_key, share_url, deducted_points
             )
             if not share_url:
-                if actual_points <= 0:
+                if recorded_points <= 0:
                     logger.error(
                         f"{search_prefix} {mode_label} 获取后未获得资源链接"
                     )
                     return None
                 logger.error(
-                    f"{search_prefix} {mode_label} 服务端已确认扣除 "
-                    f"{actual_points} 积分，但未返回资源链接；积分账本已记录"
+                    f"{search_prefix} {mode_label} 未返回资源链接；"
+                    f"积分账本已记录 {recorded_points} 积分"
                 )
                 return None
 
-            if actual_points <= 0:
+            if recorded_points <= 0:
                 logger.debug(
                     f"{search_prefix} {mode_label} "
                     f"{'已读取已解锁资源链接' if is_unlocked else '已取得零积分资源链接'}，"
@@ -852,7 +859,7 @@ class HDHiveSearchService(OwnerDelegator):
                 )
                 logger.debug(
                     f"{search_prefix} {mode_label} 成功解锁并记录 "
-                    f"{actual_points} 积分；"
+                    f"{recorded_points} 积分；"
                     f"全局剩余 {remaining_task}，"
                     f"当前订阅剩余 {remaining_subscribe}"
                 )

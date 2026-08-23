@@ -27,6 +27,7 @@ from .core import (
     get_component,
     resolve_component,
 )
+from .core.subscribe import AutoSubscribeService
 from .core.api import (
     AccountApi,
     ConfigApi,
@@ -61,13 +62,19 @@ from .search.butailing import ButailingClient
 from .search.hdhive import (
     HDHiveOpenAPIClient, HDHiveOpenAPIError,
 )
-from .search.http_client import build_proxy_url, validate_proxy_address
+from .utils.http_client import build_proxy_url, validate_proxy_address
 from .search.juying import JuyingClient
 from .search.online_docs import OnlineDocumentClient
 from .search.pansou import PanSouClient
 from .search.pinglian import PinglianClient
 from .search.seedhub import SeedHubClient
 from .utils import configure_magnet_metadata_url
+from .subscribe import (  # noqa: F401 - 导入即注册自动订阅渠道
+    create_douban_provider,
+    create_maoyan_provider,
+    create_mikan_provider,
+    create_netflix_provider,
+)
 
 _COMPONENT_TYPES = (
     PageApi,
@@ -90,6 +97,7 @@ _COMPONENT_TYPES = (
     SubscriptionSearchHook,
     PlatformIntegrationService,
     CheckinService,
+    AutoSubscribeService,
 )
 
 
@@ -103,7 +111,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.7"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -112,108 +120,6 @@ class CloudSubscribe(_PluginBase):
     plugin_config_prefix = "cloudsubscribe_"
     plugin_order = 21
     auth_level = 1
-
-    def _get_data_store(self) -> CloudSubscribeDataStore:
-        store = self.__dict__.get("_cloudsubscribe_data_store")
-        if store is None:
-            store = CloudSubscribeDataStore(self)
-            self.__dict__["_cloudsubscribe_data_store"] = store
-        return store
-
-    def get_data(self, key: Optional[str] = None, plugin_id: Optional[str] = None) -> Any:
-        """读取插件业务数据与可恢复运行状态，统一使用私有库。"""
-        target_plugin = plugin_id or self.__class__.__name__
-        if target_plugin == self.__class__.__name__ and key:
-            if CloudSubscribeDataStore.handles(key):
-                return self._get_data_store().load(key)
-            return None
-        return super().get_data(key=key, plugin_id=plugin_id)
-
-    def save_data(
-            self, key: str, value: Any, plugin_id: Optional[str] = None
-    ) -> None:
-        """保存插件数据"""
-        target_plugin = plugin_id or self.__class__.__name__
-        if target_plugin == self.__class__.__name__:
-            if CloudSubscribeDataStore.handles(key):
-                self._get_data_store().save(key, value)
-                return
-            raise ValueError(f"未声明的数据键不能写入 PluginData：{key}")
-        super().save_data(key=key, value=value, plugin_id=plugin_id)
-
-    def _get_component(self, component_type):
-        return get_component(self, component_type, "_plugin_components")
-
-    def __getattr__(self, name):
-        return resolve_component(self, _COMPONENT_TYPES, name, "_plugin_components")
-
-    def get_state(self) -> bool:
-        return self._get_component(MoviePilotRegistration).get_state()
-
-    @staticmethod
-    def get_render_mode() -> Tuple[str, str]:
-        return MoviePilotRegistration.get_render_mode()
-
-    def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_form()
-
-    def get_page(self) -> Optional[List[dict]]:
-        return self._get_component(MoviePilotRegistration).get_page()
-
-    def get_api(self) -> List[Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_api()
-
-    def get_command(self) -> List[Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_command()
-
-    def get_service(self) -> List[Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_service()
-
-    def get_dashboard_meta(self) -> List[Dict[str, str]]:
-        return self._get_component(MoviePilotRegistration).get_dashboard_meta()
-
-    def get_dashboard(self, key: str = "overview", **kwargs):
-        return self._get_component(MoviePilotRegistration).get_dashboard(key, **kwargs)
-
-    def get_sidebar_nav(self) -> List[Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_sidebar_nav()
-
-    def get_actions(self) -> List[Dict[str, Any]]:
-        return self._get_component(MoviePilotRegistration).get_actions()
-
-    def get_agent_tools(self) -> List[type]:
-        return self._get_component(MoviePilotRegistration).get_agent_tools()
-
-    @eventmanager.register(EventType.SubscribeAdded)
-    def on_subscribe_added(self, event: Event):
-        return self._get_component(PluginEventHandler).on_subscribe_added(event)
-
-    @eventmanager.register(EventType.SubscribeModified)
-    def on_subscribe_modified(self, event: Event):
-        return self._get_component(PluginEventHandler).on_subscribe_modified(event)
-
-    @eventmanager.register(ChainEventType.ResourceDownload)
-    def on_resource_download(self, event: Event):
-        return self._get_component(PluginEventHandler).on_resource_download(event)
-
-    @eventmanager.register(EventType.TransferComplete)
-    def on_transfer_complete(self, event: Event):
-        return self._get_component(PluginEventHandler).on_transfer_complete(event)
-
-    @eventmanager.register(EventType.PluginAction)
-    def on_plugin_action(self, event: Event):
-        return self._get_component(PluginEventHandler).on_plugin_action(event)
-
-    @eventmanager.register(EventType.MessageAction)
-    def on_message_action(self, event: Event):
-        return self._get_component(PluginEventHandler).on_message_action(event)
-
-    @eventmanager.register(EventType.WebhookMessage)
-    def on_media_server_webhook(self, event: Event):
-        event_info = getattr(event, "event_data", None) if event else None
-        return self._get_component(MediaLibraryApi).handle_platform_media_webhook(
-            event_info
-        )
 
     # 私有变量
     _scheduler: Optional[BackgroundScheduler] = None
@@ -226,8 +132,11 @@ class CloudSubscribe(_PluginBase):
     _show_sidebar_nav: bool = True
     _agent_enabled: bool = True
     _direct_transfer_enabled: bool = True
-    _onlyonce: bool = False
     _cron: str = "0 18-23 * * *"
+    _auto_subscribe_enabled: bool = False
+    _auto_subscribe_onlyonce: bool = False
+    _auto_subscribe_cron: str = "0 8 * * *"
+    _auto_subscribe_provider_schedules: Dict[str, str] = {}
     _notify: bool = False
     _notification_type: NotificationType = NotificationType.Plugin
     _webhook_enabled: bool = False
@@ -235,7 +144,7 @@ class CloudSubscribe(_PluginBase):
     _webhook_method: str = "POST"
     _webhook_timeout: int = 10
 
-    _cookies: str = ""
+    _p115_cookies: str = ""
     _p123_token: str = ""
     _p123_request_timeout: int = 30
     _quark_cookie: str = ""
@@ -295,7 +204,6 @@ class CloudSubscribe(_PluginBase):
     _pinglian_request_interval: float = 1.0
     _pinglian_timeout: int = 30
     _online_docs: List[Dict[str, Any]] = []
-    _online_docs_resource_types: List[str] = []
 
     # 订阅过滤模式："exclude" 排除模式（处理除勾选外的全部订阅）/ "include" 指定模式（仅处理勾选的订阅）
     _subscribe_filter_mode: str = "exclude"
@@ -464,10 +372,109 @@ class CloudSubscribe(_PluginBase):
     _subscribe_search_queue_shutdown: Optional[ThreadEvent] = None
     _subscribe_search_coordinator_running: bool = False
     _subscribe_search_queue_revision: int = 0
-    _sync_queue_executor: Optional[ThreadPoolExecutor] = None
-    _sync_queue_lock: Optional[RLock] = None
-    _sync_queue_pending: int = 0
-    _sync_queue_tasks: Dict[str, Dict[str, Any]] = {}
+    _sync_operation_executor: Optional[ThreadPoolExecutor] = None
+
+    def _get_data_store(self) -> CloudSubscribeDataStore:
+        store = self.__dict__.get("_cloudsubscribe_data_store")
+        if store is None:
+            store = CloudSubscribeDataStore(self)
+            self.__dict__["_cloudsubscribe_data_store"] = store
+        return store
+
+    def get_data(self, key: Optional[str] = None, plugin_id: Optional[str] = None) -> Any:
+        """读取插件业务数据与可恢复运行状态，统一使用私有库。"""
+        target_plugin = plugin_id or self.__class__.__name__
+        if target_plugin == self.__class__.__name__ and key:
+            if CloudSubscribeDataStore.handles(key):
+                return self._get_data_store().load(key)
+            return None
+        return super().get_data(key=key, plugin_id=plugin_id)
+
+    def save_data(
+            self, key: str, value: Any, plugin_id: Optional[str] = None
+    ) -> None:
+        """保存插件数据"""
+        target_plugin = plugin_id or self.__class__.__name__
+        if target_plugin == self.__class__.__name__:
+            if CloudSubscribeDataStore.handles(key):
+                self._get_data_store().save(key, value)
+                return
+            raise ValueError(f"未声明的数据键不能写入 PluginData：{key}")
+        super().save_data(key=key, value=value, plugin_id=plugin_id)
+
+    def _get_component(self, component_type):
+        return get_component(self, component_type, "_plugin_components")
+
+    def __getattr__(self, name):
+        return resolve_component(self, _COMPONENT_TYPES, name, "_plugin_components")
+
+    def get_state(self) -> bool:
+        return self._get_component(MoviePilotRegistration).get_state()
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, str]:
+        return MoviePilotRegistration.get_render_mode()
+
+    def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_form()
+
+    def get_page(self) -> Optional[List[dict]]:
+        return self._get_component(MoviePilotRegistration).get_page()
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_api()
+
+    def get_command(self) -> List[Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_command()
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_service()
+
+    def get_dashboard_meta(self) -> List[Dict[str, str]]:
+        return self._get_component(MoviePilotRegistration).get_dashboard_meta()
+
+    def get_dashboard(self, key: str = "overview", **kwargs):
+        return self._get_component(MoviePilotRegistration).get_dashboard(key, **kwargs)
+
+    def get_sidebar_nav(self) -> List[Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_sidebar_nav()
+
+    def get_actions(self) -> List[Dict[str, Any]]:
+        return self._get_component(MoviePilotRegistration).get_actions()
+
+    def get_agent_tools(self) -> List[type]:
+        return self._get_component(MoviePilotRegistration).get_agent_tools()
+
+    @eventmanager.register(EventType.SubscribeAdded)
+    def on_subscribe_added(self, event: Event):
+        return self._get_component(PluginEventHandler).on_subscribe_added(event)
+
+    @eventmanager.register(EventType.SubscribeModified)
+    def on_subscribe_modified(self, event: Event):
+        return self._get_component(PluginEventHandler).on_subscribe_modified(event)
+
+    @eventmanager.register(ChainEventType.ResourceDownload)
+    def on_resource_download(self, event: Event):
+        return self._get_component(PluginEventHandler).on_resource_download(event)
+
+    @eventmanager.register(EventType.TransferComplete)
+    def on_transfer_complete(self, event: Event):
+        return self._get_component(PluginEventHandler).on_transfer_complete(event)
+
+    @eventmanager.register(EventType.PluginAction)
+    def on_plugin_action(self, event: Event):
+        return self._get_component(PluginEventHandler).on_plugin_action(event)
+
+    @eventmanager.register(EventType.MessageAction)
+    def on_message_action(self, event: Event):
+        return self._get_component(PluginEventHandler).on_message_action(event)
+
+    @eventmanager.register(EventType.WebhookMessage)
+    def on_media_server_webhook(self, event: Event):
+        event_info = getattr(event, "event_data", None) if event else None
+        return self._get_component(MediaLibraryApi).handle_platform_media_webhook(
+            event_info
+        )
 
     @staticmethod
     def _cron_is_valid(cron_expr: str) -> bool:
@@ -505,7 +512,7 @@ class CloudSubscribe(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         """宿主加载或重载插件时初始化完整运行环境。"""
-        # 初始化独立数据库并自动迁移、清理旧 PluginData。
+        # 初始化独立数据库并修复历史分组键。
         self._get_data_store().initialize()
         self._apply_plugin_config(config, reset_runtime=True)
 
@@ -609,12 +616,9 @@ class CloudSubscribe(_PluginBase):
             self._subscribe_search_queue_shutdown = ThreadEvent()
             self._subscribe_search_coordinator_running = False
             self._subscribe_search_queue_revision = 0
-            self._sync_queue_lock = RLock()
-            self._sync_queue_pending = 0
-            self._sync_queue_tasks = {}
-            self._sync_queue_executor = ThreadPoolExecutor(
+            self._sync_operation_executor = ThreadPoolExecutor(
                 max_workers=1,
-                thread_name_prefix="cloudsubscribe-sync-queue",
+                thread_name_prefix="cloudsubscribe-sync-operation",
             )
             self._subscribe_search_originals = {}
             self._platform_search_originals = {}
@@ -623,14 +627,10 @@ class CloudSubscribe(_PluginBase):
                 self._sync_tasks_lock = RLock()
             if self._task_local is None:
                 self._task_local = local()
-            if self._sync_queue_lock is None:
-                self._sync_queue_lock = RLock()
-            if "_sync_queue_tasks" not in self.__dict__:
-                self._sync_queue_tasks = {}
-            if self._sync_queue_executor is None:
-                self._sync_queue_executor = ThreadPoolExecutor(
+            if self._sync_operation_executor is None:
+                self._sync_operation_executor = ThreadPoolExecutor(
                     max_workers=1,
-                    thread_name_prefix="cloudsubscribe-sync-queue",
+                    thread_name_prefix="cloudsubscribe-sync-operation",
                 )
 
         if config:
@@ -659,8 +659,44 @@ class CloudSubscribe(_PluginBase):
             if self._webhook_method not in ("POST", "GET"):
                 self._webhook_method = "POST"
             self._webhook_timeout = max(1, min(int(config.get("webhook_timeout", 10) or 10), 120))
-            self._onlyonce = config.get("onlyonce", False)
-            self._cookies = config.get("cookies", "")
+            self._auto_subscribe_enabled = bool(
+                config.get("auto_subscribe_enabled", False)
+            )
+            self._auto_subscribe_onlyonce = bool(
+                config.get("auto_subscribe_onlyonce", False)
+            )
+            self._auto_subscribe_cron = str(
+                config.get("auto_subscribe_cron", "0 8 * * *") or "0 8 * * *"
+            ).strip()
+            provider_crons = {
+                "douban": "0 8 * * *",
+                "maoyan": "0 9 * * *",
+                "netflix": "0 11 * * 3",
+                "mikan": "0 10 * * 1",
+            }
+            legacy_providers = {
+                str(value or "").strip().lower()
+                for value in (config.get("auto_subscribe_providers") or [])
+            }
+            has_provider_switch = any(
+                f"auto_subscribe_{provider_id}_enabled" in config
+                for provider_id in provider_crons
+            )
+            self._auto_subscribe_provider_schedules = {
+                provider_id: str(
+                    config.get(f"auto_subscribe_{provider_id}_cron")
+                    or default_cron
+                ).strip()
+                for provider_id, default_cron in provider_crons.items()
+                if bool(
+                    config.get(
+                        f"auto_subscribe_{provider_id}_enabled",
+                        provider_id in legacy_providers,
+                    )
+                    if has_provider_switch else provider_id in legacy_providers
+                )
+            }
+            self._p115_cookies = config.get("cookies", "")
             self._p123_token = str(config.get("p123_token", "") or "").strip()
             self._p123_request_timeout = max(
                 5, min(int(config.get("p123_request_timeout", 30) or 30), 300)
@@ -769,8 +805,6 @@ class CloudSubscribe(_PluginBase):
                 raw_doc_urls = re.split(r"[,，\n]+", raw_doc_urls)
             elif not isinstance(raw_doc_urls, (list, tuple)):
                 raw_doc_urls = [raw_doc_urls]
-            self._online_docs_resource_types = [str(value).strip().lower() for value in
-                                                (config.get("online_docs_resource_types") or []) if str(value).strip()]
             self._online_docs = list(raw_doc_urls)
             self._pansou_username = config.get("pansou_username", "")
             self._pansou_password = config.get("pansou_password", "")
@@ -1141,7 +1175,12 @@ class CloudSubscribe(_PluginBase):
             if self._sync_handler else 0
         )
         service_config_keys = {
-            "enabled", "cron", "checkin_cron", "checkin_auto_retry",
+            "enabled", "cron", "auto_subscribe_enabled", "auto_subscribe_cron",
+            "auto_subscribe_providers", "auto_subscribe_douban_enabled",
+            "auto_subscribe_douban_cron", "auto_subscribe_maoyan_enabled",
+            "auto_subscribe_maoyan_cron", "auto_subscribe_netflix_enabled",
+            "auto_subscribe_netflix_cron", "auto_subscribe_mikan_enabled",
+            "auto_subscribe_mikan_cron", "checkin_cron", "checkin_auto_retry",
             "checkin_retry_count", "takeover_new_subscribes",
             "block_start_time", "block_end_time", "block_system_subscribe",
             "platform_download_policy", "block_platform_downloads",
@@ -1164,21 +1203,23 @@ class CloudSubscribe(_PluginBase):
             f"洗版范围={'指定订阅' if self._upgrade_subscribe_ids else '全部'}, "
             f"当前接管态={self._is_takeover_active()}")
 
-        # 立即运行一次
-        if self._enabled or self._onlyonce:
-            if self._onlyonce:
-                self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-                self._scheduler.add_job(
-                    func=self.sync_subscribes,
-                    trigger='date',
-                    run_date=datetime.datetime.now(tz=pytz.timezone(settings.TZ)) + datetime.timedelta(seconds=3)
-                )
-                if self._scheduler.get_jobs():
-                    self._scheduler.start()
-
-            if self._onlyonce:
-                self._onlyonce = False
-                self._update_plugin_config()
+        # 保存配置后延迟运行所有已启用榜单一次。
+        if self._auto_subscribe_onlyonce:
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+            run_date = (
+                    datetime.datetime.now(tz=pytz.timezone(settings.TZ))
+                    + datetime.timedelta(seconds=3)
+            )
+            self._scheduler.add_job(
+                id="CloudSubscribe_AutoSubscribe_RunOnce",
+                func=self.run_auto_subscribe,
+                trigger="date",
+                run_date=run_date,
+                replace_existing=True,
+            )
+            self._scheduler.start()
+            self._auto_subscribe_onlyonce = False
+            self._persist_config_values(auto_subscribe_onlyonce=False)
 
     def _apply_notification_config(self, config: Dict[str, Any]) -> None:
         self._notify = bool(config.get("notify", False))
@@ -1340,12 +1381,12 @@ class CloudSubscribe(_PluginBase):
                 logger.info(f"HDHive 配置已加载（模式：{self._hdhive_query_mode}）")
 
         self._p115_manager = P115ClientManager(
-            cookies=self._cookies,
+            cookies=self._p115_cookies,
             share_cache_ttl_minutes=self._search_cache_ttl_minutes,
             **self._p115_timeout_kwargs(),
         )
         if (
-                self._cookies
+                self._p115_cookies
                 and self._p115_manager.check_login()
                 and not self._p115_manager.is_vip
         ):
@@ -1423,7 +1464,7 @@ class CloudSubscribe(_PluginBase):
         if not cookie or cookie == self._quark_cookie:
             return
         self._quark_cookie = cookie
-        self._update_plugin_config()
+        self._persist_config_values(quark_cookie=cookie)
 
     def _register_p123_provider(self) -> None:
         """注册 123 网盘账号、分享转存和文件操作能力。"""
@@ -1467,7 +1508,10 @@ class CloudSubscribe(_PluginBase):
     ) -> None:
         self._guangya_access_token = str(access_token or "").strip()
         self._guangya_refresh_token = str(refresh_token or "").strip()
-        self._update_plugin_config()
+        self._persist_config_values(
+            guangya_access_token=self._guangya_access_token,
+            guangya_refresh_token=self._guangya_refresh_token,
+        )
 
     def _register_guangya_provider(self) -> None:
         """注册光鸭网盘，并允许空凭证实例提供扫码入口。"""
@@ -1513,14 +1557,21 @@ class CloudSubscribe(_PluginBase):
         self._tianyi_access_token = str(access_token or "").strip()
         self._tianyi_refresh_token = str(refresh_token or "").strip()
         self._tianyi_session_key = str(session_key or "").strip()
-        self._update_plugin_config()
+        self._persist_config_values(
+            tianyi_access_token=self._tianyi_access_token,
+            tianyi_refresh_token=self._tianyi_refresh_token,
+            tianyi_session_key=self._tianyi_session_key,
+        )
 
     def _on_alipan_token_update(
             self, access_token: str, refresh_token: str
     ) -> None:
         self._alipan_access_token = str(access_token or "").strip()
         self._alipan_refresh_token = str(refresh_token or "").strip()
-        self._update_plugin_config()
+        self._persist_config_values(
+            alipan_access_token=self._alipan_access_token,
+            alipan_refresh_token=self._alipan_refresh_token,
+        )
 
     def _register_alipan_provider(self) -> None:
         """注册阿里云盘，并允许空凭证实例提供扫码入口。"""
@@ -1543,7 +1594,11 @@ class CloudSubscribe(_PluginBase):
         self._hdhive_access_token = str(tokens.get("access_token") or self._hdhive_access_token).strip()
         self._hdhive_refresh_token = str(tokens.get("refresh_token") or self._hdhive_refresh_token).strip()
         self._hdhive_token_expires_at = float(tokens.get("token_expires_at") or self._hdhive_token_expires_at or 0)
-        self._update_plugin_config()
+        self._persist_config_values(
+            hdhive_access_token=self._hdhive_access_token,
+            hdhive_refresh_token=self._hdhive_refresh_token,
+            hdhive_token_expires_at=self._hdhive_token_expires_at,
+        )
 
     def _init_hdhive_openapi_client(self, proxy=None):
         """
@@ -1583,7 +1638,7 @@ class CloudSubscribe(_PluginBase):
                     self._hdhive_auth_code = ""
                     scopes = data.get("scope") or " ".join(data.get("scopes") or [])
                     logger.info(f"HDHive OpenAPI: 用户授权成功，已获取 Token（scope: {scopes}）")
-                    self._update_plugin_config()
+                    self._persist_config_values(hdhive_auth_code="")
                 except HDHiveOpenAPIError as e:
                     logger.error(
                         f"HDHive OpenAPI: 授权码换取 Token 失败，授权码已保留: "
@@ -1770,194 +1825,20 @@ class CloudSubscribe(_PluginBase):
             total_count=total_count,
         )
 
-    # 持久化配置
-
-    def _update_plugin_config(self):
-        self.update_config({
-            "enabled": self._enabled,
-            "show_sidebar_nav": self._show_sidebar_nav,
-            "agent_enabled": self._agent_enabled,
-            "direct_transfer_enabled": self._direct_transfer_enabled,
-            "cron": self._cron,
-            "notify": self._notify,
-            "notification_type": self._notification_type.name,
-            "webhook_enabled": self._webhook_enabled,
-            "webhook_url": self._webhook_url,
-            "webhook_method": self._webhook_method,
-            "webhook_timeout": self._webhook_timeout,
-            "onlyonce": self._onlyonce,
-            "cookies": self._cookies,
-            "p123_token": self._p123_token,
-            "p123_request_timeout": self._p123_request_timeout,
-            "quark_cookie": self._quark_cookie,
-            "quark_request_timeout": self._quark_request_timeout,
-            "guangya_access_token": self._guangya_access_token,
-            "guangya_refresh_token": self._guangya_refresh_token,
-            "guangya_client_id": self._guangya_client_id,
-            "guangya_device_id": self._guangya_device_id,
-            "guangya_request_timeout": self._guangya_request_timeout,
-            "tianyi_cookie": self._tianyi_cookie,
-            "tianyi_access_token": self._tianyi_access_token,
-            "tianyi_refresh_token": self._tianyi_refresh_token,
-            "tianyi_request_timeout": self._tianyi_request_timeout,
-            "alipan_access_token": self._alipan_access_token,
-            "alipan_refresh_token": self._alipan_refresh_token,
-            "alipan_request_timeout": self._alipan_request_timeout,
-            "cloud_drive": self._cloud_drive_key,
-            "pansou_url": self._pansou_url,
-            "hdhive_base_url": self._hdhive_base_url,
-            "dian115_base_url": self._dian115_base_url,
-            "juying_base_url": self._juying_base_url,
-            "seedhub_base_url": self._seedhub_base_url,
-            "butailing_base_url": self._butailing_base_url,
-            "pinglian_base_url": self._pinglian_base_url,
-            "pansou_username": self._pansou_username,
-            "pansou_password": self._pansou_password,
-            "pansou_auth_enabled": self._pansou_auth_enabled,
-            "pansou_channels": self._pansou_channels,
-            "pansou_plugins": self._pansou_plugins,
-            "pansou_filter_include": self._pansou_filter_include,
-            "pansou_filter_exclude": self._pansou_filter_exclude,
-            "resource_type_order": self._resource_type_order,
-            "magnet_metadata_url_template": self._magnet_metadata_url_template,
-            "pansou_concurrency": self._pansou_concurrency,
-            "pansou_result_limit": self._pansou_result_limit,
-            "pansou_refresh": self._pansou_refresh,
-            "pansou_timeout": self._pansou_timeout,
-            "seedhub_result_limit": self._seedhub_result_limit,
-            "seedhub_request_interval": self._seedhub_request_interval,
-            "seedhub_timeout": self._seedhub_timeout,
-            "butailing_result_limit": self._butailing_result_limit,
-            "butailing_request_interval": self._butailing_request_interval,
-            "butailing_timeout": self._butailing_timeout,
-            "juying_username": self._juying_username,
-            "juying_password": self._juying_password,
-            "juying_checkin_enabled": self._juying_checkin_enabled,
-            "juying_result_limit": self._juying_result_limit,
-            "juying_request_interval": self._juying_request_interval,
-            "pinglian_username": self._pinglian_username,
-            "pinglian_password": self._pinglian_password,
-            "pinglian_result_limit": self._pinglian_result_limit,
-            "pinglian_request_interval": self._pinglian_request_interval,
-            "pinglian_timeout": self._pinglian_timeout,
-            "online_docs": self._online_docs,
-            # HDHive 配置
-            "hdhive_query_mode": self._hdhive_query_mode,
-            "hdhive_api_key": self._hdhive_api_key,
-            "hdhive_client_id": self._hdhive_client_id,
-            "hdhive_redirect_uri": self._hdhive_redirect_uri,
-            "hdhive_response_mode": self._hdhive_response_mode,
-            "hdhive_auth_code": self._hdhive_auth_code,
-            "hdhive_access_token": self._hdhive_access_token,
-            "hdhive_refresh_token": self._hdhive_refresh_token,
-            "hdhive_token_expires_at": self._hdhive_token_expires_at,
-            "hdhive_auto_unlock": self._hdhive_auto_unlock,
-            "hdhive_max_unlock_points": self._hdhive_max_unlock_points,
-            "hdhive_max_points_per_sub": self._hdhive_max_points_per_sub,
-            "hdhive_username": self._hdhive_username,
-            "hdhive_password": self._hdhive_password,
-            "hdhive_checkin_enabled": self._hdhive_checkin_enabled,
-            "hdhive_checkin_mode": self._hdhive_checkin_mode,
-            "checkin_cron": self._checkin_cron,
-            "checkin_auto_retry": self._checkin_auto_retry,
-            "checkin_retry_count": self._checkin_retry_count,
-            # Dian115 配置
-            "dian115_email": self._dian115_email,
-            "dian115_password": self._dian115_password,
-            "dian115_checkin_enabled": self._dian115_checkin_enabled,
-            "dian115_checkin_mode": self._dian115_checkin_mode,
-            "dian115_lottery_enabled": self._dian115_lottery_enabled,
-            "dian115_lottery_count": self._dian115_lottery_count,
-            "dian115_auto_unlock": self._dian115_auto_unlock,
-            "dian115_max_unlock_points": self._dian115_max_unlock_points,
-            "dian115_max_points_per_sub": self._dian115_max_points_per_sub,
-            # 其他配置
-            "search_source_order": self._search_source_order,
-            "search_proxy": self._search_proxy_address,
-            "search_proxy_username": self._search_proxy_username,
-            "search_proxy_password": self._search_proxy_password,
-            "search_cache_enabled": self._search_cache_enabled,
-            "search_cache_ttl_minutes": self._search_cache_ttl_minutes,
-            "search_concurrency": self._search_concurrency,
-            "hdhive_candidate_limit": self._hdhive_candidate_limit,
-            "hdhive_request_interval": self._hdhive_request_interval,
-            "hdhive_unlocks_per_minute": self._hdhive_unlocks_per_minute,
-            "dian115_candidate_limit": self._dian115_candidate_limit,
-            "dian115_request_interval": self._dian115_request_interval,
-            "dian115_unlocks_per_minute": self._dian115_unlocks_per_minute,
-            "hdhive_torrentclaw_enabled": self._hdhive_torrentclaw_enabled,
-            "hdhive_torrentclaw_subtitle_languages": self._hdhive_torrentclaw_subtitle_languages,
-            "subscribe_filter_mode": self._subscribe_filter_mode,
-            "exclude_subscribes": self._exclude_subscribes,
-            "include_subscribes": self._include_subscribes,
-            "block_system_subscribe": self._block_system_subscribe,
-            "takeover_new_subscribes": self._takeover_new_subscribes,
-            "platform_download_policy": self._platform_download_policy,
-            "block_start_time": self._block_start_time,
-            "block_end_time": self._block_end_time,
-            "upgrade_subscribe_ids": self._upgrade_subscribe_ids,
-            "transfer_task_batch_size": self._transfer_task_batch_size,
-            "cross_transfer_enabled": self._cross_transfer_enabled,
-            "cross_transfer_media_types": self._cross_transfer_media_types,
-            "cross_transfer_download_path": self._cross_transfer_download_path,
-            "cross_transfer_download_threads": self._cross_transfer_download_threads,
-            "cross_transfer_max_concurrent": self._cross_transfer_max_concurrent,
-            "subscription_concurrency": self._subscription_concurrency,
-            "batch_size": self._batch_size,
-            "batch_interval": self._batch_interval,
-            "transfer_risk_cooldown": self._transfer_risk_cooldown,
-            "skip_other_season_dirs": self._skip_other_season_dirs,
-            "enable_cloud_upgrade": self._enable_cloud_upgrade,
-            "enable_pt_upgrade": self._enable_pt_upgrade,
-            "upgrade_mode": self._upgrade_mode,
-            "local_resource_path": self._local_resource_path,
-            "cloud_transfer_path": self._p115_transfer_path,
-            "p123_transfer_path": self._p123_transfer_path,
-            "quark_transfer_path": self._quark_transfer_path,
-            "guangya_transfer_path": self._guangya_transfer_path,
-            "tianyi_transfer_path": self._tianyi_transfer_path,
-            "alipan_transfer_path": self._alipan_transfer_path,
-            "cloud_media_path": self._p115_media_path,
-            "p123_media_path": self._p123_media_path,
-            "quark_media_path": self._quark_media_path,
-            "guangya_media_path": self._guangya_media_path,
-            "tianyi_media_path": self._tianyi_media_path,
-            "alipan_media_path": self._alipan_media_path,
-            "strm_generate_enabled": self._strm_generate_enabled,
-            "nfo_scrape_enabled": self._nfo_scrape_enabled,
-            "image_scrape_enabled": self._image_scrape_enabled,
-            "strm_base_url": self._strm_base_url,
-            "strm_url_template": self._strm_url_template,
-            "media_server_refresh_enabled": self._media_server_refresh_enabled,
-            "media_servers": self._media_servers,
-            "media_server_path_mappings": self._media_server_path_mappings,
-            "media_server_refresh_delay": self._media_server_refresh_delay,
-            "emby_mediainfo_enabled": self._emby_mediainfo_enabled,
-            "platform_media_sync_enabled": self._platform_media_sync_enabled,
-            "platform_deep_delete_enabled": self._platform_deep_delete_enabled,
-            "platform_transfer_history_enabled": self._platform_transfer_history_enabled,
-            "timeout_enabled": self._timeout_enabled,
-            "timeout_default_connect": self._timeout_default_connect,
-            "timeout_default_pool": self._timeout_default_pool,
-            "timeout_default_read": self._timeout_default_read,
-            "timeout_default_write": self._timeout_default_write,
-            "timeout_slow_connect": self._timeout_slow_connect,
-            "timeout_slow_pool": self._timeout_slow_pool,
-            "timeout_slow_read": self._timeout_slow_read,
-            "timeout_slow_write": self._timeout_slow_write,
-            "self_heal_interval": self._self_heal_interval,
-        })
+    def _persist_config_values(self, **updates: Any) -> None:
+        """基于当前完整配置更新少量运行时值，避免遗漏其他配置项。"""
+        config = copy.deepcopy(self.get_config() or self._applied_config or {})
+        config.update(updates)
+        if not self.update_config(config):
+            logger.warning(f"插件运行时配置持久化失败：{', '.join(updates)}")
+        self._applied_config = config
 
     def stop_service(self, preserve_subscribe_queue: bool = False):
         """停止服务"""
         if not preserve_subscribe_queue and self._subscribe_search_queue_lock is not None:
             self.cancel_pending_subscribe_searches(shutdown=True)
-            executor = self._sync_queue_executor
-            self._sync_queue_executor = None
-            if self._sync_queue_lock is not None:
-                with self._sync_queue_lock:
-                    self._sync_queue_tasks.clear()
-                    self._sync_queue_pending = 0
+            executor = self._sync_operation_executor
+            self._sync_operation_executor = None
             if executor:
                 executor.shutdown(wait=False, cancel_futures=True)
         if self._stop_event:

@@ -8,18 +8,12 @@ from typing import Any, Dict
 from app.log import logger
 
 from .database import CloudSubscribeDatabaseManager, CloudSubscribeRepositories
-from .database.migration import (
-    CloudSubscribeDataMigration,
-    LegacyPluginDataStore,
-)
-
-
 class CloudSubscribeDataStore:
     """业务数据和可恢复运行状态按职责写入独立数据库。"""
 
-    HISTORY_KEY = LegacyPluginDataStore.HISTORY_KEY
-    OFFLINE_PENDING_KEY = LegacyPluginDataStore.OFFLINE_PENDING_KEY
-    SCHEDULE_KEY = LegacyPluginDataStore.SCHEDULE_KEY
+    HISTORY_KEY = "history"
+    OFFLINE_PENDING_KEY = "pending_offline_strm"
+    SCHEDULE_KEY = "checkin_schedule_state"
     RUNTIME_KEYS = {
         "account_info_cache",
         "dian115_auth_session",
@@ -29,17 +23,12 @@ class CloudSubscribeDataStore:
     }
 
     def __init__(self, owner):
-        self.plugin_id = owner.__class__.__name__
         self._lock = RLock()
         self._initialized = False
         self.manager = CloudSubscribeDatabaseManager(
             owner.get_data_path() / "cloudsubscribe.db"
         )
         self.repositories = CloudSubscribeRepositories(self.manager)
-        self.legacy = LegacyPluginDataStore(self.plugin_id)
-        self.migration = CloudSubscribeDataMigration(
-            self.manager, self.repositories, self.legacy
-        )
 
     @staticmethod
     def _checkin_provider(key: str) -> str:
@@ -84,7 +73,6 @@ class CloudSubscribeDataStore:
             self.manager.open()
             self.manager.init_db()
             self.manager.update_db()
-            self.migration.execute()
             repaired = self.repositories.history.repair_group_keys()
             if repaired:
                 logger.info(f"CloudSubscribe 历史媒体分组已修复：{repaired} 条")

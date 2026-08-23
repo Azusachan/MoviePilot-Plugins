@@ -12,8 +12,13 @@ from app.core.config import settings
 from app.log import logger
 
 from .. import OwnerDelegator
-from ...search.dian115 import Dian115Error
-from ...search.hdhive import HDHiveOpenAPIError, HDHiveWebError
+from ..delegation import get_component
+from ...search.dian115 import Dian115Error, Dian115SearchService
+from ...search.hdhive import (
+    HDHiveOpenAPIError,
+    HDHiveSearchService,
+    HDHiveWebError,
+)
 from ...search.juying import JuyingError
 
 
@@ -26,8 +31,6 @@ class CheckinProvider:
     credential_attrs: Tuple[str, ...]
     error_types: Tuple[Type[Exception], ...]
     modes: Tuple[str, ...]
-    risky_modes: Tuple[str, ...] = ()
-    risk_warning: str = ""
 
     @property
     def history_key(self) -> str:
@@ -44,8 +47,6 @@ class CheckinService(OwnerDelegator):
             credential_attrs=("_hdhive_username", "_hdhive_password"),
             error_types=(HDHiveWebError, HDHiveOpenAPIError),
             modes=("normal", "gambler"),
-            risky_modes=("gambler",),
-            risk_warning="奖励会乘以 -1～3 的随机倍数，最多扣除 3 积分",
         ),
         "dian115": CheckinProvider(
             key="dian115",
@@ -53,11 +54,6 @@ class CheckinService(OwnerDelegator):
             credential_attrs=("_dian115_email", "_dian115_password"),
             error_types=(Dian115Error,),
             modes=("normal", "lucky"),
-            risky_modes=("lucky",),
-            risk_warning=(
-                "运气签到有 21% 概率扣除 1 倍普通签到积分，"
-                "同时可能获得 3～10 倍奖励"
-            ),
         ),
         "juying": CheckinProvider(
             key="juying",
@@ -115,18 +111,33 @@ class CheckinService(OwnerDelegator):
         return f"请先配置并保存 {provider.name} 账号和密码"
 
     def _get_checkin_client(self, provider: CheckinProvider) -> Any:
-        if (
-                provider.key == "hdhive"
-                and str(getattr(self, "_hdhive_query_mode", "web")) == "api"
-        ):
-            client = getattr(self, "_hdhive_client", None)
-            if not client or not client.is_ready:
-                raise HDHiveOpenAPIError(
-                    "OPENAPI_USER_REQUIRED",
-                    "HDHive OpenAPI 应用配置或用户授权不完整",
-                )
+        """直接从渠道服务获取签到客户端，不依赖搜索渠道是否启用。"""
+        if provider.key == "hdhive":
+            if str(getattr(self, "_hdhive_query_mode", "web")) == "api":
+                client = getattr(self, "_hdhive_client", None)
+                if not client or not client.is_ready:
+                    raise HDHiveOpenAPIError(
+                        "OPENAPI_USER_REQUIRED",
+                        "HDHive OpenAPI 应用配置或用户授权不完整",
+                    )
+                return client
+            return self._search_component(
+                HDHiveSearchService
+            ).get_client()
+        if provider.key == "dian115":
+            return self._search_component(
+                Dian115SearchService
+            ).get_client()
+        client = getattr(self, "_juying_client", None)
+        if client and client.is_configured:
             return client
-        return self._search_handler.get_source_client(provider.key)
+        raise JuyingError("聚影账号未配置，请先保存账号和密码")
+
+    def _search_component(self, component_type):
+        """复用搜索处理器创建并缓存的渠道服务组件。"""
+        return get_component(
+            self._search_handler, component_type, "_search_components"
+        )
 
     def _refresh_checkin_account(
             self,
@@ -158,7 +169,6 @@ class CheckinService(OwnerDelegator):
                 "name": item.name,
                 "credential_attrs": item.credential_attrs,
                 "modes": item.modes,
-                "risky_modes": item.risky_modes,
             }
             for item in self._PROVIDERS.values()
         ]
@@ -752,10 +762,8 @@ class CheckinService(OwnerDelegator):
             self,
             provider: str = "",
             mode: str = "",
-            confirm_gambler: bool = False,
-            confirm_risky: bool = False,
     ) -> Dict[str, Any]:
-        """供智能体和远程命令复用的安全签到入口。"""
+        """供智能体和远程命令复用的签到入口。"""
         provider_key = str(provider or "").strip().lower()
         if provider_key in {"all", "全部"}:
             provider_key = ""
@@ -778,29 +786,6 @@ class CheckinService(OwnerDelegator):
                 "success": False,
                 "message": f"所选渠道签到模式仅支持 {', '.join(supported)}",
             }
-        risky = [
-            item
-            for item in providers
-            if (
-                       requested_mode
-                       or str(getattr(self, f"_{item.key}_checkin_mode", "normal"))
-               ).lower() in item.risky_modes
-        ]
-        if risky and not (confirm_risky or confirm_gambler):
-            return {
-                "success": False,
-                "message": (
-                        "；".join(
-                            f"{item.name}：{item.risk_warning}" for item in risky
-                        )
-                        + "；请明确确认后重试"
-                ),
-                "data": {
-                    "confirmation_required": True,
-                    "providers": [item.name for item in risky],
-                },
-            }
-
         items = []
         for item in providers:
             result = self.run_checkin(

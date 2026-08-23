@@ -18,7 +18,7 @@ from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
 from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES
-from ...search.http_client import (
+from ...utils.http_client import (
     build_proxy_url,
     normalize_proxies,
     request_error_summary,
@@ -177,9 +177,6 @@ class SearchApi(OwnerDelegator):
         request_interval = float(
             config.get("hdhive_request_interval", 5) or 5
         )
-        unlocks_per_minute = int(
-            config.get("hdhive_unlocks_per_minute", 2) or 2
-        )
         with self._test_hdhive_clients_lock:
             for client in self._test_hdhive_clients:
                 if client.matches_config(
@@ -187,7 +184,6 @@ class SearchApi(OwnerDelegator):
                         password,
                         proxy,
                         request_interval,
-                        unlocks_per_minute,
                 ):
                     return client, False
             client = HDHiveClient(
@@ -195,7 +191,6 @@ class SearchApi(OwnerDelegator):
                 password=password,
                 proxy=proxy,
                 request_interval=request_interval,
-                unlocks_per_minute=unlocks_per_minute,
             )
             if len(self._test_hdhive_clients) >= self._TEST_HDHIVE_CLIENT_LIMIT:
                 logger.debug(
@@ -537,13 +532,26 @@ class SearchApi(OwnerDelegator):
                     "provider_data": dict(item.get("provider_data") or {}),
                 })
                 url = handler.unlock_resource(source, candidate)
+                deducted_points = (
+                    0
+                    if free_hdhive_access
+                       or bool(item.get("is_unlocked"))
+                    else points
+                )
             finally:
                 handler.close(release_cache=False)
             if not url:
                 message = "资源链接获取失败" if free_hdhive_access else "资源解锁失败"
                 return {"success": False, "message": message}
             message = "资源链接已获取" if free_hdhive_access else "资源已解锁"
-            return {"success": True, "message": message, "data": {"url": url}}
+            return {
+                "success": True,
+                "message": message,
+                "data": {
+                    "url": url,
+                    "deducted_points": deducted_points,
+                },
+            }
         except Exception as error:
             logger.warning(f"测试资源解锁失败：{source} - {error}")
             return {"success": False, "message": f"解锁失败：{error}"}

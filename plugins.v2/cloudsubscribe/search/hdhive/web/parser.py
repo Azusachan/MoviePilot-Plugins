@@ -26,7 +26,9 @@ from ....utils import MediaFileParser
 
 NEXT_REDIRECT_RE = re.compile(
     r"NEXT_REDIRECT;(?:replace|push);"
-    r"((?:\\/|/)(?:movie|tv)(?:\\/|/)[A-Za-z0-9_-]+);[0-9]{3};",
+    r"((?:\\/|/)(?:resource(?:\\/|/)[A-Za-z0-9_-]+(?:\\/|/)[A-Za-z0-9_-]+|"
+    r"resource(?:\\/|/)[A-Za-z0-9_-]+|movie(?:\\/|/)[A-Za-z0-9_-]+|"
+    r"tv(?:\\/|/)[A-Za-z0-9_-]+));[0-9]{3};",
     re.I,
 )
 NEXT_SCRIPT_RE = re.compile(
@@ -46,6 +48,13 @@ NO_RESOURCE_MARKERS = ("暂无资源", "暂时没有资源", "尚无资源")
 CHALLENGE_MARKERS = (
     "cf-chl-", "challenge-platform", "captcha", "访问频繁",
     "页面过期", "请刷新页面", "安全验证",
+)
+HDHIVE_RESOURCE_TYPES = frozenset(SUPPORTED_RESOURCE_TYPES)
+HDHIVE_DETAIL_RESOURCE_TYPES = HDHIVE_RESOURCE_TYPES - {"magnet"}
+ED2K_URL_RE = re.compile(
+    r"ed2k://\|file\|[^|\r\n]+\|\d+\|[0-9A-Fa-f]{32}"
+    r"(?:\|(?:h|p)=[^|\r\n]+)*\|/",
+    re.I,
 )
 
 
@@ -100,7 +109,12 @@ def resource_detail_path(response: Any) -> str:
         or headers.get("x-current-url")
         or ""
     ).strip().split("?", 1)[0]
-    if re.fullmatch(r"/(?:tv|movie)/[A-Za-z0-9_-]+", current_path, re.I):
+    if re.fullmatch(
+            r"/(?:resource/(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9_-]+|"
+            r"tv/[A-Za-z0-9_-]+|movie/[A-Za-z0-9_-]+)",
+            current_path,
+            re.I,
+    ):
         return current_path
     match = NEXT_REDIRECT_RE.search(response_text(response))
     return decode_embedded_text(match.group(1)) if match else ""
@@ -142,16 +156,6 @@ def file_preview_capability(response: Any) -> Optional[bool]:
         decode_embedded_text(response_text(response))
     )
     return match.group(1).lower() == "true" if match else None
-
-
-HDHIVE_RESOURCE_TYPES = frozenset(SUPPORTED_RESOURCE_TYPES)
-HDHIVE_DETAIL_RESOURCE_TYPES = HDHIVE_RESOURCE_TYPES - {"magnet"}
-ED2K_URL_RE = re.compile(
-    r"ed2k://\|file\|[^|\r\n]+\|\d+\|[0-9A-Fa-f]{32}"
-    r"(?:\|(?:h|p)=[^|\r\n]+)*\|/",
-    re.I,
-)
-
 
 def preview_episodes_from_files(
         files: List[Dict[str, Any]], target_season: Optional[int]
@@ -510,11 +514,8 @@ def build_resource_detail_path(
     segments = ["resource"]
     if normalized_type in SUPPORTED_CLOUD_TYPES:
         raw_route_type = str(route_type or normalized_type).strip().lower()
-        segments.append(
-            raw_route_type
-            if normalize_resource_type(raw_route_type) == normalized_type
-            else normalized_type
-        )
+        if normalize_resource_type(raw_route_type) == normalized_type:
+            segments.append(raw_route_type)
     segments.append(normalized_slug)
     return "/" + "/".join(segments)
 
@@ -539,15 +540,18 @@ def resolve_resource_detail_path(
     ):
         raise ValueError("HDHive 资源详情地址无效")
     parts = [part for part in parsed.path.split("/") if part]
-    expected_size = 3 if normalized_type in SUPPORTED_CLOUD_TYPES else 2
     valid = (
             normalized_type in HDHIVE_DETAIL_RESOURCE_TYPES
-            and len(parts) == expected_size
+            and len(parts) in {2, 3}
             and parts[0] == "resource"
             and parts[-1] == normalized_slug
     )
-    if expected_size == 3:
-        valid = valid and normalize_resource_type(parts[1]) == normalized_type
+    if len(parts) == 3:
+        valid = (
+                valid
+                and normalized_type in SUPPORTED_CLOUD_TYPES
+                and normalize_resource_type(parts[1]) == normalized_type
+        )
     if not valid:
         raise ValueError("HDHive 资源详情地址与资源类型不匹配")
     return parsed.path

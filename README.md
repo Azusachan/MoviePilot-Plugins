@@ -30,6 +30,13 @@ MoviePilot-Plugins/
 └── package.v2.json # 插件市场清单
 ```
 
+## 致谢
+
+本项目的部分设计与实现参考了以下开源项目，谨此致谢：
+
+- [Aqr-K/MoviePilot-Plugins](https://github.com/Aqr-K/MoviePilot-Plugins)
+- [mrtian2016/MoviePilot-Plugins](https://github.com/mrtian2016/MoviePilot-Plugins)
+
 ## 许可证
 
 本仓库根据 [GNU General Public License v3.0](LICENSE) 许可证进行许可。

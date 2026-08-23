@@ -86,6 +86,20 @@
                   @click="emit('test-source', field.source)">
                   {{ field.label }}
                 </v-btn>
+                <v-btn
+                  v-else-if="field.type === 'test-auto-subscribe'"
+                  color="primary"
+                  variant="tonal"
+                  prepend-icon="mdi-flask-outline"
+                  :loading="testingAutoSubscribe === field.provider"
+                  :disabled="
+                    !isAutoSubscribeConfigured(field.provider) ||
+                    (Boolean(testingAutoSubscribe) && testingAutoSubscribe !== field.provider)
+                  "
+                  :title="autoSubscribeTestTitle(field.provider)"
+                  @click="emit('test-auto-subscribe', field.provider)">
+                  {{ field.label }}
+                </v-btn>
                 <div v-else-if="field.type === 'hdhive-oauth'" class="hdhive-oauth-panel">
                   <div class="d-flex align-center flex-wrap ga-2 mb-2">
                     <v-chip size="small" variant="tonal" :color="config.hdhive_access_token ? 'success' : 'warning'">
@@ -132,6 +146,10 @@
                   :providers="field.providers"
                   :config="config"
                   @result="emit('checkin-result', $event)" />
+                <RegionMediaMapField
+                  v-else-if="field.type === 'region-media-map'"
+                  v-model="config[field.key]"
+                  :field="field" />
                 <VCronField
                   v-else-if="field.type === 'cron'"
                   v-model="config[field.key]"
@@ -239,7 +257,9 @@
                   :items="field.items || []"
                   :hint="field.hint"
                   :persistent-hint="Boolean(field.hint)"
-                  multiple
+                  :loading="Boolean(field.loading)"
+                  :multiple="field.multiple !== false"
+                  :return-object="Boolean(field.returnObject)"
                   chips
                   closable-chips
                   clearable
@@ -287,6 +307,29 @@
                       :loading="testingProxy"
                       :disabled="testingProxy || !hasText(config[field.key])"
                       @click="emit('test-proxy')" />
+                  </template>
+                </v-text-field>
+                <v-text-field
+                  v-else-if="field.type === 'auto-subscribe-proxy'"
+                  v-model="config[field.key]"
+                  :label="field.label"
+                  :hint="field.hint"
+                  :placeholder="field.placeholder"
+                  :persistent-hint="Boolean(field.hint)"
+                  clearable
+                  density="compact"
+                  variant="outlined"
+                  hide-details="auto">
+                  <template #append-inner>
+                    <v-btn
+                      icon="mdi-lan-connect"
+                      variant="text"
+                      color="primary"
+                      size="small"
+                      title="测试榜单代理连通性和延迟"
+                      :loading="testingAutoSubscribeProxy"
+                      :disabled="testingAutoSubscribeProxy || !hasText(config[field.key])"
+                      @click="emit('test-auto-subscribe-proxy')" />
                   </template>
                 </v-text-field>
                 <v-text-field
@@ -340,6 +383,7 @@
 import {computed, ref} from "vue";
 import AccountInfo from "./AccountInfo.vue";
 import CheckinTimeline from "./CheckinTimeline.vue";
+import RegionMediaMapField from "./RegionMediaMapField.vue";
 
 const props = defineProps({
   section: { type: Object, required: true },
@@ -347,14 +391,18 @@ const props = defineProps({
   api: { type: [Object, Function], required: true },
   refreshingAccounts: { type: Array, default: () => [] },
   testingSource: { type: String, default: "" },
+  testingAutoSubscribe: {type: String, default: ""},
   testingProxy: { type: Boolean, default: false },
+  testingAutoSubscribeProxy: {type: Boolean, default: false},
   hdhiveOauthAction: { type: String, default: "" },
 })
 const emit = defineEmits([
   "scan",
   "browse-directory",
   "test-source",
+  "test-auto-subscribe",
   "test-proxy",
+  "test-auto-subscribe-proxy",
   "refresh-account",
   "hdhive-oauth-start",
   "hdhive-oauth-exchange",
@@ -399,6 +447,31 @@ function testSourceTitle(source) {
   return isTestSourceConfigured(source) ? "测试当前搜索渠道" : "请先完成渠道账号配置并选择资源类型"
 }
 
+function isAutoSubscribeConfigured(provider) {
+  if (provider === "douban") {
+    return Boolean(
+      props.config.auto_subscribe_douban_ranks?.length || hasText(props.config.auto_subscribe_douban_rss_urls),
+    );
+  }
+  if (provider === "maoyan") {
+    return Boolean(
+      props.config.auto_subscribe_maoyan_movie_box ||
+      Object.keys(props.config.auto_subscribe_maoyan_web_platform_map || {}).length,
+    );
+  }
+  if (provider === "netflix") {
+    return Boolean(
+      (props.config.auto_subscribe_netflix_global && props.config.auto_subscribe_netflix_global_media_types?.length) ||
+      Object.keys(props.config.auto_subscribe_netflix_country_selections || {}).length,
+    );
+  }
+  return provider === "mikan";
+}
+
+function autoSubscribeTestTitle(provider) {
+  return isAutoSubscribeConfigured(provider) ? "抓取最多 3 条示例，不创建订阅" : "请先配置至少一个榜单";
+}
+
 function onlineDocuments(key) {
   if (!Array.isArray(props.config[key])) props.config[key] = []
   return props.config[key]
@@ -416,6 +489,7 @@ function removeOnlineDocument(key, index) {
   }
   documents.splice(index, 1)
 }
+
 const activeSubtab = ref(props.section.subtabs?.[0]?.value || "")
 const selectSearch = ref({})
 
@@ -573,6 +647,28 @@ function mediaLibraryWebhookUrl(field, serverName) {
 
 .online-documents {
   min-width: 0;
+}
+
+.region-media-map {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.region-media-map__panels {
+  margin-top: 8px;
+}
+
+.grouped-select {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.grouped-select__panels {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .online-document-row {

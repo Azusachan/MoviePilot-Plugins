@@ -194,7 +194,7 @@
       :task-count="stoppableTaskCount"
       :loading="stopping"
       @confirm="stopConfirmed" />
-    <v-snackbar v-model="messageVisible" :color="messageType" location="top end" timeout="3500" variant="elevated">
+    <v-snackbar v-model="messageVisible" :color="messageType" location="top" timeout="3500" variant="elevated">
       {{ message }}
       <template #actions>
         <v-btn icon="mdi-close" size="small" variant="text" @click="messageVisible = false" />
@@ -510,9 +510,7 @@ async function playHistory(itemId) {
 async function clearHistory() {
   clearing.value = true
   try {
-    const resultMessage = await clearHistoryRequest(
-      forceClearHistory.value, clearPointsHistory.value,
-    );
+    const resultMessage = await clearHistoryRequest(forceClearHistory.value, clearPointsHistory.value);
     clearVisible.value = false
     forceClearHistory.value = false
     clearPointsHistory.value = false;

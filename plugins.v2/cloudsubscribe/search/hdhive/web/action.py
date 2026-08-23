@@ -40,6 +40,10 @@ UNLOCK_ACTION_RE = re.compile(
     r".{0,240}?\"unlockResource\"",
     re.S,
 )
+SERVER_ACTION_REDIRECT_RE = re.compile(
+    r"NEXT_REDIRECT;(?:replace|push);([^;\r\n]+);(?:\d+);",
+    re.I,
+)
 BIND_SECRET_RE = re.compile(
     r'[\\"]bindSecret[\\"]\s*:\s*[\\"]([^\\"]+)', re.I
 )
@@ -93,6 +97,11 @@ class ServerActionResponse:
     @property
     def message(self) -> str:
         return server_action_message(self.payload)
+
+    @property
+    def redirect_url(self) -> str:
+        """读取 Next.js Action 成功时通过 RSC 返回的跳转地址。"""
+        return server_action_redirect_url(self.text)
 
 
 def server_action_headers(
@@ -423,11 +432,19 @@ class ServerActionProtocol:
             request, resource_page_path, headers=page_headers or {}
         )
         honeypot_token, chunk = self.resource_context(page_response)
+        page_url = str(
+            getattr(page_response, "url", "") or f"{base_url.rstrip('/')}/"
+        )
         action_id = self._cached_action(
             f"unlock:{chunk}",
             lambda: self.action_id_from_scripts(
                 request,
-                [f"/_next/{chunk.lstrip('/')}"],
+                server_action_script_paths(
+                    response_text(page_response),
+                    page_url,
+                    preferred_path=chunk,
+                    prefer_related=True,
+                ),
                 action_name="解锁",
                 action_pattern=UNLOCK_ACTION_RE,
             ),
@@ -498,6 +515,7 @@ def server_action_script_paths(
         *,
         preferred_path: str = "",
         chunk_patterns: Iterable[Pattern[str]] = (),
+        prefer_related: bool = False,
 ) -> List[str]:
     """从脚本标签和 RSC 数据中提取、去重并排序同源 JS 路径。"""
     origin = urlsplit(page_url).netloc.lower()
@@ -512,6 +530,21 @@ def server_action_script_paths(
         for chunk in pattern.findall(page_text or ""):
             paths.append(f"/_next/{str(chunk).lstrip('/')}")
     result = list(dict.fromkeys(paths))
+    if prefer_related and preferred_path:
+        preferred = f"/_next/{str(preferred_path).lstrip('/')}"
+        try:
+            preferred_index = result.index(preferred)
+        except ValueError:
+            pass
+        else:
+            # Next.js places route dependencies immediately before the route
+            # page chunk. Try those first so action discovery remains bounded.
+            result = [
+                preferred,
+                *reversed(result[:preferred_index]),
+                *result[preferred_index + 1:],
+            ]
+            return result
     result.sort(key=lambda value: (
         bool(preferred_path and preferred_path not in value), value
     ))
@@ -620,6 +653,22 @@ def server_action_message(payload: Optional[Dict[str, Any]]) -> str:
         else data_messages + payload_messages
     )
     return next((str(value).strip() for value in candidates if value), "")
+
+
+def server_action_redirect_url(text: str, base_url: str = "https://hdhive.com") -> str:
+    """解析 Action RSC 中的绝对或相对跳转地址。"""
+    normalized = decode_embedded_text(text)
+    match = SERVER_ACTION_REDIRECT_RE.search(normalized)
+    if not match:
+        return ""
+    raw_url = str(match.group(1) or "").strip()
+    parsed = urlsplit(raw_url)
+    if parsed.scheme.lower() in {"http", "https", "ed2k", "magnet"}:
+        return raw_url
+    resolved = urlsplit(urljoin(f"{str(base_url).rstrip('/')}/", raw_url.lstrip("/")))
+    if resolved.scheme.lower() not in {"http", "https"} or not resolved.netloc:
+        return ""
+    return resolved.geturl()
 
 
 def server_action_response(response: Any) -> ServerActionResponse:

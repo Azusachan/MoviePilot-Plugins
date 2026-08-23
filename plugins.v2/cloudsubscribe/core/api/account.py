@@ -135,7 +135,6 @@ class AccountApi(OwnerDelegator):
                     password=self._hdhive_password,
                     proxy=self._search_proxy,
                     request_interval=self._hdhive_request_interval,
-                    unlocks_per_minute=self._hdhive_unlocks_per_minute,
                     timeout=10,
                 )
                 close_client = True

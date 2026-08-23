@@ -178,6 +178,7 @@ class PageApi(OwnerDelegator):
                     "success": True,
                     "data": {
                         "defaults": UIConfig.get_default_config(),
+                        "rsshub_instances": UIConfig.get_rsshub_instances(),
                         "cloud_drives": [
                             {
                                 "title": provider.name,

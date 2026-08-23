@@ -4,9 +4,7 @@
       <div v-for="task in tasks" :key="task.id" class="task-row">
         <v-icon
           :icon="
-            task.task_kind === 'sync_queue'
-              ? 'mdi-clock-outline'
-              : task.task_kind === 'cross_transfer'
+            task.task_kind === 'cross_transfer'
               ? 'mdi-swap-horizontal-bold'
               : task.media_type === '电影'
                 ? 'mdi-movie-outline'
@@ -212,7 +210,7 @@ function toggleTaskDetails(taskId) {
 }
 
 function canStop(task) {
-  return task?.task_kind !== "sync_queue" && ["queued", "running", "stopping", "postprocessing"].includes(task?.status);
+  return ["queued", "running", "stopping", "postprocessing"].includes(task?.status);
 }
 
 function taskStatus(status) {

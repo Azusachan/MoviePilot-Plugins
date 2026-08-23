@@ -273,7 +273,7 @@ class SyncApi(OwnerDelegator):
         media_count = len(selected_ids or []) + history_target_count
         if wait:
             result: Dict[str, Any] = {}
-            future, _ = self._submit_sync_operation(
+            future = self._submit_sync_operation(
                 {**sync_kwargs, "result": result},
                 "页面订阅搜索",
             )
@@ -287,7 +287,7 @@ class SyncApi(OwnerDelegator):
             })
             result["data"] = data
             return result
-        queue_position = self.queue_sync_operation(
+        self._submit_sync_operation(
             sync_kwargs,
             "页面订阅搜索",
         )
@@ -310,7 +310,6 @@ class SyncApi(OwnerDelegator):
                 "subscribe_count": len(selected_ids or []),
                 "history_target_count": history_target_count,
                 "media_count": media_count,
-                "queue_position": queue_position,
             },
         }
 
@@ -625,7 +624,7 @@ class SyncApi(OwnerDelegator):
         )
         if wait:
             result: Dict[str, Any] = {}
-            future, _ = self._submit_sync_operation(
+            future = self._submit_sync_operation(
                 {**sync_kwargs, "result": result},
                 queue_label,
             )
@@ -636,19 +635,18 @@ class SyncApi(OwnerDelegator):
                 data["media"] = dict(media_target)
             result["data"] = data
             return result
-        queue_position = self.queue_sync_operation(
+        self._submit_sync_operation(
             sync_kwargs,
             queue_label,
         )
         return {
             "success": True,
             "message": (
-                f"手动添加任务已排队，共 {len(resources)} 条资源"
+                f"手动添加任务已提交，共 {len(resources)} 条资源"
                 if subscribe_id
-                else f"无订阅媒体任务已排队，共 {len(resources)} 条资源"
+                else f"无订阅媒体任务已提交，共 {len(resources)} 条资源"
             ),
             "data": {
-                "queue_position": queue_position,
                 **({"media": dict(media_target)} if media_target else {}),
             },
         }
@@ -690,7 +688,7 @@ class SyncApi(OwnerDelegator):
         if not selected:
             return {"success": False, "message": "没有可处理的候选资源"}
 
-        queue_position = self.queue_sync_operation(
+        self._submit_sync_operation(
             {
                 "subscribe_id": subscribe_id,
                 "manual_resources": selected,
@@ -700,5 +698,5 @@ class SyncApi(OwnerDelegator):
         return {
             "success": True,
             "message": f"已提交 {len(selected)} 个候选资源，开始按现有规则处理",
-            "data": {"submitted": len(selected), "queue_position": queue_position},
+            "data": {"submitted": len(selected)},
         }

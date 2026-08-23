@@ -19,9 +19,6 @@ export function createCheckinGroups() {
               enabledKey: "hdhive_checkin_enabled",
               modeKey: "hdhive_checkin_mode",
               credentialKeys: ["hdhive_username", "hdhive_password"],
-              riskWarnings: {
-                gambler: "HDHive 赌狗模式会将签到奖励乘以 -1～3 的随机倍数，最多扣除 3 积分。",
-              },
             },
             {
               key: "dian115",
@@ -30,9 +27,6 @@ export function createCheckinGroups() {
               enabledKey: "dian115_checkin_enabled",
               modeKey: "dian115_checkin_mode",
               credentialKeys: ["dian115_email", "dian115_password"],
-              riskWarnings: {
-                lucky: "运气签到有 21% 概率扣除 1 倍普通签到积分，也可能获得 3～10 倍奖励。",
-              },
             },
             {
               key: "juying",

@@ -547,12 +547,10 @@ class PluginEventHandler(OwnerDelegator):
             event_data: dict,
             provider: str,
             mode: str,
-            confirm_gambler: bool,
     ) -> None:
         result = self.run_quick_checkin(
             provider=provider,
             mode=mode,
-            confirm_risky=confirm_gambler,
         )
         data = result.get("data") or {}
         lines = [str(result.get("message") or "签到失败")]
@@ -719,8 +717,6 @@ class PluginEventHandler(OwnerDelegator):
 
         if action == "cloudsubscribe_checkin":
             args = str(event_data.get("arg_str") or "").strip().lower().split()
-            confirm_gambler = any(value in {"confirm", "确认"} for value in args)
-            args = [value for value in args if value not in {"confirm", "确认"}]
             mode_aliases = {
                 "normal": "normal", "普通": "normal",
                 "gambler": "gambler", "赌狗": "gambler",
@@ -737,12 +733,12 @@ class PluginEventHandler(OwnerDelegator):
                     self._post_command_message(
                         event_data,
                         "【网盘订阅】参数错误",
-                        "格式：/cloud_checkin [渠道] [normal|gambler|lucky] [confirm]",
+                        "格式：/cloud_checkin [渠道] [normal|gambler|lucky]",
                     )
                     return
             Thread(
                 target=self._run_remote_checkin,
-                args=(dict(event_data), provider, mode, confirm_gambler),
+                args=(dict(event_data), provider, mode),
                 daemon=True,
                 name="cloudsubscribe-command-checkin",
             ).start()

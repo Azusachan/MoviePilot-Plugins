@@ -8,7 +8,7 @@ from collections import defaultdict
 from threading import RLock
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import Integer, case, cast, delete, func, insert, or_, select
+from sqlalchemy import Integer, case, cast, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,6 @@ from .models import (
     AuthSession,
     CheckinHistoryRecord,
     CheckinScheduleState,
-    DataMigrationState,
     HistoryRecord,
     OfflinePendingTask,
     PointBudgetRecord,
@@ -851,177 +850,6 @@ class AuthSessionRepository(DbOper):
         }
 
 
-class SnapshotRepository(DbOper):
-    """迁移专用整库快照读写，避免复用运行时差异更新路径。"""
-
-    def __init__(
-            self,
-            manager: CloudSubscribeDatabaseManager,
-            history: HistoryRepository,
-            offline: OfflinePendingRepository,
-            checkin: CheckinRepository,
-            schedule: CheckinScheduleRepository,
-            budget: PointBudgetRepository,
-            account: AccountSnapshotRepository,
-            auth: AuthSessionRepository,
-            db: Session = None,
-    ):
-        super().__init__(manager, db)
-        self.history = history
-        self.offline = offline
-        self.checkin = checkin
-        self.schedule = schedule
-        self.budget = budget
-        self.account = account
-        self.auth = auth
-
-    @db_update
-    def replace_all(
-            self, snapshot: Dict[str, Any], db: Session = None
-    ) -> None:
-        for model in (
-                HistoryRecord,
-                OfflinePendingTask,
-                CheckinHistoryRecord,
-                CheckinScheduleState,
-                PointBudgetRecord,
-                AccountSnapshot,
-                AuthSession,
-        ):
-            model.truncate(db)
-
-        history_rows = self.history.normalize_records(
-            snapshot.get("history") or []
-        )
-        if history_rows:
-            db.execute(insert(HistoryRecord), history_rows)
-
-        offline_rows = []
-        for key, payload in self.offline.normalize_values(
-                snapshot.get("offline") or {}
-        ).items():
-            offline_rows.append({
-                "pending_key": key,
-                "task_id": str(payload.get("task_id") or "")
-                if isinstance(payload, dict) else "",
-                "status": str(payload.get("status") or "")
-                if isinstance(payload, dict) else "",
-                "created_at": _timestamp(payload.get("created_at"))
-                if isinstance(payload, dict) else 0,
-                "payload": payload,
-            })
-        if offline_rows:
-            db.execute(insert(OfflinePendingTask), offline_rows)
-
-        checkin_rows = []
-        for provider, records in (snapshot.get("checkin") or {}).items():
-            normalized_provider = str(provider or "").strip().lower()
-            if not normalized_provider:
-                continue
-            for index, record in enumerate(self.checkin.normalize_records(
-                    normalized_provider, records
-            )):
-                checkin_rows.append({
-                    "id": record["id"],
-                    "provider": normalized_provider,
-                    "sort_index": index,
-                    "executed_at": str(record.get("executed_at") or ""),
-                    "success": bool(record.get("success")),
-                    "payload": record,
-                })
-        if checkin_rows:
-            db.execute(insert(CheckinHistoryRecord), checkin_rows)
-
-        schedule = snapshot.get("schedule") or {}
-        if schedule:
-            data = self.schedule.normalize(schedule)
-            db.execute(insert(CheckinScheduleState), [{
-                "id": 1,
-                "schedule_date": str(data.get("date") or ""),
-                "full_completed": bool(data.get("full_completed")),
-                "retry_count": int(data.get("retry_count") or 0),
-                "pending_providers": list(data.get("pending_providers") or []),
-                "completed_retry_count": int(
-                    data.get("completed_retry_count") or 0
-                ),
-            }])
-
-        budget_rows = []
-        for provider, values in (snapshot.get("budgets") or {}).items():
-            normalized_provider = str(provider or "").strip().lower()
-            if not normalized_provider:
-                continue
-            budget_rows.extend({
-                                   "provider": normalized_provider,
-                                   "subscribe_key": key,
-                                   "points": points,
-                               } for key, points in self.budget.normalize_values(values).items())
-        if budget_rows:
-            db.execute(insert(PointBudgetRecord), budget_rows)
-
-        account_rows = []
-        for account_key, payload in self.account.normalize_values(
-                snapshot.get("accounts") or {}
-        ).items():
-            account_rows.append({
-                "account_key": account_key,
-                "refreshed_at": _timestamp(payload.get("refreshed_at")),
-                "payload": payload,
-            })
-        if account_rows:
-            db.execute(insert(AccountSnapshot), account_rows)
-
-        auth_rows = []
-        for provider, value in (snapshot.get("auth_sessions") or {}).items():
-            normalized_provider = str(provider or "").strip().lower()
-            payload = self.auth.normalize_value(value)
-            if not normalized_provider or not payload:
-                continue
-            auth_rows.append({
-                "provider": normalized_provider,
-                "updated_at": _timestamp(payload.get("updated_at")),
-                "expires_at": _timestamp(payload.get("expires_at")),
-                "payload": payload,
-            })
-        if auth_rows:
-            db.execute(insert(AuthSession), auth_rows)
-
-        self.history._invalidate_filter_options()
-
-
-class MigrationStateRepository(DbOper):
-
-    @db_query
-    def load(self, db: Session = None) -> Optional[DataMigrationState]:
-        return DataMigrationState.get(db, 1)
-
-    @db_update
-    def save(self, values: Dict[str, Any], db: Session = None) -> None:
-        insert_values = {
-            "id": 1,
-            "version": 1,
-            "status": "pending",
-            "source_counts": {},
-            "target_counts": {},
-            "source_checksum": "",
-            "target_checksum": "",
-            "migrated_at": "",
-            "source_cleaned": False,
-            "error": "",
-        }
-        insert_values.update({
-            key: copy.deepcopy(value) for key, value in values.items()
-        })
-        statement = sqlite_insert(DataMigrationState).values(**insert_values)
-        db.execute(statement.on_conflict_do_update(
-            index_elements=[DataMigrationState.id],
-            set_={
-                key: getattr(statement.excluded, key)
-                for key in values
-            },
-        ))
-
-
 class CloudSubscribeRepositories:
     def __init__(
             self,
@@ -1035,15 +863,3 @@ class CloudSubscribeRepositories:
         self.budget = PointBudgetRepository(manager, db)
         self.account = AccountSnapshotRepository(manager, db)
         self.auth = AuthSessionRepository(manager, db)
-        self.snapshot = SnapshotRepository(
-            manager,
-            self.history,
-            self.offline,
-            self.checkin,
-            self.schedule,
-            self.budget,
-            self.account,
-            self.auth,
-            db,
-        )
-        self.migration = MigrationStateRepository(manager, db)

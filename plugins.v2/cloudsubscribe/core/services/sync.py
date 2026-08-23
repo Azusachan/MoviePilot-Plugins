@@ -4,7 +4,6 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Event as ThreadEvent, Thread
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from uuid import uuid4
 
 from app.db import SessionFactory
 from app.db.models.subscribe import Subscribe
@@ -28,96 +27,31 @@ class SyncExecutionService(OwnerDelegator):
     # 防止平台短时间重复回调；完成后不应阻塞正常的手动重试一分钟。
     _SUBSCRIBE_SEARCH_DEBOUNCE_SECONDS = 5.0
 
-    def _run_queued_sync_operation(
+    def _run_sync_operation(
             self,
             sync_kwargs: Dict[str, Any],
             label: str,
-            queue_task_id: str,
     ) -> bool:
-        try:
-            logger.info(f"开始执行排队任务：{label}")
-            return self.sync_subscribes(
-                **sync_kwargs,
-                wait_for_slot=True,
-                queue_task_id=queue_task_id,
-            )
-        finally:
-            self._remove_sync_queue_task(queue_task_id)
-            with self._sync_queue_lock:
-                self._sync_queue_pending = max(
-                    0, int(self._sync_queue_pending or 0) - 1
-                )
-            self._mark_runtime_changed()
+        logger.info(f"开始执行同步操作：{label}")
+        return self.sync_subscribes(**sync_kwargs, wait_for_slot=True)
 
     def _submit_sync_operation(
             self,
             sync_kwargs: Dict[str, Any],
             label: str,
-    ) -> Tuple[Any, int]:
-        """把人工触发的同步操作统一送入单线程 FIFO 队列。"""
-        executor = self._sync_queue_executor
+    ) -> Any:
+        """串行提交同步操作，保证后添加资源位于现有操作之后。"""
+        executor = self._sync_operation_executor
         if not executor or self._subscribe_search_queue_shutdown.is_set():
-            raise RuntimeError("同步队列已停止")
-        queue_task_id = f"sync-queue:{uuid4().hex}"
-        with self._sync_queue_lock:
-            self._sync_queue_pending = int(self._sync_queue_pending or 0) + 1
-            position = self._sync_queue_pending
-            self._sync_queue_tasks[queue_task_id] = {
-                "id": queue_task_id,
-                "task_kind": "sync_queue",
-                "title": str(label or "订阅任务"),
-                "media_type": "",
-                "status": "queued",
-                "phase": f"排队中 · 队列位置 {position}",
-                "progress": 0,
-                "message": "",
-                "queued_at": time.time(),
-                "started_at": None,
-                "finished_at": None,
-            }
-            try:
-                future = executor.submit(
-                    self._run_queued_sync_operation,
-                    dict(sync_kwargs),
-                    str(label or "订阅任务"),
-                    queue_task_id,
-                )
-            except Exception:
-                self._sync_queue_pending = max(0, self._sync_queue_pending - 1)
-                self._sync_queue_tasks.pop(queue_task_id, None)
-                raise
+            raise RuntimeError("同步执行器已停止")
+        future = executor.submit(
+            self._run_sync_operation,
+            dict(sync_kwargs),
+            str(label or "订阅任务"),
+        )
         self._mark_runtime_changed()
-        logger.info(f"任务已进入同步队列：{label}，队列位置 {position}")
-        return future, position
-
-    def queue_sync_operation(
-            self,
-            sync_kwargs: Dict[str, Any],
-            label: str,
-    ) -> int:
-        _, position = self._submit_sync_operation(sync_kwargs, label)
-        return position
-
-    def _remove_sync_queue_task(self, task_id: str) -> None:
-        removed = False
-        with self._sync_queue_lock:
-            removed = self._sync_queue_tasks.pop(str(task_id or ""), None) is not None
-        if removed:
-            self._mark_runtime_changed()
-
-    def _activate_sync_queue_task(self, task_id: str) -> None:
-        changed = False
-        with self._sync_queue_lock:
-            task = self._sync_queue_tasks.get(str(task_id or ""))
-            if task and task.get("status") != "running":
-                task.update({
-                    "status": "running",
-                    "phase": "正在准备媒体任务",
-                    "started_at": time.time(),
-                })
-                changed = True
-        if changed:
-            self._mark_runtime_changed()
+        logger.info(f"同步操作已提交：{label}")
+        return future
 
     def _direct_cloud_manual_resources(
             self, resources: Optional[List[Dict[str, Any]]]
@@ -469,7 +403,7 @@ class SyncExecutionService(OwnerDelegator):
                     f"{'全部订阅' if subscribe_ids is None else len(subscribe_ids)}，"
                     f"订阅并发上限 {self._subscription_concurrency}"
                 )
-                future, _ = self._submit_sync_operation(
+                future = self._submit_sync_operation(
                     {
                         "subscribe_ids": subscribe_ids,
                         "subscribe_states": subscribe_states,
@@ -522,7 +456,6 @@ class SyncExecutionService(OwnerDelegator):
             history_search_targets: Optional[List[Dict[str, Any]]] = None,
             upgrade_request: Optional[Dict[str, Any]] = None,
             manual_upgrade: bool = False,
-            queue_task_id: str = "",
     ) -> bool:
         if self._stop_requested():
             logger.info("同步任务已收到停止请求，取消执行")
@@ -777,7 +710,6 @@ class SyncExecutionService(OwnerDelegator):
         total_subscribes = len(active_subscribes)
         if not active_subscribes:
             self._register_sync_tasks([])
-            self._remove_sync_queue_task(queue_task_id)
             logger.debug(
                 f"订阅收集完成，无需搜索：排除 {excluded_count} 个，"
                 f"延期 {deferred_count} 个，后处理 {postprocessing_count} 个，"
@@ -830,7 +762,6 @@ class SyncExecutionService(OwnerDelegator):
             },
         )
         self._register_sync_tasks(active_subscribes)
-        self._remove_sync_queue_task(queue_task_id)
         grouped_subscribes = {}
         for subscribe in active_subscribes:
             grouped_subscribes.setdefault(
@@ -1143,7 +1074,6 @@ class SyncExecutionService(OwnerDelegator):
             manual_upgrade: bool = False,
             wait_for_slot: bool = False,
             queue_revision: Optional[int] = None,
-            queue_task_id: str = "",
             result: Optional[Dict[str, Any]] = None,
             lock_acquired: bool = False,
     ) -> bool:
@@ -1189,8 +1119,6 @@ class SyncExecutionService(OwnerDelegator):
                     False, "已有订阅任务正在运行"
                 ))
             return False
-        if queue_task_id:
-            self._activate_sync_queue_task(queue_task_id)
         notification_batch_started = False
         run_context: Dict[str, Any] = {}
         task_counts: Dict[str, int] = {}
@@ -1222,7 +1150,6 @@ class SyncExecutionService(OwnerDelegator):
                     history_search_targets=history_search_targets,
                     manual_upgrade=manual_upgrade,
                     upgrade_request=upgrade_request,
-                    queue_task_id=queue_task_id,
                 )
             except Exception as e:
                 logger.error(f"同步任务异常：{e}")

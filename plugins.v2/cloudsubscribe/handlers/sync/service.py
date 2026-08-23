@@ -147,7 +147,7 @@ class _TmdbSeasonPageParser(HTMLParser):
 class SyncHandler:
     """同步处理器"""
 
-    _OFFLINE_PENDING_KEY = "pending_offline_strm_v1"
+    _OFFLINE_PENDING_KEY = "pending_offline_strm"
     _OFFLINE_CHECK_DELAYS = (10, 20, 40, 60, 120, 300)
     _OFFLINE_TIMEOUT = 30 * 60
     _FILE_FINALIZE_TIMEOUT = 30 * 60
@@ -822,7 +822,7 @@ class SyncHandler:
     @staticmethod
     def _tmdb_id_from_media(value: Any) -> int:
         raw_id = (
-            value.get("id")
+            value.get("id") or value.get("tmdb_id")
             if isinstance(value, dict)
             else getattr(value, "tmdb_id", None)
         )
@@ -835,34 +835,78 @@ class SyncHandler:
     def _normalized_media_title(value: Any) -> str:
         return re.sub(r"[\W_]+", "", str(value or "").casefold())
 
+    @classmethod
+    def _tmdb_title_variants(cls, value: Any, media_type: MediaType) -> Set[str]:
+        """生成可用于订阅回填的标题变体，去掉剧集季标记和常见宣传后缀。"""
+        raw = str(value or "").strip()
+        if not raw:
+            return set()
+        values = {raw}
+        if media_type == MediaType.TV:
+            values.add(re.sub(
+                r"(?:\s*第\s*\d+\s*季|\s*第[一二三四五六七八九十百]+季|\s*season\s*\d+|\s*s\d{1,2})$",
+                "",
+                raw,
+                flags=re.IGNORECASE,
+            ).strip())
+        return {
+            cls._normalized_media_title(item)
+            for item in values
+            if cls._normalized_media_title(item)
+        }
+
     def _match_tmdb_search_candidate(
             self,
             subscribe: Any,
             media_type: MediaType,
             candidates: List[Any],
     ) -> int:
-        """仅接受类型、标题、年份均一致的唯一 TMDB 搜索结果。"""
-        expected_title = self._normalized_media_title(
-            getattr(subscribe, "name", "")
+        """按类型、年份和标题别名评分，只有最高分唯一时才回填。"""
+        expected_titles = self._tmdb_title_variants(
+            getattr(subscribe, "name", ""), media_type
         )
         expected_year = str(getattr(subscribe, "year", "") or "").strip()
-        matched_ids = set()
+        subscribe_meta = MetaInfo(str(getattr(subscribe, "name", "") or ""))
+        season_specific_tv = (
+                media_type == MediaType.TV
+                and subscribe_meta.begin_season is not None
+        )
+        scores: Dict[int, int] = {}
         for candidate in candidates or []:
             candidate_type = getattr(candidate, "type", None)
             if candidate_type != media_type:
                 continue
             candidate_year = str(getattr(candidate, "year", "") or "").strip()
-            if expected_year and candidate_year != expected_year:
+            if (
+                    not season_specific_tv
+                    and expected_year
+                    and candidate_year
+                    and candidate_year != expected_year
+            ):
                 continue
-            candidate_titles = {
-                self._normalized_media_title(getattr(candidate, field, ""))
-                for field in ("title", "original_title")
-            }
-            if expected_title not in candidate_titles:
+            candidate_titles: Set[str] = set()
+            for field in (
+                    "title", "original_title", "en_title", "hk_title",
+                    "tw_title", "sg_title", "original_name", "name",
+            ):
+                candidate_titles.update(
+                    self._tmdb_title_variants(getattr(candidate, field, ""), media_type)
+                )
+            names = getattr(candidate, "names", None) or []
+            for name in names:
+                candidate_titles.update(self._tmdb_title_variants(name, media_type))
+            if not expected_titles or not expected_titles.intersection(candidate_titles):
                 continue
             if tmdb_id := self._tmdb_id_from_media(candidate):
-                matched_ids.add(tmdb_id)
-        return matched_ids.pop() if len(matched_ids) == 1 else 0
+                score = 3 if self._tmdb_title_variants(
+                    getattr(candidate, "title", ""), media_type
+                ).intersection(expected_titles) else 2
+                scores[tmdb_id] = max(scores.get(tmdb_id, 0), score)
+        if not scores:
+            return 0
+        best_score = max(scores.values())
+        best_ids = [tmdb_id for tmdb_id, score in scores.items() if score == best_score]
+        return best_ids[0] if len(best_ids) == 1 else 0
 
     def repair_subscribe_tmdb_id(self, subscribe: Any) -> bool:
         """在订阅收集阶段使用平台媒体链修复缺失的 TMDB ID。"""
@@ -878,6 +922,7 @@ class SyncHandler:
             return False
 
         tmdb_id = 0
+        candidates: List[Any] = []
         # 同一豆瓣身份可能已有其他订阅完成 TMDB 回填，优先复用该稳定映射，
         # 避免被不同语言标题、季标题或年份差异误判为无匹配。
         source_douban_id = str(getattr(subscribe, "doubanid", "") or "").strip()
@@ -941,12 +986,26 @@ class SyncHandler:
             meta.year = getattr(subscribe, "year", None)
             meta.type = media_type
             try:
-                candidates = self._timed_sync_call(
-                    "subscribe_tmdb_repair",
-                    self._chain.search_medias,
-                    meta=meta,
-                    source="themoviedb",
-                ) or []
+                search_metas = [meta]
+                if meta.year:
+                    relaxed_meta = MetaInfo(
+                        str(getattr(subscribe, "name", "") or "")
+                    )
+                    relaxed_meta.type = media_type
+                    search_metas.append(relaxed_meta)
+                seen_ids = set()
+                for search_meta in search_metas:
+                    rows = self._timed_sync_call(
+                        "subscribe_tmdb_repair",
+                        self._chain.search_medias,
+                        meta=search_meta,
+                        source="themoviedb",
+                    ) or []
+                    for row in rows:
+                        row_id = self._tmdb_id_from_media(row)
+                        if row_id and row_id not in seen_ids:
+                            seen_ids.add(row_id)
+                            candidates.append(row)
                 tmdb_id = self._match_tmdb_search_candidate(
                     subscribe, media_type, candidates
                 )
@@ -982,8 +1041,10 @@ class SyncHandler:
 
         if not tmdb_id:
             logger.debug(
-                f"订阅 TMDB ID 自动修复未找到唯一匹配："
-                f"{getattr(subscribe, 'name', '')} ({getattr(subscribe, 'year', '')})"
+                f"订阅 TMDB ID 自动修复未找到安全匹配："
+                f"{getattr(subscribe, 'name', '')} "
+                f"({getattr(subscribe, 'year', '')})，"
+                f"标题候选={len(candidates)}"
             )
             return False
 

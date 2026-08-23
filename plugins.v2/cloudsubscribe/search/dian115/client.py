@@ -18,7 +18,6 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from ..http_client import (
     AccountActionGate,
-    CURL_CFFI_AVAILABLE,
     RequestGate,
     gated_idempotent_request,
     normalize_proxies,
@@ -60,11 +59,6 @@ class Dian115Client:
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
     ):
-        if not CURL_CFFI_AVAILABLE:
-            raise Dian115Error(
-                "Dian115 需要 curl_cffi 请安装依赖后重启",
-                code="curl_cffi_missing",
-            )
         self._email = str(email or "").strip()
         self.base_url = str(base_url or self.BASE_URL).rstrip("/")
         self._password = str(password or "").strip()
