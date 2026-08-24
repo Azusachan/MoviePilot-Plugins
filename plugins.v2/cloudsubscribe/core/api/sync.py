@@ -11,6 +11,7 @@ from app.db.subscribe_oper import SubscribeOper
 from app.schemas.types import MediaType
 
 from .. import CloudDriveCapability, OwnerDelegator
+from ..media import recognize_media, tmdb_id_of
 
 
 class SyncApi(OwnerDelegator):
@@ -25,10 +26,11 @@ class SyncApi(OwnerDelegator):
         )
         meta = MetaInfo(str(tmdb_id))
         meta.type = resolved_type
-        mediainfo = self.chain.recognize_media(
+        mediainfo = recognize_media(
+            self.chain,
             meta=meta,
             mtype=resolved_type,
-            tmdbid=tmdb_id,
+            tmdb_id=tmdb_id,
             cache=True,
         )
         if not mediainfo:
@@ -222,9 +224,7 @@ class SyncApi(OwnerDelegator):
                     if media_type and getattr(subscribe, "type", None) != media_type:
                         continue
                     try:
-                        subscribe_tmdb_id = int(
-                            getattr(subscribe, "tmdbid", 0) or 0
-                        )
+                        subscribe_tmdb_id = int(tmdb_id_of(subscribe) or 0)
                     except (TypeError, ValueError):
                         subscribe_tmdb_id = 0
                     if tmdb_id > 0:

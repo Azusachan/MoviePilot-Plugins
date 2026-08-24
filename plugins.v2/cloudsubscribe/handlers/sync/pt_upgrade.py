@@ -11,6 +11,7 @@ from app.log import logger
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator
+from ...core.media import list_subscribes_by_tmdb_id
 from ...utils import MediaFileParser
 
 
@@ -52,7 +53,9 @@ class PtUpgradeService(OwnerDelegator):
                 or (season_list[0] if season_list else 1)
                 or 1
             )
-        subscribes = SubscribeOper().list_by_tmdbid(tmdb_id, season) or []
+        subscribes = list_subscribes_by_tmdb_id(
+            SubscribeOper(), tmdb_id, season
+        )
         selected_ids = {str(value) for value in (self._upgrade_subscribe_ids or [])}
         return next(
             (

@@ -12,6 +12,7 @@ from .resource import Dian115ResourceService
 from ..budget import PointBudgetLedger
 from ..matching import unique_texts
 from ...core import OwnerDelegator, SearchQuery, format_search_label
+from ...core.media import tmdb_id_of
 from ...utils.cache import create_platform_ttl_cache
 from ...utils.file_parser import MediaFileParser
 
@@ -305,7 +306,7 @@ class Dian115SearchService(OwnerDelegator):
         subscribe = query.subscribe
         test_mode = query.test_mode
         result_limit = query.result_limit
-        tmdb_id = mediainfo.tmdb_id or getattr(subscribe, "tmdbid", None)
+        tmdb_id = mediainfo.tmdb_id or tmdb_id_of(subscribe)
         search_label = format_search_label(mediainfo, media_type, season)
         prefix = f"[{search_label}][DIAN115]"
         if not tmdb_id:

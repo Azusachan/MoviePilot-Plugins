@@ -9,6 +9,7 @@ from app.schemas.types import MediaType
 from .client import ButailingClient
 from ..magnet import clear_cache, media_titles, normalize_magnets
 from ..matching import extract_season, extract_year, title_matches, unique_texts
+from ...core.media import media_id_of
 from ...core.search import SearchQuery
 
 
@@ -208,11 +209,11 @@ class ButailingSearchService:
             season=query.season,
             douban_id=(
                     getattr(mediainfo, "douban_id", None)
-                    or getattr(subscribe, "doubanid", None)
+                    or media_id_of(subscribe, "douban")
             ),
             imdb_id=(
                     getattr(mediainfo, "imdb_id", None)
-                    or getattr(subscribe, "imdbid", None)
+                    or media_id_of(subscribe, "imdb")
             ),
             limit=(
                 query.result_limit

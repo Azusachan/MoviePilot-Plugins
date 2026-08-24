@@ -13,6 +13,7 @@ from app.schemas.event import ResourceDownloadEventData
 from app.schemas.types import MediaType, NotificationType
 from torf import Torrent, TorfError
 
+from ..media import list_subscribes_by_tmdb_id
 from ...core import OwnerDelegator
 from ...search.types import resource_type_from_url, resource_type_name
 
@@ -575,6 +576,22 @@ class PluginEventHandler(OwnerDelegator):
             "\n".join(lines),
         )
 
+    def _run_remote_auto_subscribe(self, event_data: dict) -> None:
+        try:
+            result = self.run_auto_subscribe()
+        except Exception as error:
+            self._post_command_message(
+                event_data,
+                "【网盘订阅】榜单订阅失败",
+                str(error),
+            )
+            return
+        self._post_command_message(
+            event_data,
+            "【网盘订阅】榜单订阅结果",
+            str(result.get("message") or "榜单自动订阅执行完成"),
+        )
+
     @staticmethod
     def _format_checkin_history(result: dict) -> str:
         if not result.get("success"):
@@ -643,6 +660,20 @@ class PluginEventHandler(OwnerDelegator):
                 event_data,
                 "【网盘订阅】任务提交",
                 str(result.get("message") or "任务启动失败"),
+            )
+            return
+
+        if action == "cloudsubscribe_auto_subscribe":
+            Thread(
+                target=self._run_remote_auto_subscribe,
+                args=(dict(event_data),),
+                daemon=True,
+                name="cloudsubscribe-command-auto-subscribe",
+            ).start()
+            self._post_command_message(
+                event_data,
+                "【网盘订阅】正在执行榜单订阅",
+                "请求已接收，完成后将发送订阅结果。",
             )
             return
 
@@ -818,15 +849,21 @@ class PluginEventHandler(OwnerDelegator):
         season_list = meta.season_list or [1]
         if media_type := getattr(getattr(media, "type", None), "value", getattr(media, "type", None)):
             if media_type == MediaType.MOVIE.value:
-                all_subs = SubscribeOper().list_by_tmdbid(tmdbid, None)
+                all_subs = list_subscribes_by_tmdb_id(
+                    SubscribeOper(), tmdbid, None
+                )
             else:
                 all_subs = []
                 for season in season_list:
-                    all_subs.extend(SubscribeOper().list_by_tmdbid(tmdbid, season))
+                    all_subs.extend(list_subscribes_by_tmdb_id(
+                        SubscribeOper(), tmdbid, season
+                    ))
         else:
             all_subs = []
             for season in season_list:
-                all_subs.extend(SubscribeOper().list_by_tmdbid(tmdbid, season))
+                all_subs.extend(list_subscribes_by_tmdb_id(
+                    SubscribeOper(), tmdbid, season
+                ))
 
         if not all_subs:
             return

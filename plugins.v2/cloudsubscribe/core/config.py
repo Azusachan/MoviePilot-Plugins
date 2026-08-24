@@ -4,13 +4,15 @@ import datetime
 from typing import Any, Dict, List
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
-from bs4 import BeautifulSoup
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
+from bs4 import BeautifulSoup
+
+from .media import tmdb_id_of
 from ..utils.http_client import requests
 
 DEFAULT_AUTO_SUBSCRIBE_USERNAME = "网盘订阅助手"
@@ -37,7 +39,6 @@ class UIConfig:
             "auto_subscribe_enabled": False,
             "auto_subscribe_onlyonce": False,
             "auto_subscribe_cron": "0 8 * * *",
-            "auto_subscribe_providers": [],
             "auto_subscribe_username": DEFAULT_AUTO_SUBSCRIBE_USERNAME,
             "auto_subscribe_notify": False,
             "auto_subscribe_skip_subscribed": True,
@@ -48,7 +49,6 @@ class UIConfig:
             "auto_subscribe_proxy_username": "",
             "auto_subscribe_proxy_password": "",
             "auto_subscribe_douban_enabled": False,
-            "auto_subscribe_douban_cron": "0 8 * * *",
             "auto_subscribe_douban_ranks": ["movie-hot-gaia", "tv-hot"],
             "auto_subscribe_douban_rsshub_base": "https://rsshub.app",
             "auto_subscribe_douban_rss_urls": [],
@@ -57,7 +57,6 @@ class UIConfig:
             "auto_subscribe_douban_min_year": current_year,
             "auto_subscribe_douban_media_type": "all",
             "auto_subscribe_maoyan_enabled": False,
-            "auto_subscribe_maoyan_cron": "0 9 * * *",
             "auto_subscribe_maoyan_base_url": "https://piaofang.maoyan.com",
             "auto_subscribe_maoyan_movie_box": True,
             "auto_subscribe_maoyan_web_platform_map": {"all": ["tv"]},
@@ -69,7 +68,6 @@ class UIConfig:
             "auto_subscribe_maoyan_min_year": current_year,
             "auto_subscribe_maoyan_media_type": "all",
             "auto_subscribe_netflix_enabled": False,
-            "auto_subscribe_netflix_cron": "0 11 * * 3",
             "auto_subscribe_netflix_base_url": "https://www.netflix.com",
             "auto_subscribe_netflix_global": True,
             "auto_subscribe_netflix_global_dataset": "weekly",
@@ -86,7 +84,6 @@ class UIConfig:
             "auto_subscribe_netflix_max_workers": 4,
             "auto_subscribe_netflix_use_cache": True,
             "auto_subscribe_mikan_enabled": False,
-            "auto_subscribe_mikan_cron": "0 10 * * 1",
             "auto_subscribe_mikan_year": current_year,
             "auto_subscribe_mikan_season": "当前",
             "auto_subscribe_mikan_resolve_bangumi_id": True,
@@ -386,7 +383,7 @@ class UIConfig:
                     "name": subscribe.name,
                     "year": subscribe.year,
                     "media_type": "movie" if is_movie else "tv",
-                    "tmdb_id": subscribe.tmdbid,
+                    "tmdb_id": tmdb_id_of(subscribe),
                     "season": subscribe.season if not is_movie else None,
                 }
             )

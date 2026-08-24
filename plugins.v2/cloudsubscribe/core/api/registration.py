@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from fastapi import Depends
 
+from .form_content import FormContent
 from .. import OwnerDelegator
 from ..agent import (
     CloudSubscribeCacheClearTool,
@@ -56,10 +57,10 @@ class MoviePilotRegistration(OwnerDelegator):
         return "vue", "dist/assets"
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        return None, UIConfig.get_default_config()
+        return FormContent.form(self), UIConfig.get_default_config()
 
     def get_page(self) -> Optional[List[dict]]:
-        return None
+        return FormContent.page(self)
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [
@@ -494,6 +495,13 @@ class MoviePilotRegistration(OwnerDelegator):
                 "data": {"action": "cloudsubscribe_sync"},
             },
             {
+                "cmd": "/cloud_auto_subscribe",
+                "event": EventType.PluginAction,
+                "desc": "立即执行榜单自动订阅",
+                "category": "网盘订阅",
+                "data": {"action": "cloudsubscribe_auto_subscribe"},
+            },
+            {
                 "cmd": "/cloud_status",
                 "event": EventType.PluginAction,
                 "desc": "查看网盘订阅状态",
@@ -508,16 +516,9 @@ class MoviePilotRegistration(OwnerDelegator):
                 "data": {"action": "cloudsubscribe_links"},
             },
             {
-                "cmd": "/cloud_link_select",
-                "event": EventType.PluginAction,
-                "desc": "选择链接识别出的 TMDB 媒体",
-                "category": "网盘订阅",
-                "data": {"action": "cloudsubscribe_link_select"},
-            },
-            {
                 "cmd": "/cloud_checkin",
                 "event": EventType.PluginAction,
-                "desc": "立即执行签到：渠道 normal|gambler|lucky",
+                "desc": "立即执行搜索渠道签到",
                 "category": "网盘订阅",
                 "data": {"action": "cloudsubscribe_checkin"},
             },
@@ -543,28 +544,17 @@ class MoviePilotRegistration(OwnerDelegator):
 
         services = []
 
-        if bool(getattr(self, "_auto_subscribe_enabled", False)):
-            schedules = dict(getattr(self, "_auto_subscribe_provider_schedules", {}) or {})
-            if schedules:
-                for provider_id, cron in schedules.items():
-                    if not self._cron_is_valid(cron):
-                        logger.warning(f"榜单自动订阅 {provider_id} Cron 表达式无效：{cron}")
-                        continue
-                    services.append({
-                        "id": f"CloudSubscribe_AutoSubscribe_{provider_id}",
-                        "name": f"{provider_id}榜单自动订阅服务",
-                        "trigger": CronTrigger.from_crontab(cron),
-                        "func": self.run_auto_subscribe,
-                        "kwargs": {"provider_ids": [provider_id]},
-                    })
-            elif self._cron_is_valid(getattr(self, "_auto_subscribe_cron", "")):
-                services.append({
-                    "id": "CloudSubscribe_AutoSubscribe",
-                    "name": "榜单自动订阅服务",
-                    "trigger": CronTrigger.from_crontab(self._auto_subscribe_cron),
-                    "func": self.run_auto_subscribe,
-                    "kwargs": {},
-                })
+        if (
+                bool(getattr(self, "_auto_subscribe_enabled", False))
+                and self._cron_is_valid(getattr(self, "_auto_subscribe_cron", ""))
+        ):
+            services.append({
+                "id": "CloudSubscribe_AutoSubscribe",
+                "name": "榜单自动订阅服务",
+                "trigger": CronTrigger.from_crontab(self._auto_subscribe_cron),
+                "func": self.run_auto_subscribe,
+                "kwargs": {},
+            })
 
         if self._cron and self._cron_is_valid(self._cron):
             try:

@@ -15,6 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from ...core import CloudDriveCapability
 from ...core import OwnerDelegator
+from ...core.media import media_identity
 
 sync_lock = Lock()
 
@@ -81,11 +82,11 @@ class SyncRuntimeService(OwnerDelegator):
     @staticmethod
     def _sync_media_key(subscribe: Any) -> Tuple[str, str, int]:
         media_type = str(getattr(subscribe, "type", "") or "")
-        media_id = str(
-            getattr(subscribe, "tmdbid", None)
-            or getattr(subscribe, "tmdb_id", None)
-            or getattr(subscribe, "doubanid", None)
-            or getattr(subscribe, "name", "")
+        source, source_id = media_identity(subscribe)
+        media_id = (
+            f"{source}:{source_id}"
+            if source and source_id
+            else str(getattr(subscribe, "name", "") or "")
         )
         season = int(getattr(subscribe, "season", 1) or 1) if media_type == MediaType.TV.value else 0
         return media_type, media_id, season

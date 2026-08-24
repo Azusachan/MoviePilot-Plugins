@@ -4,10 +4,11 @@ from typing import Iterable
 
 from app.schemas.types import MediaType
 
-from ...core.search import SearchQuery
-from ..magnet import clear_cache, media_titles, normalize_magnets
 from .client import JuyingClient
 from .resource import JuyingResourceService
+from ..magnet import clear_cache, media_titles, normalize_magnets
+from ...core.media import media_id_of, tmdb_id_of
+from ...core.search import SearchQuery
 
 
 class JuyingSearchService:
@@ -36,15 +37,15 @@ class JuyingSearchService:
             ),
             tmdb_id=(
                     getattr(mediainfo, "tmdb_id", None)
-                    or getattr(subscribe, "tmdbid", None)
+                    or tmdb_id_of(subscribe)
             ),
             douban_id=(
                     getattr(mediainfo, "douban_id", None)
-                    or getattr(subscribe, "doubanid", None)
+                    or media_id_of(subscribe, "douban")
             ),
             imdb_id=(
                     getattr(mediainfo, "imdb_id", None)
-                    or getattr(subscribe, "imdbid", None)
+                    or media_id_of(subscribe, "imdb")
             ),
             season=query.season,
             resource_type_order=self._resource_types,

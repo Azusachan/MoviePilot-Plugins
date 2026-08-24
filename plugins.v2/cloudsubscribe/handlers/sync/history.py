@@ -14,6 +14,7 @@ from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
 from app.db.downloadhistory_oper import DownloadHistoryOper
+from app.db.models.downloadhistory import DownloadHistory
 from app.db.models.mediaserver import MediaServerItem
 from app.db.subscribe_oper import SubscribeOper
 from app.helper.mediaserver import MediaServerHelper
@@ -23,6 +24,15 @@ from sqlalchemy import func, or_
 
 from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
 from ...core.history import history_group_key
+from ...core.media import (
+    download_history_identity_payload,
+    get_download_history_last_by,
+    list_subscribes_by_tmdb_id,
+    media_identity,
+    media_server_tmdb_filters,
+    recognize_media,
+    tmdb_id_of,
+)
 from ...search.types import normalize_resource_type, resource_type_from_url
 
 
@@ -47,6 +57,7 @@ class HistoryService(OwnerDelegator):
     ) -> Dict[str, Any]:
         """集中生成插件转存历史，确保平台整理历史所需字段完整。"""
         media_data = self._serialize_mediainfo(mediainfo)
+        media_source, media_id = media_identity(mediainfo)
         effective_media = self._effective_mediainfo(subscribe, mediainfo)
         cloud_drive_name = str(
             getattr(self._cloud_drive, "name", "网盘") or "网盘"
@@ -60,8 +71,8 @@ class HistoryService(OwnerDelegator):
             "douban_id": mediainfo.douban_id,
             "bangumi_id": getattr(mediainfo, "bangumi_id", None),
             "anilist_id": getattr(mediainfo, "anilist_id", None),
-            "media_source": getattr(mediainfo, "source", None),
-            "media_id": media_data.get("media_id"),
+            "media_source": media_source,
+            "media_id": media_id or media_data.get("media_id"),
             "category": getattr(mediainfo, "category", None),
             "episode_group": getattr(mediainfo, "episode_group", None),
             "image": mediainfo.get_poster_image(),
@@ -127,10 +138,6 @@ class HistoryService(OwnerDelegator):
             "type": mediainfo.type.value,
             "title": effective_media.title,
             "year": effective_media.year,
-            "tmdbid": mediainfo.tmdb_id,
-            "imdbid": mediainfo.imdb_id,
-            "tvdbid": mediainfo.tvdb_id,
-            "doubanid": mediainfo.douban_id,
             "image": mediainfo.get_poster_image(),
             "downloader": provider_name,
             "download_hash": download_hash,
@@ -143,6 +150,9 @@ class HistoryService(OwnerDelegator):
                 "share_url": share_url,
             },
         }
+        payload.update(download_history_identity_payload(
+            mediainfo, DownloadHistory
+        ))
         if torrent_description:
             payload["torrent_description"] = torrent_description
         if seasons:
@@ -535,11 +545,12 @@ class HistoryService(OwnerDelegator):
         if not tmdb_id and not title:
             return None
         try:
-            histories = DownloadHistoryOper().get_last_by(
+            histories = get_download_history_last_by(
+                DownloadHistoryOper(),
                 mtype=media_type,
                 title=title or None,
                 year=year,
-                tmdbid=tmdb_id,
+                tmdb_id=tmdb_id,
             )
         except Exception as error:
             logger.debug(f"从下载历史恢复整理海报失败：{title}，{error}")
@@ -1708,7 +1719,9 @@ class HistoryService(OwnerDelegator):
                 func.lower(MediaServerItem.server) == storage_server
             )
             if target_tmdb_id:
-                query = query.filter(MediaServerItem.tmdbid == target_tmdb_id)
+                query = query.filter(*media_server_tmdb_filters(
+                    MediaServerItem, [target_tmdb_id]
+                ))
             else:
                 query = query.filter(or_(
                     MediaServerItem.title.ilike(f"%{query_text}%"),
@@ -1721,7 +1734,8 @@ class HistoryService(OwnerDelegator):
             items = []
             for row in rows:
                 media_type = self._media_server_item_type(row.item_type)
-                if not media_type or not row.tmdbid or not row.path:
+                row_tmdb_id = tmdb_id_of(row)
+                if not media_type or not row_tmdb_id or not row.path:
                     continue
                 if target_media_type in {"movie", "tv"} and (
                         (target_media_type == "movie") != (media_type == MediaType.MOVIE)
@@ -1736,7 +1750,7 @@ class HistoryService(OwnerDelegator):
                     "item_id": str(row.item_id),
                     "title": str(row.title or "未知媒体"),
                     "year": row.year,
-                    "tmdb_id": int(row.tmdbid),
+                    "tmdb_id": row_tmdb_id,
                     "media_type": "movie" if media_type == MediaType.MOVIE else "tv",
                     "path": relative,
                 }
@@ -1843,7 +1857,8 @@ class HistoryService(OwnerDelegator):
 
             for selection, server, item_id, kind, storage_server in normalized_selections:
                 row = rows_by_key.get((storage_server, item_id))
-                if not row or not row.tmdbid:
+                row_tmdb_id = tmdb_id_of(row)
+                if not row or not row_tmdb_id:
                     raise LookupError("所选媒体库内容已不存在或缺少 TMDB ID")
                 media_type = self._media_server_item_type(row.item_type)
                 if not media_type:
@@ -1854,7 +1869,7 @@ class HistoryService(OwnerDelegator):
                         raise ValueError("电影媒体库条目类型错误")
                     if not media_path.is_file():
                         raise LookupError("所选电影的媒体服务器路径不是可访问文件")
-                    key = (media_type.value, int(row.tmdbid), 0)
+                    key = (media_type.value, row_tmdb_id, 0)
                     grouped.setdefault(key, {
                         "row": row,
                         "season": 0,
@@ -1889,7 +1904,7 @@ class HistoryService(OwnerDelegator):
                     raise ValueError("电视剧媒体库条目类型错误")
                 if not selected_episodes:
                     raise LookupError("所选媒体库季没有可洗版剧集")
-                key = (media_type.value, int(row.tmdbid), season)
+                key = (media_type.value, row_tmdb_id, season)
                 group = grouped.setdefault(key, {
                     "row": row,
                     "season": season,
@@ -1910,7 +1925,7 @@ class HistoryService(OwnerDelegator):
                     "title": row.title,
                     "year": row.year,
                     "media_type": media_type.value,
-                    "tmdb_id": row.tmdbid,
+                    "tmdb_id": tmdb_id_of(row),
                     "season": group["season"] or None,
                 },
                 target_id=-index,
@@ -2125,7 +2140,8 @@ class HistoryService(OwnerDelegator):
                    and str(record.get("status") or "") == "成功"
                 for episode in self._history_episodes(record)
             }
-            for subscribe in SubscribeOper().list_by_tmdbid(int(tmdb_id), season) or []:
+            for subscribe in list_subscribes_by_tmdb_id(
+                    SubscribeOper(), int(tmdb_id), season):
                 if str(getattr(subscribe, "type", "")) != MediaType.TV.value:
                     continue
                 current_note = {
@@ -2968,10 +2984,11 @@ class HistoryService(OwnerDelegator):
             meta.begin_season = season
         if episode is not None:
             meta.begin_episode = episode
-        mediainfo = self._chain.recognize_media(
+        mediainfo = recognize_media(
+            self._chain,
             meta=meta,
             mtype=media_type,
-            tmdbid=record.get("tmdb_id"),
+            tmdb_id=record.get("tmdb_id"),
             cache=True,
         )
         if not mediainfo:
@@ -2981,12 +2998,14 @@ class HistoryService(OwnerDelegator):
         tmdb_id = mediainfo.tmdb_id or record.get("tmdb_id")
         if tmdb_id:
             try:
-                candidates = SubscribeOper().list_by_tmdbid(tmdb_id, season) or []
+                candidates = list_subscribes_by_tmdb_id(
+                    SubscribeOper(), tmdb_id, season
+                )
                 if not candidates and media_type == MediaType.MOVIE:
                     candidates = [
                         item
                         for item in (SubscribeOper().list() or [])
-                        if int(getattr(item, "tmdbid", 0) or 0) == int(tmdb_id)
+                        if tmdb_id_of(item) == int(tmdb_id)
                     ]
                 subscribe = next(
                     (

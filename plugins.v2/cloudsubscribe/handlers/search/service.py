@@ -25,6 +25,7 @@ from ...core import (
     get_component,
     resolve_component,
 )
+from ...core.media import tmdb_id_of
 from ...search.dian115 import Dian115SearchService
 from ...search.hdhive import HDHiveSearchService
 from ...search.juying import JuyingResourceService
@@ -331,8 +332,7 @@ class SearchHandler:
     ) -> str:
         media_id = (
                 getattr(mediainfo, "tmdb_id", None)
-                or getattr(subscribe, "tmdbid", None)
-                or getattr(subscribe, "tmdb_id", None)
+                or tmdb_id_of(subscribe)
         )
         context = {
             "source": source,

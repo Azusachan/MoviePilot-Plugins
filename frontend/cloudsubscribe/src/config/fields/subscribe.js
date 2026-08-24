@@ -124,6 +124,13 @@ export function createSubscribeSection(options = {}) {
           },
           {key: "auto_subscribe_notify", label: "发送运行结果通知", type: "switch", cols: 4},
           {
+            key: "auto_subscribe_cron",
+            label: "榜单订阅执行周期",
+            type: "cron",
+            hint: "所有已启用榜单按此周期并发抓取。",
+            cols: 12,
+          },
+          {
             key: "auto_subscribe_skip_season_zero",
             label: "跳过第 0 季",
             type: "switch",
@@ -196,7 +203,6 @@ export function createSubscribeSection(options = {}) {
         icon: "mdi-star-outline",
         tab: "douban",
         fields: [
-          {key: "auto_subscribe_douban_cron", label: "执行周期", type: "cron", cols: 12},
           {
             key: "auto_subscribe_douban_ranks",
             label: "热门榜单",
@@ -277,7 +283,6 @@ export function createSubscribeSection(options = {}) {
         tab: "maoyan",
         hint: "网络电影数据源已停更，不再提供。",
         fields: [
-          {key: "auto_subscribe_maoyan_cron", label: "执行周期", type: "cron", cols: 12},
           {key: "auto_subscribe_maoyan_movie_box", label: "电影票房榜", type: "switch", cols: 4},
           {
             key: "auto_subscribe_maoyan_media_type",
@@ -359,7 +364,6 @@ export function createSubscribeSection(options = {}) {
         icon: "mdi-netflix",
         tab: "netflix",
         fields: [
-          {key: "auto_subscribe_netflix_cron", label: "执行周期", type: "cron", cols: 12},
           {key: "auto_subscribe_netflix_global", label: "全球榜", type: "switch", cols: 4},
           {
             key: "auto_subscribe_netflix_global_dataset",
@@ -485,7 +489,6 @@ export function createSubscribeSection(options = {}) {
         icon: "mdi-animation-outline",
         tab: "mikan",
         fields: [
-          {key: "auto_subscribe_mikan_cron", label: "执行周期", type: "cron", cols: 12},
           {key: "auto_subscribe_mikan_year", label: "番组年份", type: "number", min: 0, cols: 6},
           {
             key: "auto_subscribe_mikan_season",

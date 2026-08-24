@@ -144,51 +144,18 @@ class ConfigApi(OwnerDelegator):
     def _validate_auto_subscribe_config(
             self, payload: Dict[str, Any]
     ) -> Optional[str]:
-        provider_crons = {
-            "douban": "0 8 * * *",
-            "maoyan": "0 9 * * *",
-            "netflix": "0 11 * * 3",
-            "mikan": "0 10 * * 1",
-        }
-        providers = set(provider_crons)
-        legacy_selected = {
-            str(value or "").strip().lower()
-            for value in (payload.get("auto_subscribe_providers") or [])
-        }
-        if legacy_selected - providers:
-            return "自动订阅包含未知榜单渠道"
-        has_provider_switch = any(
-            f"auto_subscribe_{provider_id}_enabled" in payload
-            for provider_id in providers
-        )
+        providers = ("douban", "maoyan", "netflix", "mikan")
         existing_config = getattr(self, "_applied_config", None) or {}
-        selected = set()
-        for provider_id, default_cron in provider_crons.items():
+        for provider_id in providers:
             enabled_key = f"auto_subscribe_{provider_id}_enabled"
-            enabled = bool(
+            payload[enabled_key] = bool(
                 payload.get(
                     enabled_key,
-                    existing_config.get(enabled_key, provider_id in legacy_selected),
+                    existing_config.get(enabled_key, False),
                 )
-                if has_provider_switch
-                else provider_id in legacy_selected
             )
-            payload[enabled_key] = enabled
-            if enabled:
-                selected.add(provider_id)
-            cron_key = f"auto_subscribe_{provider_id}_cron"
-            cron_value = str(payload.get(cron_key) or default_cron).strip()
-            if payload.get("auto_subscribe_enabled") and enabled and not self._cron_is_valid(cron_value):
-                return f"{provider_id} 自动订阅 Cron 表达式无效"
-            payload[cron_key] = cron_value
-        payload["auto_subscribe_providers"] = sorted(selected)
         cron = str(payload.get("auto_subscribe_cron") or "0 8 * * *").strip()
-        if (
-                payload.get("auto_subscribe_enabled")
-                and not selected
-                and legacy_selected
-                and not self._cron_is_valid(cron)
-        ):
+        if payload.get("auto_subscribe_enabled") and not self._cron_is_valid(cron):
             return "自动订阅 Cron 表达式无效"
         payload["auto_subscribe_cron"] = cron
         payload["auto_subscribe_onlyonce"] = bool(

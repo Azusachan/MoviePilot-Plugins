@@ -21,6 +21,12 @@ from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
 from ...core import CloudDriveCapability, OwnerDelegator
+from ...core.media import (
+    get_subscribe_by_media,
+    legacy_media_ids,
+    media_identity,
+    tmdb_id_of,
+)
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
     resource_type_from_url,
@@ -259,15 +265,11 @@ class PlatformIntegrationService(OwnerDelegator):
             media_type: MediaType,
             season: Optional[int],
     ) -> Any:
-        return SubscribeOper().get_by(
-            type=media_type.value,
+        return get_subscribe_by_media(
+            SubscribeOper(),
+            media_type=media_type.value,
             season=season if media_type == MediaType.TV else None,
-            tmdbid=getattr(mediainfo, "tmdb_id", None),
-            doubanid=getattr(mediainfo, "douban_id", None),
-            bangumiid=getattr(mediainfo, "bangumi_id", None),
-            anilistid=getattr(mediainfo, "anilist_id", None),
-            media_source=getattr(mediainfo, "source", None),
-            media_id=getattr(mediainfo, "media_id", None),
+            media=mediainfo,
         )
 
     def _recognize_subscribe_media(self, subscribe: Any):
@@ -280,20 +282,23 @@ class PlatformIntegrationService(OwnerDelegator):
         meta = MetaInfo(str(getattr(subscribe, "name", "") or ""))
         meta.year = getattr(subscribe, "year", None)
         meta.type = media_type
+        source, media_id = media_identity(subscribe)
+        legacy_ids = legacy_media_ids(subscribe)
         mediainfo = self._sync_handler._recognize_media_once(
             (
                 "agent",
                 media_type.value,
-                getattr(subscribe, "tmdbid", None),
-                getattr(subscribe, "doubanid", None),
+                source,
+                media_id,
                 getattr(subscribe, "name", None),
                 getattr(subscribe, "year", None),
                 season or 0,
             ),
             meta=meta,
             mtype=media_type,
-            tmdbid=getattr(subscribe, "tmdbid", None),
-            doubanid=getattr(subscribe, "doubanid", None),
+            media_source=source,
+            media_id=media_id,
+            **legacy_ids,
             cache=True,
         )
         return mediainfo, media_type, season
@@ -1084,7 +1089,7 @@ class PlatformIntegrationService(OwnerDelegator):
                 continue
             if tmdb_id:
                 try:
-                    if int(getattr(subscribe, "tmdbid", 0) or 0) != int(tmdb_id):
+                    if tmdb_id_of(subscribe) != int(tmdb_id):
                         continue
                 except (TypeError, ValueError):
                     continue
@@ -1104,7 +1109,7 @@ class PlatformIntegrationService(OwnerDelegator):
             else "tv"
         )
         media = {
-            "tmdb_id": int(getattr(subscribe, "tmdbid", 0) or 0),
+            "tmdb_id": tmdb_id_of(subscribe) or 0,
             "media_type": media_type,
             "title": str(getattr(subscribe, "name", "") or "").strip(),
             "year": getattr(subscribe, "year", None),

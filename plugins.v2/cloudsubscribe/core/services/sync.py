@@ -13,6 +13,7 @@ from app.schemas.types import MediaType
 
 from .runtime import sync_lock
 from ...core import CloudDriveCapability, OwnerDelegator
+from ...core.media import media_identity, tmdb_id_of
 from ...utils.cache import create_platform_ttl_cache
 
 _SUBSCRIBE_MEDIA_KEY_CACHE = create_platform_ttl_cache(
@@ -91,12 +92,12 @@ class SyncExecutionService(OwnerDelegator):
         if not subscribe:
             return ("ID", int(subscribe_id))
         media_type = str(getattr(subscribe, "type", "") or "")
-        media_id = str(
-            getattr(subscribe, "tmdbid", None)
-            or getattr(subscribe, "tmdb_id", None)
-            or getattr(subscribe, "doubanid", None)
-            or getattr(subscribe, "name", "")
-        ).strip()
+        source, source_id = media_identity(subscribe)
+        media_id = (
+            f"{source}:{source_id}"
+            if source and source_id
+            else str(getattr(subscribe, "name", "") or "").strip()
+        )
         season = (
             int(getattr(subscribe, "season", 1) or 1)
             if media_type == MediaType.TV.value else 0
@@ -158,9 +159,7 @@ class SyncExecutionService(OwnerDelegator):
         unresolved_count = 0
         for subscribe in subscribes:
             try:
-                has_tmdb_id = int(
-                    getattr(subscribe, "tmdbid", 0) or 0
-                ) > 0
+                has_tmdb_id = bool(tmdb_id_of(subscribe))
             except (TypeError, ValueError):
                 has_tmdb_id = False
             repaired = has_tmdb_id or bool(
@@ -201,7 +200,7 @@ class SyncExecutionService(OwnerDelegator):
                 )
             }
             preparation = {
-                "tmdb_id": int(getattr(subscribe, "tmdbid", 0) or 0),
+                "tmdb_id": int(tmdb_id_of(subscribe) or 0),
                 "calendar": calendar_entry,
                 "expected_episodes": sorted(expected_episodes),
                 "aired_target_episodes": sorted(
@@ -804,7 +803,7 @@ class SyncExecutionService(OwnerDelegator):
                                 getattr(group[0], "type", ""),
                                 getattr(group[0], "name", ""),
                                 getattr(group[0], "season", None),
-                                getattr(group[0], "tmdbid", None),
+                                tmdb_id_of(group[0]),
                             ),
                             [],
                         ),

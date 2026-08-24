@@ -4,8 +4,9 @@ from __future__ import annotations
 import copy
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
@@ -15,14 +16,6 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType, NotificationType
 
-from ...utils.http_client import (
-    build_proxy_url,
-    normalize_proxies,
-    request_error_summary,
-    requests,
-    validate_proxy_address,
-)
-from ..config import DEFAULT_AUTO_SUBSCRIBE_USERNAME
 from .models import (
     MediaCandidate,
     MediaIdentity,
@@ -32,6 +25,19 @@ from .models import (
 )
 from .provider import SubscribeContext
 from .registry import SubscribeProviderRegistry, registry
+from ..config import DEFAULT_AUTO_SUBSCRIBE_USERNAME
+from ..media import (
+    call_with_supported_kwargs,
+    media_identity as platform_media_identity,
+    recognize_media,
+)
+from ...utils.http_client import (
+    build_proxy_url,
+    normalize_proxies,
+    request_error_summary,
+    requests,
+    validate_proxy_address,
+)
 
 
 @dataclass
@@ -73,28 +79,15 @@ class AutoSubscribeService:
         self.subscribe_chain = subscribe_chain or SubscribeChain()
         self.subscribe_oper = subscribe_oper or SubscribeOper()
 
-    def run(self, provider_ids: Optional[Iterable[str]] = None) -> dict[str, Any]:
+    def run(self) -> dict[str, Any]:
         """先收齐并识别所有渠道，跨渠道归并完成后再创建订阅。"""
         config = dict(getattr(self.owner, "_applied_config", None) or {})
-        provider_names = {provider.provider_id for provider in self.registry.create_all()}
-        explicit_provider_switches = any(
-            f"auto_subscribe_{provider_id}_enabled" in config
-            for provider_id in provider_names
-        )
-        configured = (
-            [
-                provider_id
-                for provider_id in provider_names
-                if bool(config.get(f"auto_subscribe_{provider_id}_enabled", False))
-            ]
-            if explicit_provider_switches
-            else list(config.get("auto_subscribe_providers") or [])
-        )
-        requested = provider_ids if provider_ids is not None else configured
+        providers = self.registry.create_all()
+        provider_names = {provider.provider_id for provider in providers}
         selected = {
-            str(value or "").strip().lower()
-            for value in requested
-            if str(value or "").strip()
+            provider_id
+            for provider_id in provider_names
+            if bool(config.get(f"auto_subscribe_{provider_id}_enabled", False))
         }
         context = SubscribeContext(
             owner=self.owner,
@@ -104,8 +97,8 @@ class AutoSubscribeService:
             proxy=self._proxy_from_config(config),
         )
         candidates: list[MediaCandidate] = []
-        errors: list[str] = []
-        for provider in self.registry.create_all():
+        provider_jobs = []
+        for provider in providers:
             if provider.provider_id not in selected:
                 continue
             options = self._provider_options(config, provider.provider_id)
@@ -115,19 +108,41 @@ class AutoSubscribeService:
                 f"榜单渠道开始抓取：provider={provider.provider_id}, "
                 f"options={self._debug_provider_options(options)}"
             )
-            try:
-                for candidate in provider.fetch(options, context):
-                    if context.stopped():
-                        break
-                    if not isinstance(candidate, MediaCandidate):
-                        continue
-                    candidate.source = provider.provider_id
-                    if self._pre_filter(candidate, options, config):
-                        candidates.append(candidate)
-            except Exception as error:
-                message = f"{provider.provider_name}抓取失败：{error}"
-                logger.error(message)
-                errors.append(message)
+            provider_jobs.append((provider, options))
+
+        candidate_batches: list[list[MediaCandidate]] = [
+            [] for _ in provider_jobs
+        ]
+        provider_errors: list[Optional[str]] = [None for _ in provider_jobs]
+        if provider_jobs:
+            logger.info(f"已启用 {len(provider_jobs)} 个榜单渠道，开始并发抓取")
+            with ThreadPoolExecutor(
+                    max_workers=len(provider_jobs),
+                    thread_name_prefix="cloudsubscribe-auto-subscribe",
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        self._fetch_provider_candidates,
+                        provider,
+                        options,
+                        context,
+                    ): (index, provider)
+                    for index, (provider, options) in enumerate(provider_jobs)
+                }
+                for future in as_completed(futures):
+                    index, provider = futures[future]
+                    try:
+                        candidate_batches[index] = future.result()
+                    except Exception as error:
+                        message = f"{provider.provider_name}抓取失败：{error}"
+                        logger.error(message)
+                        provider_errors[index] = message
+
+        errors = [message for message in provider_errors if message]
+        for (provider, options), batch in zip(provider_jobs, candidate_batches):
+            for candidate in batch:
+                if self._pre_filter(candidate, options, config):
+                    candidates.append(candidate)
 
         resolved: list[_ResolvedMedia] = []
         outcomes: list[SubscribeOutcome] = []
@@ -163,16 +178,37 @@ class AutoSubscribeService:
         stats: dict[str, int] = {}
         for outcome in outcomes:
             stats[outcome.status.value] = stats.get(outcome.status.value, 0) + 1
+        subscribed = [
+            self._subscribed_item(outcome)
+            for outcome in outcomes
+            if outcome.status == SubscribeStatus.SUBSCRIBED
+        ]
+        failed_subscriptions = stats.get(SubscribeStatus.ERROR.value, 0)
+        summary = (
+            f"自动订阅完成：抓取 {len(candidates)} 条，归并 {len(groups)} 个媒体，"
+            f"新增订阅 {len(subscribed)} 个"
+        )
+        if errors:
+            summary += f"，失败渠道 {len(errors)} 个"
+        if failed_subscriptions:
+            summary += f"，创建失败 {failed_subscriptions} 个"
+        message_parts = [summary]
+        if subscribed:
+            message_parts.append(
+                "已订阅：\n" + "\n".join(
+                    f"- {item['display_name']}" for item in subscribed
+                )
+            )
+        if errors:
+            message_parts.append("抓取失败：\n" + "\n".join(f"- {error}" for error in errors))
         result = {
-            "success": not errors,
-            "message": (
-                f"自动订阅完成：抓取 {len(candidates)} 条，归并 {len(groups)} 个媒体"
-                if not errors else "；".join(errors)
-            ),
+            "success": not errors and not failed_subscriptions,
+            "message": "\n".join(message_parts),
             "data": {
                 "candidates": len(candidates),
                 "media": len(groups),
                 "stats": stats,
+                "subscribed": subscribed,
                 "errors": errors,
             },
         }
@@ -188,10 +224,47 @@ class AutoSubscribeService:
                 logger.warning(f"榜单自动订阅通知发送失败：{error}")
         return result
 
-    def run_auto_subscribe(
-            self, provider_ids: Optional[Iterable[str]] = None
-    ) -> dict[str, Any]:
-        return self.run(provider_ids)
+    @staticmethod
+    def _fetch_provider_candidates(
+            provider: Any,
+            options: dict[str, Any],
+            context: SubscribeContext,
+    ) -> list[MediaCandidate]:
+        candidates = []
+        for candidate in provider.fetch(options, context):
+            if context.stopped():
+                break
+            if not isinstance(candidate, MediaCandidate):
+                continue
+            candidate.source = provider.provider_id
+            candidates.append(candidate)
+        return candidates
+
+    def _subscribed_item(self, outcome: SubscribeOutcome) -> dict[str, Any]:
+        candidate = outcome.candidate
+        identity = outcome.identity
+        title = self._localized_title(outcome.mediainfo) or candidate.title
+        year = str(
+            getattr(outcome.mediainfo, "year", None) or candidate.year or ""
+        ).strip()
+        season = identity.season if identity else candidate.season
+        display_name = title
+        if year:
+            display_name += f" ({year})"
+        if season is not None:
+            display_name += f" 第 {season} 季"
+        return {
+            "title": title,
+            "year": year or None,
+            "media_type": identity.media_type if identity else candidate.media_type,
+            "season": season,
+            "subscribe_id": outcome.subscribe_id,
+            "source": candidate.source,
+            "display_name": display_name,
+        }
+
+    def run_auto_subscribe(self) -> dict[str, Any]:
+        return self.run()
 
     def api_run_auto_subscribe(self) -> dict[str, Any]:
         return self.run()
@@ -369,17 +442,15 @@ class AutoSubscribeService:
         elif candidate.media_type == "tv":
             meta.type = MediaType.TV
             meta.begin_season = int(1 if candidate.season is None else candidate.season)
-        kwargs: dict[str, Any] = {"meta": meta, "cache": True}
-        if candidate.tmdb_id:
-            kwargs["tmdbid"] = candidate.tmdb_id
-            kwargs["mtype"] = meta.type
-        elif candidate.douban_id:
-            kwargs["doubanid"] = candidate.douban_id
-        elif candidate.bangumi_id:
-            kwargs["bangumiid"] = candidate.bangumi_id
-        else:
-            kwargs["mtype"] = getattr(meta, "type", None)
-        mediainfo = self.media_chain.recognize_media(**kwargs)
+        mediainfo = recognize_media(
+            self.media_chain,
+            meta=meta,
+            mtype=getattr(meta, "type", None),
+            tmdb_id=candidate.tmdb_id,
+            douban_id=candidate.douban_id,
+            bangumi_id=candidate.bangumi_id,
+            cache=True,
+        )
         if not mediainfo:
             return None
         if candidate.source == "netflix":
@@ -387,9 +458,10 @@ class AutoSubscribeService:
             if not tmdb_id:
                 logger.warning(f"Netflix 榜单未匹配到 TMDB，跳过：{candidate.title}")
                 return None
-            localized = self.media_chain.recognize_media(
+            localized = recognize_media(
+                self.media_chain,
                 meta=meta,
-                tmdbid=tmdb_id,
+                tmdb_id=tmdb_id,
                 mtype=getattr(mediainfo, "type", getattr(meta, "type", None)),
                 cache=True,
             )
@@ -595,28 +667,20 @@ class AutoSubscribeService:
     @staticmethod
     def _identity_kwargs(group: list[_ResolvedMedia], season: Optional[int]) -> dict[str, Any]:
         media = group[0].mediainfo
+        source, media_id = platform_media_identity(media)
         return {
             "tmdbid": getattr(media, "tmdb_id", None),
             "doubanid": getattr(media, "douban_id", None),
             "bangumiid": getattr(media, "bangumi_id", None),
-            "media_source": getattr(media, "media_source", None)
-                            or getattr(media, "source", None),
-            "media_id": getattr(media, "media_id", None),
+            "media_source": source,
+            "media_id": media_id,
             "season": season,
         }
 
     @staticmethod
     def _exists(func: Any, kwargs: dict[str, Any]) -> bool:
         """兼容新旧 MoviePilot 的身份参数集合。"""
-        try:
-            return bool(func(**kwargs))
-        except TypeError:
-            legacy = {
-                key: value
-                for key, value in kwargs.items()
-                if key in {"tmdbid", "doubanid", "bangumiid", "season"}
-            }
-            return bool(func(**legacy))
+        return bool(call_with_supported_kwargs(func, kwargs))
 
     def _media_progress(self, item: _ResolvedMedia, season: Optional[int]) -> _LibraryProgress:
         """只检查目标季，并保留媒体库已有的精确集数。"""

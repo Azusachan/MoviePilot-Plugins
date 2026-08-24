@@ -27,7 +27,6 @@ from .core import (
     get_component,
     resolve_component,
 )
-from .core.subscribe import AutoSubscribeService
 from .core.api import (
     AccountApi,
     ConfigApi,
@@ -51,6 +50,7 @@ from .core.services import (
     SyncRuntimeService,
 )
 from .core.storage import CloudSubscribeDataStore
+from .core.subscribe import AutoSubscribeService
 from .drive.alipan import AliPanClient, AliPanDrive, create_alipan_provider
 from .drive.guangya import GuangyaClient, GuangyaDrive, create_guangya_provider
 from .drive.p115 import P115ClientManager, create_p115_provider
@@ -62,19 +62,19 @@ from .search.butailing import ButailingClient
 from .search.hdhive import (
     HDHiveOpenAPIClient, HDHiveOpenAPIError,
 )
-from .utils.http_client import build_proxy_url, validate_proxy_address
 from .search.juying import JuyingClient
 from .search.online_docs import OnlineDocumentClient
 from .search.pansou import PanSouClient
 from .search.pinglian import PinglianClient
 from .search.seedhub import SeedHubClient
-from .utils import configure_magnet_metadata_url
 from .subscribe import (  # noqa: F401 - 导入即注册自动订阅渠道
     create_douban_provider,
     create_maoyan_provider,
     create_mikan_provider,
     create_netflix_provider,
 )
+from .utils import configure_magnet_metadata_url
+from .utils.http_client import build_proxy_url, validate_proxy_address
 
 _COMPONENT_TYPES = (
     PageApi,
@@ -111,7 +111,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.2.7"
+    plugin_version = "1.2.8"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -136,7 +136,6 @@ class CloudSubscribe(_PluginBase):
     _auto_subscribe_enabled: bool = False
     _auto_subscribe_onlyonce: bool = False
     _auto_subscribe_cron: str = "0 8 * * *"
-    _auto_subscribe_provider_schedules: Dict[str, str] = {}
     _notify: bool = False
     _notification_type: NotificationType = NotificationType.Plugin
     _webhook_enabled: bool = False
@@ -668,34 +667,6 @@ class CloudSubscribe(_PluginBase):
             self._auto_subscribe_cron = str(
                 config.get("auto_subscribe_cron", "0 8 * * *") or "0 8 * * *"
             ).strip()
-            provider_crons = {
-                "douban": "0 8 * * *",
-                "maoyan": "0 9 * * *",
-                "netflix": "0 11 * * 3",
-                "mikan": "0 10 * * 1",
-            }
-            legacy_providers = {
-                str(value or "").strip().lower()
-                for value in (config.get("auto_subscribe_providers") or [])
-            }
-            has_provider_switch = any(
-                f"auto_subscribe_{provider_id}_enabled" in config
-                for provider_id in provider_crons
-            )
-            self._auto_subscribe_provider_schedules = {
-                provider_id: str(
-                    config.get(f"auto_subscribe_{provider_id}_cron")
-                    or default_cron
-                ).strip()
-                for provider_id, default_cron in provider_crons.items()
-                if bool(
-                    config.get(
-                        f"auto_subscribe_{provider_id}_enabled",
-                        provider_id in legacy_providers,
-                    )
-                    if has_provider_switch else provider_id in legacy_providers
-                )
-            }
             self._p115_cookies = config.get("cookies", "")
             self._p123_token = str(config.get("p123_token", "") or "").strip()
             self._p123_request_timeout = max(
@@ -1176,11 +1147,9 @@ class CloudSubscribe(_PluginBase):
         )
         service_config_keys = {
             "enabled", "cron", "auto_subscribe_enabled", "auto_subscribe_cron",
-            "auto_subscribe_providers", "auto_subscribe_douban_enabled",
-            "auto_subscribe_douban_cron", "auto_subscribe_maoyan_enabled",
-            "auto_subscribe_maoyan_cron", "auto_subscribe_netflix_enabled",
-            "auto_subscribe_netflix_cron", "auto_subscribe_mikan_enabled",
-            "auto_subscribe_mikan_cron", "checkin_cron", "checkin_auto_retry",
+            "auto_subscribe_douban_enabled", "auto_subscribe_maoyan_enabled",
+            "auto_subscribe_netflix_enabled", "auto_subscribe_mikan_enabled",
+            "checkin_cron", "checkin_auto_retry",
             "checkin_retry_count", "takeover_new_subscribes",
             "block_start_time", "block_end_time", "block_system_subscribe",
             "platform_download_policy", "block_platform_downloads",
@@ -1203,23 +1172,22 @@ class CloudSubscribe(_PluginBase):
             f"洗版范围={'指定订阅' if self._upgrade_subscribe_ids else '全部'}, "
             f"当前接管态={self._is_takeover_active()}")
 
-        # 保存配置后延迟运行所有已启用榜单一次。
+        # 调度一次性任务。
         if self._auto_subscribe_onlyonce:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-            run_date = (
+            logger.info("榜单自动订阅服务启动，立即运行一次")
+            self._scheduler.add_job(
+                func=self._run_auto_subscribe_once,
+                trigger="date",
+                run_date=(
                     datetime.datetime.now(tz=pytz.timezone(settings.TZ))
                     + datetime.timedelta(seconds=3)
+                ),
             )
-            self._scheduler.add_job(
-                id="CloudSubscribe_AutoSubscribe_RunOnce",
-                func=self.run_auto_subscribe,
-                trigger="date",
-                run_date=run_date,
-                replace_existing=True,
-            )
-            self._scheduler.start()
             self._auto_subscribe_onlyonce = False
             self._persist_config_values(auto_subscribe_onlyonce=False)
+            if self._scheduler.get_jobs():
+                self._scheduler.start()
 
     def _apply_notification_config(self, config: Dict[str, Any]) -> None:
         self._notify = bool(config.get("notify", False))
@@ -1832,6 +1800,12 @@ class CloudSubscribe(_PluginBase):
         if not self.update_config(config):
             logger.warning(f"插件运行时配置持久化失败：{', '.join(updates)}")
         self._applied_config = config
+
+    def _run_auto_subscribe_once(self) -> None:
+        try:
+            self.run_auto_subscribe()
+        except Exception as error:
+            logger.error(f"榜单自动订阅立即执行失败：{error}")
 
     def stop_service(self, preserve_subscribe_queue: bool = False):
         """停止服务"""

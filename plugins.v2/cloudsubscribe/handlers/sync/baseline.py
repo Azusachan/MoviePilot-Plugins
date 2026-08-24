@@ -10,6 +10,11 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator
+from ...core.media import (
+    get_transfer_history_by,
+    media_identity,
+    tmdb_id_of,
+)
 from ...utils.cache import normalize_platform_cache_key
 
 
@@ -26,7 +31,7 @@ class UpgradeBaselineService(OwnerDelegator):
     @staticmethod
     def _baseline_key(subscribe, season: int) -> tuple:
         return (
-            int(getattr(subscribe, "tmdbid", 0) or 0),
+            int(tmdb_id_of(subscribe) or 0),
             str(getattr(subscribe, "name", "") or "").casefold(),
             str(getattr(subscribe, "year", "") or ""),
             int(season or 1),
@@ -82,14 +87,18 @@ class UpgradeBaselineService(OwnerDelegator):
             cached = self._baseline_transfer_cache.get(cache_key)
             if cached is not None:
                 return self._copy_episode_items(cached)
-        tmdbid = getattr(subscribe, "tmdbid", None)
+        media_source, media_id = media_identity(subscribe)
+        tmdbid = tmdb_id_of(subscribe)
         with SessionFactory() as db:
             oper = TransferHistoryOper(db=db)
-            records = oper.get_by(
+            records = get_transfer_history_by(
+                oper,
                 mtype=MediaType.TV.value,
-                tmdbid=tmdbid,
+                tmdb_id=tmdbid,
+                media_source=media_source,
+                media_id=media_id,
                 season=f"S{season:02d}",
-            ) if tmdbid else []
+            ) if media_id or tmdbid else []
             if not records:
                 records = oper.get_by(
                     mtype=MediaType.TV.value,
@@ -135,7 +144,7 @@ class UpgradeBaselineService(OwnerDelegator):
             cached = self._baseline_plugin_cache.get(cache_key)
             if cached is not None:
                 return self._copy_episode_items(cached)
-        tmdbid = self._int_or_zero(getattr(subscribe, "tmdbid", 0))
+        tmdbid = self._int_or_zero(tmdb_id_of(subscribe))
         title = str(getattr(subscribe, "name", "") or "")
         episode_files: Dict[int, List[Dict[str, Any]]] = {}
         for record in (self._get_data("history") or []) if self._get_data else []:

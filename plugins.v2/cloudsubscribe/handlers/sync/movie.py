@@ -9,6 +9,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator
+from ...core.media import tmdb_id_of
 from ...drive.common import format_size
 
 
@@ -48,7 +49,7 @@ class MovieSyncProcessor(OwnerDelegator):
             # 检查历史记录是否已成功转存
             movie_history_score = -1  # -1 表示未转存过
             movie_history_size = 0
-            subscribe_tmdb_id = str(getattr(subscribe, "tmdbid", None) or "").strip()
+            subscribe_tmdb_id = str(tmdb_id_of(subscribe) or "")
             subscribe_year = str(getattr(subscribe, "year", None) or "").strip()
             for h in history:
                 if h.get("type") != "电影" or h.get("status") != "成功":

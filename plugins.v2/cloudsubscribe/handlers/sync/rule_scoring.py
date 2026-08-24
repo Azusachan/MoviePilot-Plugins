@@ -11,6 +11,7 @@ from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
 from ...core import OwnerDelegator
+from ...core.media import apply_media_identity, tmdb_id_of
 from ...drive.common import format_size
 
 
@@ -86,7 +87,10 @@ class UpgradeRuleScoringService(OwnerDelegator):
                 type=MediaType.TV,
                 title=getattr(subscribe, "name", None),
                 year=getattr(subscribe, "year", None),
-                tmdb_id=getattr(subscribe, "tmdbid", None),
+                tmdb_id=tmdb_id_of(subscribe),
+            )
+            apply_media_identity(
+                rule_mediainfo, "themoviedb", tmdb_id_of(subscribe)
             )
             selected, priority = self._search_handler.select_file_candidate(
                 [{"name": filename, "size": filesize or 0}],

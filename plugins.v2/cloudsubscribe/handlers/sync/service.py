@@ -47,6 +47,15 @@ from ...core import (
     resolve_component,
     MediaScraper,
 )
+from ...core.media import (
+    apply_media_identity,
+    legacy_media_ids,
+    list_subscribes_by_tmdb_id,
+    media_identity,
+    recognize_media,
+    tmdb_id_of,
+    tmdb_identity_update,
+)
 from ...utils import FileMatcher, MediaFileParser, StrmGenerator, StrmTemplateError
 from ...utils.cache import create_platform_ttl_cache, normalize_platform_cache_key
 
@@ -509,7 +518,7 @@ class SyncHandler:
             MediaType.MOVIE.value: MediaType.MOVIE,
             MediaType.TV.value: MediaType.TV,
         }.get(str(getattr(subscribe, "type", "") or ""))
-        tmdb_id = str(getattr(subscribe, "tmdbid", "") or "").strip()
+        tmdb_id = str(tmdb_id_of(subscribe) or "")
         identity = (
             f"tmdb_{tmdb_id}"
             if tmdb_id
@@ -580,8 +589,7 @@ class SyncHandler:
         return (
             int(getattr(subscribe, "id", 0) or 0),
             media_type,
-            int(getattr(subscribe, "tmdbid", 0) or 0),
-            str(getattr(subscribe, "doubanid", "") or ""),
+            media_identity(subscribe),
             str(getattr(subscribe, "name", "") or ""),
             str(getattr(subscribe, "year", "") or ""),
             int(getattr(subscribe, "season", 1) or 1) if is_tv else 0,
@@ -663,7 +671,7 @@ class SyncHandler:
         """读取 TMDB 季网页并缓存当前订阅目标集的播出状态。"""
         if str(getattr(subscribe, "type", "") or "") != MediaType.TV.value:
             return None
-        tmdb_id = int(tmdb_id or getattr(subscribe, "tmdbid", 0) or 0)
+        tmdb_id = int(tmdb_id or tmdb_id_of(subscribe) or 0)
         season = int(getattr(subscribe, "season", 1) or 1)
         start_episode = int(getattr(subscribe, "start_episode", 1) or 1)
         total_episode = int(getattr(subscribe, "total_episode", 0) or 0)
@@ -910,7 +918,7 @@ class SyncHandler:
 
     def repair_subscribe_tmdb_id(self, subscribe: Any) -> bool:
         """在订阅收集阶段使用平台媒体链修复缺失的 TMDB ID。"""
-        if self._tmdb_id_from_media({"id": getattr(subscribe, "tmdbid", None)}):
+        if tmdb_id_of(subscribe):
             return True
 
         media_type = {
@@ -925,18 +933,23 @@ class SyncHandler:
         candidates: List[Any] = []
         # 同一豆瓣身份可能已有其他订阅完成 TMDB 回填，优先复用该稳定映射，
         # 避免被不同语言标题、季标题或年份差异误判为无匹配。
-        source_douban_id = str(getattr(subscribe, "doubanid", "") or "").strip()
+        source_douban_id = str(
+            legacy_media_ids(subscribe).get("doubanid") or ""
+        ).strip()
         if source_douban_id:
             for candidate in SubscribeOper().list() or []:
                 if int(getattr(candidate, "id", 0) or 0) == subscribe_id:
                     continue
-                if str(getattr(candidate, "doubanid", "") or "").strip() != source_douban_id:
+                candidate_douban_id = str(
+                    legacy_media_ids(candidate).get("doubanid") or ""
+                ).strip()
+                if candidate_douban_id != source_douban_id:
                     continue
                 candidate_type = str(getattr(candidate, "type", "") or "")
                 if candidate_type != getattr(subscribe, "type", ""):
                     continue
                 tmdb_id = self._tmdb_id_from_media({
-                    "id": getattr(candidate, "tmdbid", None)
+                    "id": tmdb_id_of(candidate)
                 })
                 if tmdb_id:
                     logger.debug(
@@ -949,12 +962,12 @@ class SyncHandler:
             (
                 "doubanid",
                 "get_tmdbinfo_by_doubanid",
-                getattr(subscribe, "doubanid", None),
+                legacy_media_ids(subscribe).get("doubanid"),
             ),
             (
                 "bangumiid",
                 "get_tmdbinfo_by_bangumiid",
-                getattr(subscribe, "bangumiid", None),
+                legacy_media_ids(subscribe).get("bangumiid"),
             ),
         )
         for source_name, method_name, source_id in source_lookups:
@@ -1029,7 +1042,7 @@ class SyncHandler:
                     meta=meta,
                     mtype=media_type,
                     tmdbid=None,
-                    doubanid=getattr(subscribe, "doubanid", None),
+                    doubanid=legacy_media_ids(subscribe).get("doubanid"),
                     cache=True,
                 )
                 tmdb_id = self._tmdb_id_from_media(recognized)
@@ -1048,11 +1061,7 @@ class SyncHandler:
             )
             return False
 
-        identity_update = {
-            "tmdbid": tmdb_id,
-            "media_source": "themoviedb",
-            "media_id": str(tmdb_id),
-        }
+        identity_update = tmdb_identity_update(subscribe, tmdb_id)
         try:
             updated = SubscribeOper().update(subscribe_id, identity_update)
         except Exception as error:
@@ -1092,7 +1101,7 @@ class SyncHandler:
         """优先复用订阅卡片信息，仅在关键字段缺失时回退媒体识别。"""
         title = str(getattr(subscribe, "name", "") or "").strip()
         try:
-            tmdb_id = int(getattr(subscribe, "tmdbid", 0) or 0)
+            tmdb_id = int(tmdb_id_of(subscribe) or 0)
         except (TypeError, ValueError):
             tmdb_id = 0
         media_category = str(
@@ -1106,6 +1115,7 @@ class SyncHandler:
                     year=getattr(subscribe, "year", None),
                     tmdb_id=tmdb_id,
                 )
+                apply_media_identity(mediainfo, "themoviedb", tmdb_id)
                 for source_field, media_field in (
                         ("doubanid", "douban_id"),
                         ("bangumiid", "bangumi_id"),
@@ -1118,7 +1128,13 @@ class SyncHandler:
                         ("release_date", "release_date"),
                         ("media_category", "category"),
                 ):
-                    value = getattr(subscribe, source_field, None)
+                    value = (
+                        legacy_media_ids(subscribe).get(source_field)
+                        if source_field in {
+                            "doubanid", "bangumiid", "anilistid"
+                        }
+                        else getattr(subscribe, source_field, None)
+                    )
                     if value in (None, "") or not hasattr(
                             mediainfo, media_field
                     ):
@@ -1146,17 +1162,19 @@ class SyncHandler:
         )
         if season:
             meta.begin_season = season
+        source, media_id = media_identity(subscribe)
+        legacy_ids = legacy_media_ids(subscribe)
         return self._recognize_media_once(
             (
                 "subscribe_fallback", media_type.value,
-                getattr(subscribe, "tmdbid", None),
-                getattr(subscribe, "doubanid", None), title,
+                source, media_id, title,
                 getattr(subscribe, "year", None), season, bool(cache),
             ),
             meta=meta,
             mtype=media_type,
-            tmdbid=getattr(subscribe, "tmdbid", None),
-            doubanid=getattr(subscribe, "doubanid", None),
+            media_source=source,
+            media_id=media_id,
+            **legacy_ids,
             cache=cache,
         )
 
@@ -1179,7 +1197,7 @@ class SyncHandler:
             # 的媒体识别链包含非线程安全的远端客户端游标，不并发调用。
             with self._platform_media_recognition_lock:
                 mediainfo = self._timed_sync_call(
-                    "media_recognition", self._chain.recognize_media, **kwargs
+                    "media_recognition", recognize_media, self._chain, **kwargs
                 )
         except BaseException as error:
             future.set_exception(error)
@@ -1929,8 +1947,8 @@ class SyncHandler:
                     "name": str(getattr(subscribe, "name", "") or ""),
                     "year": getattr(subscribe, "year", None),
                     "type": str(getattr(subscribe, "type", "") or ""),
-                    "tmdbid": getattr(subscribe, "tmdbid", None),
-                    "doubanid": getattr(subscribe, "doubanid", None),
+                    "tmdbid": tmdb_id_of(subscribe),
+                    "doubanid": legacy_media_ids(subscribe).get("doubanid"),
                     "season": getattr(subscribe, "season", None),
                     "start_episode": getattr(subscribe, "start_episode", None),
                     "total_episode": getattr(subscribe, "total_episode", None),
@@ -2045,8 +2063,8 @@ class SyncHandler:
             "name": str(getattr(subscribe, "name", "") or ""),
             "year": getattr(subscribe, "year", None),
             "type": str(getattr(subscribe, "type", "") or ""),
-            "tmdbid": getattr(subscribe, "tmdbid", None),
-            "doubanid": getattr(subscribe, "doubanid", None),
+            "tmdbid": tmdb_id_of(subscribe),
+            "doubanid": legacy_media_ids(subscribe).get("doubanid"),
             "season": getattr(subscribe, "season", None),
             "start_episode": getattr(subscribe, "start_episode", None),
             "total_episode": getattr(subscribe, "total_episode", None),
@@ -2524,9 +2542,9 @@ class SyncHandler:
                     max(1, int(item.get("season") or 1))
                     if mediainfo.type == MediaType.TV else None
                 )
-                candidates = SubscribeOper().list_by_tmdbid(
-                    mediainfo.tmdb_id, season
-                ) or []
+                candidates = list_subscribes_by_tmdb_id(
+                    SubscribeOper(), mediainfo.tmdb_id, season
+                )
                 subscribe = next(
                     (
                         candidate for candidate in candidates
@@ -2619,10 +2637,11 @@ class SyncHandler:
             mediainfo: MediaInfo,
     ) -> Optional[Path]:
         """缓存分类根目录，避免逐集重复执行相同目录规则。"""
+        media_source, media_id = media_identity(mediainfo)
         key = (
             str(root_path),
-            getattr(mediainfo, "source", None),
-            getattr(mediainfo, "media_id", None),
+            media_source,
+            media_id,
             getattr(mediainfo, "tmdb_id", None),
             getattr(mediainfo, "title", None),
             getattr(mediainfo, "year", None),
@@ -2730,11 +2749,12 @@ class SyncHandler:
             return None
 
         media_type = getattr(getattr(mediainfo, "type", None), "value", None)
+        media_source, media_id = media_identity(mediainfo)
         cache_key = (
             str(resource_root),
             media_type or str(getattr(mediainfo, "type", "") or ""),
-            getattr(mediainfo, "source", None),
-            getattr(mediainfo, "media_id", None),
+            media_source,
+            media_id,
             getattr(mediainfo, "tmdb_id", None),
             getattr(mediainfo, "title", None),
             getattr(mediainfo, "year", None),

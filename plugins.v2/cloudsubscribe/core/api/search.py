@@ -17,14 +17,8 @@ from app.utils.string import StringUtils
 from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
+from ..media import apply_media_identity, recognize_media
 from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES
-from ...utils.http_client import (
-    build_proxy_url,
-    normalize_proxies,
-    request_error_summary,
-    requests,
-    validate_proxy_address,
-)
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
     PREVIEW_RESOURCE_TYPES,
@@ -35,6 +29,13 @@ from ...search.types import (
     resource_type_name,
 )
 from ...utils import parse_magnet_metadata
+from ...utils.http_client import (
+    build_proxy_url,
+    normalize_proxies,
+    request_error_summary,
+    requests,
+    validate_proxy_address,
+)
 
 
 class SearchApi(OwnerDelegator):
@@ -971,10 +972,11 @@ class SearchApi(OwnerDelegator):
         if season is not None:
             meta.begin_season = season
         try:
-            mediainfo = self.chain.recognize_media(
+            mediainfo = recognize_media(
+                self.chain,
                 meta=meta,
                 mtype=media_type,
-                tmdbid=tmdb_id,
+                tmdb_id=tmdb_id,
                 cache=True,
             )
         except Exception as error:
@@ -994,6 +996,7 @@ class SearchApi(OwnerDelegator):
                 or (str(year) if year is not None else None)
         )
         mediainfo.tmdb_id = getattr(mediainfo, "tmdb_id", None) or tmdb_id
+        apply_media_identity(mediainfo, "themoviedb", tmdb_id)
         mediainfo.original_title = (
                 getattr(mediainfo, "original_title", None) or original_title
         )

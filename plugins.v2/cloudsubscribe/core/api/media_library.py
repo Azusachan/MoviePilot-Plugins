@@ -10,6 +10,7 @@ from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 
 from .. import OwnerDelegator
+from ..media import media_server_tmdb_filters, tmdb_id_of
 
 
 class MediaLibraryApi(OwnerDelegator):
@@ -201,11 +202,11 @@ class MediaLibraryApi(OwnerDelegator):
         with SessionFactory() as db:
             rows = db.query(MediaServerItem).filter(
                 MediaServerItem.server == "emby",
-                MediaServerItem.tmdbid.in_(tmdb_ids),
+                *media_server_tmdb_filters(MediaServerItem, tmdb_ids),
             ).all()
         result = {}
         for row in rows:
-            identity = (int(row.tmdbid or 0), str(row.item_type or ""))
+            identity = (tmdb_id_of(row) or 0, str(row.item_type or ""))
             if identity not in eligible or not row.item_id:
                 continue
             result[self._history_group_key(identity[1], identity[0])] = str(
