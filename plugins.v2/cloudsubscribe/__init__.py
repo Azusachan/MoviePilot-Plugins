@@ -111,7 +111,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.2.8"
+    plugin_version = "1.2.9"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -144,9 +144,14 @@ class CloudSubscribe(_PluginBase):
     _webhook_timeout: int = 10
 
     _p115_cookies: str = ""
+    _p115_checkin_enabled: bool = False
+    _p115_checkin_mode: str = "normal"
     _p123_token: str = ""
     _p123_request_timeout: int = 30
     _quark_cookie: str = ""
+    _quark_checkin_enabled: bool = False
+    _quark_checkin_url: str = ""
+    _quark_checkin_mode: str = "normal"
     _quark_request_timeout: int = 30
     _guangya_access_token: str = ""
     _guangya_refresh_token: str = ""
@@ -668,11 +673,22 @@ class CloudSubscribe(_PluginBase):
                 config.get("auto_subscribe_cron", "0 8 * * *") or "0 8 * * *"
             ).strip()
             self._p115_cookies = config.get("cookies", "")
+            self._p115_checkin_enabled = bool(
+                config.get("p115_checkin_enabled", False)
+            )
+            self._p115_checkin_mode = "normal"
             self._p123_token = str(config.get("p123_token", "") or "").strip()
             self._p123_request_timeout = max(
                 5, min(int(config.get("p123_request_timeout", 30) or 30), 300)
             )
             self._quark_cookie = str(config.get("quark_cookie", "") or "").strip()
+            self._quark_checkin_enabled = bool(
+                config.get("quark_checkin_enabled", False)
+            )
+            self._quark_checkin_url = str(
+                config.get("quark_checkin_url", "") or ""
+            ).strip()
+            self._quark_checkin_mode = "normal"
             self._quark_request_timeout = max(
                 5, min(int(config.get("quark_request_timeout", 30) or 30), 300)
             )
@@ -1149,8 +1165,11 @@ class CloudSubscribe(_PluginBase):
             "enabled", "cron", "auto_subscribe_enabled", "auto_subscribe_cron",
             "auto_subscribe_douban_enabled", "auto_subscribe_maoyan_enabled",
             "auto_subscribe_netflix_enabled", "auto_subscribe_mikan_enabled",
-            "checkin_cron", "checkin_auto_retry",
-            "checkin_retry_count", "takeover_new_subscribes",
+            "checkin_cron", "checkin_auto_retry", "checkin_retry_count",
+            "p115_checkin_enabled", "hdhive_checkin_enabled",
+            "dian115_checkin_enabled", "juying_checkin_enabled",
+            "quark_checkin_enabled", "quark_checkin_url",
+            "takeover_new_subscribes",
             "block_start_time", "block_end_time", "block_system_subscribe",
             "platform_download_policy", "block_platform_downloads",
             "takeover_platform_downloads",

@@ -13,6 +13,7 @@ from app.log import logger
 from .action import ServerActionResponse
 from .client import HDHiveClient, HDHiveWebError
 from .parser import (
+    ED2K_URL_RE,
     HDHIVE_DETAIL_RESOURCE_TYPES,
     HDHIVE_RESOURCE_TYPES,
     build_resource_detail_path,
@@ -118,6 +119,7 @@ class _UnlockLimiter:
     def _evict(cls, history: deque, now: float) -> None:
         while history and now - history[0] >= cls.WINDOW_SECONDS:
             history.popleft()
+
 
 class HDHiveResourceService:
     """负责 HDHive 资源查询、解析、缓存和解锁。"""
@@ -1151,7 +1153,7 @@ class HDHiveResourceService:
             list(dict.fromkeys(
                 candidate
                 for candidate in (
-                    match.group(0) for match in self._ED2K_URL_RE.finditer(value)
+                    match.group(0) for match in ED2K_URL_RE.finditer(value)
                 )
                 if valid_share_url(candidate, normalized_type)
             ))

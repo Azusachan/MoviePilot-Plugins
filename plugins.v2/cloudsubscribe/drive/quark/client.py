@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 from app.log import logger
@@ -62,6 +62,7 @@ class QuarkClient:
     SHARE_PAGE_BASE_URL = "https://drive-h.quark.cn/1/clouddrive"
     SHARE_BASE_URL = "https://drive.quark.cn/1/clouddrive"
     PAN_CLOUDDRIVE_URL = "https://pan.quark.cn/1/clouddrive"
+    CHECKIN_BASE_URL = "https://drive-m.quark.cn"
     ACCOUNT_URL = "https://pan.quark.cn/account"
     QR_LOGIN_URL = "https://uop.quark.cn/cas/ajax"
     DEFAULT_PARAMS = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
@@ -336,6 +337,75 @@ class QuarkClient:
 
     def check_login(self) -> bool:
         return self.is_success(self.get_member_info())
+
+    @staticmethod
+    def _checkin_params(url: str) -> Dict[str, str]:
+        query = parse_qs(urlparse(str(url or "").strip()).query, keep_blank_values=True)
+        params = {key: str(query.get(key, [""])[0] or "") for key in ("kps", "sign", "vcode")}
+        missing = [key for key, value in params.items() if not value]
+        if missing:
+            raise ValueError(f"夸克签到 URL 缺少参数：{', '.join(missing)}")
+        return params
+
+    @staticmethod
+    def _format_reward(value: Any) -> str:
+        try:
+            size = float(value or 0)
+        except (TypeError, ValueError):
+            return str(value or 0)
+        units = ("B", "KB", "MB", "GB", "TB", "PB")
+        index = 0
+        while size >= 1024 and index < len(units) - 1:
+            size /= 1024
+            index += 1
+        return f"{size:.2f} {units[index]}"
+
+    def checkin(self, checkin_url: str) -> Dict[str, Any]:
+        """查询夸克成长签到状态，未签到时领取空间奖励。"""
+        params = self._checkin_params(checkin_url)
+        info = self.request(
+            "GET", "1/clouddrive/capacity/growth/info",
+            params=params, base_url=self.CHECKIN_BASE_URL,
+        )
+        if not self.is_success(info):
+            raise RuntimeError(info.get("message") or "获取夸克成长信息失败")
+        data = self.data(info)
+        cap_sign = data.get("cap_sign") or {}
+        if not isinstance(cap_sign, dict):
+            raise RuntimeError("夸克成长信息缺少 cap_sign")
+        progress = cap_sign.get("sign_progress")
+        target = cap_sign.get("sign_target")
+        if cap_sign.get("sign_daily"):
+            reward = cap_sign.get("sign_daily_reward") or 0
+            return {
+                "success": True,
+                "already_checked_in": True,
+                "status": "今日已签到",
+                "message": f"今日已签到，奖励 {self._format_reward(reward)}，连签进度（{progress}/{target}）",
+                "signin_points": reward,
+                "points_change": 0,
+                "signin_days": progress,
+                "status_code": 200,
+            }
+        result = self.request(
+            "POST", "1/clouddrive/capacity/growth/sign",
+            params=params, json_data={"sign_cyclic": True},
+            base_url=self.CHECKIN_BASE_URL,
+        )
+        if not self.is_success(result):
+            raise RuntimeError(result.get("message") or "夸克签到失败")
+        result_data = self.data(result)
+        reward = result_data.get("sign_daily_reward") or 0
+        next_progress = progress + 1 if isinstance(progress, int) else progress
+        return {
+            "success": True,
+            "status": "签到成功",
+            "message": f"签到成功，获得 {self._format_reward(reward)}，连签进度（{next_progress}/{target}）",
+            "signin_points": reward,
+            "points_change": reward,
+            "signin_days": next_progress,
+            "status_code": 200,
+        }
 
     def get_account_info(self) -> Dict[str, Any]:
         if not self.cookie:

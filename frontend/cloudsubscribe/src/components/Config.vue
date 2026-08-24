@@ -555,6 +555,7 @@ const optionScopeByTab = Object.freeze({
   upgrade: "subscriptions",
   drive: "drive",
   search: "search",
+  checkin: "base",
   notify: "notify",
 })
 const loadedOptionScopes = new Set()

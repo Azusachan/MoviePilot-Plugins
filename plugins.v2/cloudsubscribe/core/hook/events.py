@@ -561,7 +561,8 @@ class PluginEventHandler(OwnerDelegator):
                 str(record.get("status") or item.get("message") or "签到失败"),
             ]
             if record.get("points_change") is not None:
-                details.append(f"积分 {int(record.get('points_change') or 0):+d}")
+                points_label = "枫叶" if item.get("provider") == "p115" else "积分"
+                details.append(f"{points_label} {int(record.get('points_change') or 0):+d}")
             if record.get("points_after") is not None:
                 details.append(f"当前 {record.get('points_after')}")
             if record.get("lottery_target_count"):
@@ -598,36 +599,40 @@ class PluginEventHandler(OwnerDelegator):
             return str(result.get("message") or "签到详情查询失败")
         channels = (result.get("data") or {}).get("channels") or []
         lines = []
-        trigger_names = {
-            "scheduled": "定时执行",
-            "retry": "异常重试",
-            "manual": "手动执行",
-        }
         for channel in channels:
-            lines.append(
-                f"【{channel.get('provider_name') or channel.get('provider')}】"
-                f"共 {channel.get('total') or 0} 条"
-            )
+            provider = channel.get("provider") or ""
+            name = channel.get("provider_name") or provider or "未知渠道"
             records = channel.get("items") or []
             if not records:
-                lines.append("暂无签到记录")
+                lines.append(f"【{name}】{channel.get('total') or 0} 条，暂无记录")
                 continue
-            for record in records:
-                executed_at = str(record.get("executed_at") or "").replace("T", " ")
-                mode = "赌狗签到" if record.get("mode") == "gambler" else "普通签到"
-                details = [
-                    trigger_names.get(record.get("trigger"), "手动执行"),
-                    str(record.get("status") or "签到失败"),
-                    mode,
-                ]
-                if record.get("points_change") is not None:
-                    details.append(f"积分 {int(record.get('points_change') or 0):+d}")
-                if record.get("points_after") is not None:
-                    details.append(f"当前 {record.get('points_after')}")
-                if record.get("signin_days") is not None:
-                    details.append(f"累计 {record.get('signin_days')} 天")
-                lines.append(f"{executed_at}｜{' · '.join(details)}")
-        return "\n".join(lines) if lines else "暂无签到记录"
+            record = records[0]
+            executed_at = str(record.get("executed_at") or "")
+            executed_at = executed_at.split("T", 1)[-1][:5]
+            details = ["成功" if record.get("success") else "失败"]
+            status = str(record.get("status") or "")
+            if status and status not in {
+                "签到成功", "签到完成", "今日已签到", "签到失败", "签到未完成"
+            }:
+                details.append(status[:12])
+            if record.get("points_change") is not None:
+                points_label = "枫叶" if provider == "p115" else "积分"
+                details.append(f"{points_label} {int(record.get('points_change') or 0):+d}")
+            if not record.get("success") and record.get("message"):
+                message = str(record.get("message"))
+                if message != status:
+                    details.append(message[:32])
+            lines.append(
+                f"【{name}】{channel.get('total') or 0} 条，最近 {executed_at} "
+                f"{' '.join(details)}"
+            )
+        if not lines:
+            return "暂无签到记录"
+        text = "\n".join(lines)
+        max_length = 3500
+        if len(text) > max_length:
+            text = text[:max_length - 16].rstrip() + "\n…（内容已截断）"
+        return text
 
     def on_plugin_action(self, event: Event):
         """处理通用远程命令，耗时校验交给后台线程。"""

@@ -10,7 +10,7 @@
           {{ day.label }}
         </div>
 
-        <template v-for="provider in providers" :key="provider.key">
+        <template v-for="provider in enabledProviders" :key="provider.key">
           <div class="checkin-provider-cell checkin-matrix-row">
             <v-icon :icon="provider.icon" size="18" color="primary" />
             <div class="checkin-provider-name">{{ provider.name }}</div>
@@ -116,6 +116,7 @@ const histories = reactive({})
 const runningProvider = ref("")
 
 const dateColumns = computed(() => buildDateColumns())
+const enabledProviders = computed(() => props.providers.filter(providerEnabled));
 
 function unwrapResponse(raw) {
   if (raw?.data && typeof raw.data === "object" && "success" in raw.data) return raw.data
@@ -158,6 +159,9 @@ function providerEnabled(provider) {
 }
 
 function providerConfigured(provider) {
+  if (provider.key === "p115") {
+    return Boolean(String(props.config.cookies || "").trim());
+  }
   if (provider.key === "hdhive") {
     if (String(props.config.hdhive_query_mode || "web") === "api") {
       return Boolean(
@@ -360,7 +364,7 @@ async function loadProviderHistory(provider) {
 }
 
 async function loadHistories() {
-  await Promise.all(props.providers.map(loadProviderHistory))
+  await Promise.all(enabledProviders.value.map(loadProviderHistory));
 }
 
 function requestCheckin(provider) {
@@ -422,7 +426,10 @@ async function runCheckin(provider) {
   }
 }
 
-watch(() => props.providers.map((provider) => provider.key).join(","), loadHistories)
+watch(
+  () => props.providers.map((provider) => `${provider.key}:${providerEnabled(provider)}`).join(","),
+  loadHistories,
+);
 onMounted(loadHistories)
 </script>
 

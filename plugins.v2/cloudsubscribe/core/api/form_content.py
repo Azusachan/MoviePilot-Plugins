@@ -11,6 +11,7 @@ from ..config import UIConfig
 class FormContent:
     _SENSITIVE = (
         "cookie", "password", "token", "secret", "api_key", "access_key",
+        "checkin_url",
         "refresh_token", "auth_code", "client_id", "device_id",
     )
 
@@ -24,6 +25,7 @@ class FormContent:
         "cron": "订阅执行周期", "block_system_subscribe": "始终接管系统订阅",
         "platform_download_policy": "平台下载策略", "block_start_time": "接管开始",
         "block_end_time": "接管结束", "cloud_drive": "当前转存网盘",
+        "p115_checkin_enabled": "115 网盘启用每日签到",
         "auto_subscribe_enabled": "启用榜单自动订阅", "auto_subscribe_onlyonce": "保存后立即运行一次",
         "auto_subscribe_notify": "发送运行结果通知", "auto_subscribe_skip_season_zero": "跳过第 0 季",
         "auto_subscribe_skip_subscribed": "跳过已有活动订阅", "auto_subscribe_skip_history": "跳过历史订阅",
@@ -90,6 +92,7 @@ class FormContent:
         "dian115_auto_unlock": "Dian115 允许积分解锁", "dian115_candidate_limit": "Dian115 候选上限",
         "dian115_request_interval": "Dian115 请求间隔", "dian115_checkin_enabled": "Dian115 启用每日签到",
         "dian115_checkin_mode": "Dian115 签到模式", "juying_base_url": "聚影服务地址",
+        "quark_checkin_enabled": "夸克网盘启用每日签到", "quark_checkin_url": "夸克签到 URL",
         "juying_username": "聚影网页登录账号", "pinglian_username": "盘链网页登录账号",
         "juying_result_limit": "聚影候选上限", "juying_request_interval": "聚影请求间隔",
         "juying_checkin_enabled": "聚影启用每日签到", "pinglian_base_url": "盘链服务地址",

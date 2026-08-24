@@ -10,9 +10,11 @@ from typing import Any, Dict, Optional, Tuple, Type
 import pytz
 from app.core.config import settings
 from app.log import logger
+from p115client import check_response
 
 from .. import OwnerDelegator
 from ..delegation import get_component
+from ...drive.quark import QuarkClient
 from ...search.dian115 import Dian115Error, Dian115SearchService
 from ...search.hdhive import (
     HDHiveOpenAPIError,
@@ -20,6 +22,14 @@ from ...search.hdhive import (
     HDHiveWebError,
 )
 from ...search.juying import JuyingError
+
+
+class P115CheckinError(RuntimeError):
+    """115 签到接口错误。"""
+
+
+class QuarkCheckinError(RuntimeError):
+    """夸克签到接口错误。"""
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,20 @@ class CheckinService(OwnerDelegator):
             name="聚影",
             credential_attrs=("_juying_username", "_juying_password"),
             error_types=(JuyingError,),
+            modes=("normal",),
+        ),
+        "p115": CheckinProvider(
+            key="p115",
+            name="115 网盘",
+            credential_attrs=("_p115_cookies",),
+            error_types=(P115CheckinError,),
+            modes=("normal",),
+        ),
+        "quark": CheckinProvider(
+            key="quark",
+            name="夸克网盘",
+            credential_attrs=("_quark_checkin_url",),
+            error_types=(QuarkCheckinError,),
             modes=("normal",),
         ),
     }
@@ -103,6 +127,10 @@ class CheckinService(OwnerDelegator):
         )
 
     def _checkin_configuration_message(self, provider: CheckinProvider) -> str:
+        if provider.key == "quark":
+            return "请先配置并保存夸克签到 URL"
+        if provider.key == "p115":
+            return "请先配置并保存 115 Cookie"
         if (
                 provider.key == "hdhive"
                 and str(getattr(self, "_hdhive_query_mode", "web")) == "api"
@@ -128,6 +156,18 @@ class CheckinService(OwnerDelegator):
             return self._search_component(
                 Dian115SearchService
             ).get_client()
+        if provider.key == "p115":
+            manager = getattr(self, "_p115_manager", None)
+            client = getattr(manager, "client", None) if manager else None
+            if client is not None:
+                return client
+            raise P115CheckinError("115 客户端未初始化")
+        if provider.key == "quark":
+            drive = getattr(self, "_quark_drive", None)
+            client = getattr(drive, "client", None) if drive else None
+            if isinstance(client, QuarkClient):
+                return client
+            raise QuarkCheckinError("夸克客户端未初始化")
         client = getattr(self, "_juying_client", None)
         if client and client.is_configured:
             return client
@@ -144,6 +184,8 @@ class CheckinService(OwnerDelegator):
             provider: CheckinProvider,
             record: Dict[str, Any],
     ) -> None:
+        if provider.key in {"p115", "quark"}:
+            return
         from ..api.account import clear_account_cache
         from ..api.page import clear_ui_options_cache
 
@@ -242,9 +284,14 @@ class CheckinService(OwnerDelegator):
             adapter = self._resolve_provider(provider_key)
             if adapter is None:
                 return {"success": False, "message": "不支持的签到提供方"}
-            providers = [adapter]
+            providers = [adapter] if bool(
+                getattr(self, f"_{adapter.key}_checkin_enabled", False)
+            ) else []
         else:
-            providers = list(self._PROVIDERS.values())
+            providers = [
+                item for item in self._PROVIDERS.values()
+                if bool(getattr(self, f"_{item.key}_checkin_enabled", False))
+            ]
         normalized_limit = max(1, min(int(limit or 10), self._HISTORY_LIMIT))
         channels = []
         with self._history_lock:
@@ -453,6 +500,7 @@ class CheckinService(OwnerDelegator):
             return
         delta = record.get("points_change")
         delta_text = self._signed_points(delta)
+        points_label = "枫叶" if provider.key == "p115" else "积分"
         balance = record.get("points_after")
         signin_days = record.get("signin_days")
         mode = {
@@ -462,7 +510,7 @@ class CheckinService(OwnerDelegator):
         lines = [
             f"模式：{mode}",
             f"状态：{record.get('status') or '未知'}",
-            f"积分：{delta_text}，余额 {balance if balance is not None else '未知'}",
+            f"{points_label}：{delta_text}，余额 {balance if balance is not None else '未知'}",
             f"累计：{signin_days if signin_days is not None else '未知'} 天",
         ]
         if record.get("lottery_target_count"):
@@ -480,6 +528,46 @@ class CheckinService(OwnerDelegator):
                 if record.get("success")
                 else f"【网盘订阅助手】{provider.name} 签到失败"
             ),
+            text="\n".join(lines),
+        )
+
+    def _notify_checkin_summary(
+            self,
+            results: list[Dict[str, Any]],
+            title: str,
+    ) -> None:
+        """批量签到完成后发送一条短汇总，避免每个渠道各发一条。"""
+        if not self._notify or not results:
+            return
+        lines = []
+        for item in results:
+            record = item.get("data") if isinstance(item, dict) else None
+            record = record if isinstance(record, dict) else {}
+            provider_name = str(
+                item.get("provider_name") or record.get("provider_name")
+                or item.get("provider") or record.get("provider") or "未知渠道"
+            )
+            points_label = "枫叶" if (
+                                             item.get("provider") or record.get("provider")
+                                     ) == "p115" else "积分"
+            success = bool(item.get("success") or record.get("success"))
+            status = str(
+                record.get("status") or item.get("message") or
+                ("签到成功" if success else "签到失败")
+            )
+            details = ["成功" if success else "失败", status]
+            if record.get("points_change") is not None:
+                details.append(
+                    f"{points_label} {self._signed_points(record.get('points_change'))}"
+                )
+            if not success and record.get("message"):
+                message = str(record.get("message"))
+                if message != status:
+                    details.append(message[:36])
+            lines.append(f"{provider_name}：{'，'.join(details)}")
+        self.post_message(
+            mtype=self._notification_type,
+            title=f"【网盘订阅】{title}",
             text="\n".join(lines),
         )
 
@@ -632,7 +720,48 @@ class CheckinService(OwnerDelegator):
             return self._run_dian115_actions(client, mode)
         if adapter.key == "hdhive":
             return client.checkin(is_gambler=mode == "gambler")
+        if adapter.key == "p115":
+            return self._run_p115_checkin(client)
+        if adapter.key == "quark":
+            try:
+                return client.checkin(getattr(self, "_quark_checkin_url", ""))
+            except Exception as error:
+                raise QuarkCheckinError(str(error)) from error
         return client.checkin()
+
+    @staticmethod
+    def _run_p115_checkin(client: Any) -> Dict[str, Any]:
+        """执行 115 每日签到并领取枫叶。"""
+        try:
+            status = check_response(client.user_points_sign())
+            data = status.get("data") or {}
+            if int(data.get("is_sign_today") or 0) == 1:
+                return {
+                    "success": True,
+                    "already_checked_in": True,
+                    "status": "今日已签到",
+                    "message": "今日已签到，无需重复签到",
+                    "signin_points": 0,
+                    "points_change": 0,
+                    "signin_days": data.get("continuous_day"),
+                    "status_code": 200,
+                }
+            result = check_response(client.user_points_sign_post())
+            result_data = result.get("data") or {}
+            points = int(result_data.get("points_num") or 0)
+            days = result_data.get("continuous_day")
+            return {
+                "success": True,
+                "status": "签到成功",
+                "message": f"签到成功，连续签到 {days or 0} 天，获得 {points} 枫叶",
+                "signin_points": points,
+                "points_change": points,
+                "points_after": result_data.get("points") or result_data.get("balance"),
+                "signin_days": days,
+                "status_code": 200,
+            }
+        except Exception as error:
+            raise P115CheckinError(str(error)) from error
 
     def _prepare_checkin(
             self, provider: str, mode: str
@@ -709,6 +838,7 @@ class CheckinService(OwnerDelegator):
             trigger: str = "manual",
             mode: str = "",
             lock_acquired: bool = False,
+            notify: bool = True,
     ) -> Dict[str, Any]:
         """执行一次提供方签到；同一插件实例不允许签到并发。"""
         adapter, normalized_mode, error = self._prepare_checkin(provider, mode)
@@ -743,7 +873,8 @@ class CheckinService(OwnerDelegator):
             if record["success"]:
                 self._refresh_checkin_account(adapter, record)
             self._save_history(adapter, record)
-            self._notify_checkin(adapter, record)
+            if notify:
+                self._notify_checkin(adapter, record)
             log_func = logger.info if record["success"] else logger.warning
             log_func(
                 f"{adapter.name} 签到结果："
@@ -787,11 +918,13 @@ class CheckinService(OwnerDelegator):
                 "message": f"所选渠道签到模式仅支持 {', '.join(supported)}",
             }
         items = []
+        aggregate = not provider_key
         for item in providers:
             result = self.run_checkin(
                 provider=item.key,
                 trigger="manual",
                 mode=requested_mode,
+                notify=not aggregate,
             )
             public_result = dict(result)
             if isinstance(result.get("data"), dict):
@@ -801,6 +934,8 @@ class CheckinService(OwnerDelegator):
                 "provider_name": item.name,
                 **public_result,
             })
+        if aggregate:
+            self._notify_checkin_summary(items, "签到汇总")
         success = bool(items) and all(item.get("success") for item in items)
         return {
             "success": success,
@@ -904,6 +1039,7 @@ class CheckinService(OwnerDelegator):
             result = self.run_checkin(
                 provider=provider.key,
                 trigger=trigger,
+                notify=False,
             )
             results.append({
                 "provider": provider.key,
@@ -968,6 +1104,7 @@ class CheckinService(OwnerDelegator):
                     "completed_retry_count": 0,
                 })
                 self.save_data(self._SCHEDULE_STATE_KEY, state)
+                self._notify_checkin_summary(results, "签到汇总")
                 return self._scheduled_result(results, "scheduled")
 
             retry_count = self._configured_retry_count()
@@ -1014,6 +1151,7 @@ class CheckinService(OwnerDelegator):
             ]
             state["completed_retry_count"] = completed_retry_count + 1
             self.save_data(self._SCHEDULE_STATE_KEY, state)
+            self._notify_checkin_summary(results, "签到重试汇总")
             return self._scheduled_result(results, "retry")
         finally:
             self._schedule_lock.release()

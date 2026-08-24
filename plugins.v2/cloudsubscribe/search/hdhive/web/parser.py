@@ -49,13 +49,13 @@ CHALLENGE_MARKERS = (
     "cf-chl-", "challenge-platform", "captcha", "访问频繁",
     "页面过期", "请刷新页面", "安全验证",
 )
-HDHIVE_RESOURCE_TYPES = frozenset(SUPPORTED_RESOURCE_TYPES)
-HDHIVE_DETAIL_RESOURCE_TYPES = HDHIVE_RESOURCE_TYPES - {"magnet"}
 ED2K_URL_RE = re.compile(
     r"ed2k://\|file\|[^|\r\n]+\|\d+\|[0-9A-Fa-f]{32}"
     r"(?:\|(?:h|p)=[^|\r\n]+)*\|/",
     re.I,
 )
+HDHIVE_RESOURCE_TYPES = frozenset(SUPPORTED_RESOURCE_TYPES)
+HDHIVE_DETAIL_RESOURCE_TYPES = HDHIVE_RESOURCE_TYPES - {"magnet"}
 
 
 def response_body(response: Any) -> bytes:
