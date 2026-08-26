@@ -28,6 +28,7 @@ from .registry import SubscribeProviderRegistry, registry
 from ..config import DEFAULT_AUTO_SUBSCRIBE_USERNAME
 from ..media import (
     call_with_supported_kwargs,
+    legacy_media_ids,
     media_identity as platform_media_identity,
     recognize_media,
 )
@@ -78,9 +79,12 @@ class AutoSubscribeService:
         self.download_chain = download_chain or DownloadChain()
         self.subscribe_chain = subscribe_chain or SubscribeChain()
         self.subscribe_oper = subscribe_oper or SubscribeOper()
+        self._existing_subscriptions: Optional[list[Any]] = None
 
-    def run(self) -> dict[str, Any]:
+    def run(self, notify: Optional[bool] = None) -> dict[str, Any]:
         """先收齐并识别所有渠道，跨渠道归并完成后再创建订阅。"""
+        # 手动平台订阅可能在两次榜单运行之间发生变化，兜底查重必须读新快照。
+        self._existing_subscriptions = None
         config = dict(getattr(self.owner, "_applied_config", None) or {})
         providers = self.registry.create_all()
         provider_names = {provider.provider_id for provider in providers}
@@ -213,7 +217,11 @@ class AutoSubscribeService:
             },
         }
         logger.info(result["message"])
-        if config.get("auto_subscribe_notify"):
+        should_notify = (
+            bool(config.get("auto_subscribe_notify"))
+            if notify is None else bool(notify)
+        )
+        if should_notify:
             try:
                 self.owner.post_message(
                     mtype=NotificationType.Plugin,
@@ -263,8 +271,8 @@ class AutoSubscribeService:
             "display_name": display_name,
         }
 
-    def run_auto_subscribe(self) -> dict[str, Any]:
-        return self.run()
+    def run_auto_subscribe(self, notify: Optional[bool] = None) -> dict[str, Any]:
+        return self.run(notify=notify)
 
     def api_run_auto_subscribe(self) -> dict[str, Any]:
         return self.run()
@@ -557,11 +565,18 @@ class AutoSubscribeService:
         item = group[0]
         identity = item.identity
         season = identity.season
-        kwargs = self._identity_kwargs(group, season)
         skip_subscribe = bool(config.get("auto_subscribe_skip_subscribed", True))
         skip_history = bool(config.get("auto_subscribe_skip_history", True))
         skip_library = bool(config.get("auto_subscribe_skip_library", True))
-        if skip_subscribe and self._exists(self.subscribe_oper.exists, kwargs):
+        manual_match = self._manual_subscription_match(item, season) if skip_subscribe else None
+        primary_exists = skip_subscribe and self._exists_primary(group, season)
+        if skip_subscribe and (
+                primary_exists
+                or self._exists_any(self.subscribe_oper.exists, group, season)
+                or manual_match is not None
+        ):
+            if not primary_exists and manual_match is not None:
+                self._supplement_tmdb_identity(manual_match, item.mediainfo)
             return SubscribeOutcome(
                 SubscribeStatus.SUBSCRIPTION_EXISTS,
                 item.candidate,
@@ -569,7 +584,7 @@ class AutoSubscribeService:
                 identity=identity,
                 mediainfo=item.mediainfo,
             )
-        if skip_history and self._exists(self.subscribe_oper.exist_history, kwargs):
+        if skip_history and self._exists_any(self.subscribe_oper.exist_history, group, season):
             return SubscribeOutcome(
                 SubscribeStatus.SUBSCRIPTION_EXISTS,
                 item.candidate,
@@ -603,6 +618,7 @@ class AutoSubscribeService:
                 mediainfo=item.mediainfo,
             )
 
+        media_source, media_id = self._preferred_identity(item.mediainfo)
         sid, message = self.subscribe_chain.add(
             title=subscribe_title,
             year=getattr(item.mediainfo, "year", item.candidate.year),
@@ -610,9 +626,8 @@ class AutoSubscribeService:
             tmdbid=getattr(item.mediainfo, "tmdb_id", None),
             doubanid=getattr(item.mediainfo, "douban_id", None),
             bangumiid=getattr(item.mediainfo, "bangumi_id", None),
-            media_source=getattr(item.mediainfo, "media_source", None)
-                         or getattr(item.mediainfo, "source", None),
-            media_id=getattr(item.mediainfo, "media_id", None),
+            media_source=media_source,
+            media_id=media_id,
             season=season,
             note=library_progress.existing_episodes,
             total_episode=library_progress.total_episode or None,
@@ -667,7 +682,7 @@ class AutoSubscribeService:
     @staticmethod
     def _identity_kwargs(group: list[_ResolvedMedia], season: Optional[int]) -> dict[str, Any]:
         media = group[0].mediainfo
-        source, media_id = platform_media_identity(media)
+        source, media_id = AutoSubscribeService._preferred_identity(media)
         return {
             "tmdbid": getattr(media, "tmdb_id", None),
             "doubanid": getattr(media, "douban_id", None),
@@ -677,10 +692,211 @@ class AutoSubscribeService:
             "season": season,
         }
 
+    @classmethod
+    def _identity_kwargs_list(
+            cls, group: list[_ResolvedMedia], season: Optional[int]
+    ) -> list[dict[str, Any]]:
+        """为归并组生成所有稳定身份，兼容历史记录使用的非主来源。"""
+        identities: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in group:
+            media = item.mediainfo
+            tmdb_id = getattr(media, "tmdb_id", None) or item.candidate.tmdb_id
+            source, media_id = AutoSubscribeService._preferred_identity(media)
+            values = (
+                ("themoviedb", tmdb_id),
+                (source, media_id),
+                ("douban", getattr(media, "douban_id", None) or item.candidate.douban_id),
+                ("bangumi", getattr(media, "bangumi_id", None) or item.candidate.bangumi_id),
+                ("imdb", getattr(media, "imdb_id", None) or item.candidate.imdb_id),
+            )
+            for identity_source, identity_id in values:
+                if identity_source and identity_id not in (None, ""):
+                    key = (str(identity_source).lower(), str(identity_id).strip())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    identities.append({
+                        "tmdbid": key[1] if key[0] == "themoviedb" else None,
+                        "doubanid": key[1] if key[0] == "douban" else None,
+                        "bangumiid": key[1] if key[0] == "bangumi" else None,
+                        "media_source": key[0],
+                        "media_id": key[1],
+                        "season": season,
+                    })
+        return identities or [cls._identity_kwargs(group, season)]
+
+    @staticmethod
+    def _preferred_identity(media: Any) -> tuple[Optional[str], Optional[str]]:
+        """TMDB 是影视订阅主身份，其他来源仅在 TMDB 缺失时使用。"""
+        tmdb_id = getattr(media, "tmdb_id", None)
+        if tmdb_id not in (None, "", 0, "0"):
+            return "themoviedb", str(tmdb_id).strip()
+        return platform_media_identity(media)
+
     @staticmethod
     def _exists(func: Any, kwargs: dict[str, Any]) -> bool:
         """兼容新旧 MoviePilot 的身份参数集合。"""
         return bool(call_with_supported_kwargs(func, kwargs))
+
+    @classmethod
+    def _exists_any(
+            cls, func: Any, group: list[_ResolvedMedia], season: Optional[int]
+    ) -> bool:
+        """按归并组内全部身份查重，避免来源字段不同导致重复订阅。"""
+        identity_kwargs = cls._identity_kwargs_list(group, season)
+        return any(cls._exists(func, item) for item in identity_kwargs)
+
+    def _exists_primary(
+            self, group: list[_ResolvedMedia], season: Optional[int]
+    ) -> bool:
+        """优先判断 TMDB 主身份，避免更新豆瓣卡片时撞上已有 TMDB 卡片。"""
+        identities = [
+            item for item in self._identity_kwargs_list(group, season)
+            if item.get("media_source") == "themoviedb"
+        ]
+        return any(self._exists(self.subscribe_oper.exists, item) for item in identities)
+
+    def _manual_subscription_match(
+            self, item: _ResolvedMedia, season: Optional[int]
+    ) -> Optional[Any]:
+        """按 TMDB 主身份查找，并兼容只有豆瓣身份的手动订阅。"""
+        if self._existing_subscriptions is None:
+            try:
+                self._existing_subscriptions = list(self.subscribe_oper.list() or [])
+            except Exception as error:
+                logger.debug(f"读取平台订阅列表用于榜单查重失败：{error}")
+                self._existing_subscriptions = []
+        media = item.mediainfo
+        media_type = getattr(media, "type", None)
+        media_type = getattr(media_type, "value", media_type)
+        media_type = str(media_type or "").strip().lower()
+        year = str(getattr(media, "year", None) or item.candidate.year or "").strip()
+        titles = {
+            str(value or "").strip().casefold()
+            for value in (
+                item.candidate.title,
+                self._localized_title(media),
+                getattr(media, "title", None),
+            )
+            if str(value or "").strip()
+        }
+        if not titles:
+            return None
+        wanted_ids = {
+            (str(identity.get("media_source") or "").lower(),
+             str(identity.get("media_id") or "").strip())
+            for identity in self._identity_kwargs_list([item], season)
+            if identity.get("media_source") and identity.get("media_id")
+        }
+        for subscribe in self._existing_subscriptions:
+            row_ids = set()
+            source, media_id = platform_media_identity(subscribe)
+            if source and media_id:
+                row_ids.add((str(source).lower(), str(media_id).strip()))
+            legacy = legacy_media_ids(subscribe)
+            for source_name, field in (
+                    ("themoviedb", "tmdbid"),
+                    ("douban", "doubanid"),
+                    ("bangumi", "bangumiid"),
+            ):
+                value = legacy.get(field)
+                if value not in (None, ""):
+                    row_ids.add((source_name, str(value).strip()))
+            if wanted_ids.intersection(row_ids):
+                row_type = getattr(subscribe, "type", None)
+                if isinstance(subscribe, dict):
+                    row_type = subscribe.get("type")
+                row_type = getattr(row_type, "value", row_type)
+                row_season = (
+                    subscribe.get("season") if isinstance(subscribe, dict)
+                    else getattr(subscribe, "season", None)
+                )
+                if str(row_type or "").strip() in {"电视剧", "tv"} and int(
+                        1 if row_season is None else row_season
+                ) != int(1 if season is None else season):
+                    continue
+                return subscribe
+            name = str(
+                subscribe.get("name") if isinstance(subscribe, dict)
+                else getattr(subscribe, "name", "")
+            ).strip().casefold()
+            if not name or name not in titles:
+                continue
+            subscribe_year = str(
+                subscribe.get("year") if isinstance(subscribe, dict)
+                else getattr(subscribe, "year", "")
+            ).strip()
+            if year and subscribe_year and year != subscribe_year:
+                continue
+            subscribe_type = getattr(subscribe, "type", None)
+            if isinstance(subscribe, dict):
+                subscribe_type = subscribe.get("type")
+            subscribe_type = getattr(subscribe_type, "value", subscribe_type)
+            if media_type and str(subscribe_type or "").strip().lower() not in {
+                media_type, "", "unknown"
+            }:
+                continue
+            subscribe_season = (
+                subscribe.get("season") if isinstance(subscribe, dict)
+                else getattr(subscribe, "season", None)
+            )
+            if media_type in {"tv", "电视剧"} and int(
+                    1 if subscribe_season is None else subscribe_season
+            ) != int(1 if season is None else season):
+                continue
+            return subscribe
+        return None
+
+    def _supplement_tmdb_identity(self, subscribe: Any, mediainfo: Any) -> None:
+        """把榜单识别到的 TMDB ID 补回手动订阅，避免再创建第二条记录。"""
+        tmdb_id = getattr(mediainfo, "tmdb_id", None)
+        subscribe_id = getattr(subscribe, "id", None)
+        if isinstance(subscribe, dict):
+            tmdb_id = tmdb_id or (
+                mediainfo.get("tmdb_id") if isinstance(mediainfo, dict) else None
+            )
+            subscribe_id = subscribe.get("id")
+        if not tmdb_id or not subscribe_id:
+            return
+
+        payload: dict[str, Any] = {}
+        fields = set(subscribe.keys()) if isinstance(subscribe, dict) else set(
+            getattr(type(subscribe), "__table__", {}).columns.keys()
+            if getattr(type(subscribe), "__table__", None) is not None else ()
+        )
+        if "tmdbid" in fields or hasattr(subscribe, "tmdbid"):
+            current_tmdb = (
+                subscribe.get("tmdbid") if isinstance(subscribe, dict)
+                else getattr(subscribe, "tmdbid", None)
+            )
+            if str(current_tmdb or "") != str(tmdb_id):
+                payload["tmdbid"] = int(tmdb_id)
+        if (
+                "media_source" in fields
+                or hasattr(subscribe, "media_source")
+        ) and (
+                "media_id" in fields
+                or hasattr(subscribe, "media_id")
+        ):
+            current_source, current_id = platform_media_identity(subscribe)
+            if current_source != "themoviedb" or str(current_id or "") != str(tmdb_id):
+                payload.update({"media_source": "themoviedb", "media_id": str(tmdb_id)})
+        if not payload:
+            return
+        try:
+            updated = self.subscribe_oper.update(int(subscribe_id), payload)
+            if updated:
+                for field, value in payload.items():
+                    if isinstance(subscribe, dict):
+                        subscribe[field] = value
+                    else:
+                        setattr(subscribe, field, value)
+                logger.info(
+                    f"手动订阅已合并 TMDB 身份：{getattr(subscribe, 'name', '')} -> {tmdb_id}"
+                )
+        except Exception as error:
+            logger.warning(f"手动订阅补充 TMDB 身份失败：{subscribe_id} - {error}")
 
     def _media_progress(self, item: _ResolvedMedia, season: Optional[int]) -> _LibraryProgress:
         """只检查目标季，并保留媒体库已有的精确集数。"""

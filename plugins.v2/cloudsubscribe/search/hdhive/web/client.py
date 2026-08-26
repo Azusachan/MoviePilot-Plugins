@@ -8,8 +8,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin, urlsplit
 
 from app.core.config import settings
@@ -17,7 +16,7 @@ from app.log import logger
 
 from .action import ServerActionProtocol, ServerActionResponse
 from .captcha import HDHiveCaptchaError, HDHiveCaptchaSolver
-from .parser import response_body, response_text
+from .parser import page_account_snapshot, response_body, response_text
 from .security import (
     HDHiveSecurityProtocol,
     HDHiveSecuritySession,
@@ -936,168 +935,56 @@ class HDHiveClient:
             ),
         }
 
-    @staticmethod
-    def _points_log_items(payload: Any) -> List[Dict[str, Any]]:
-        """兼容积分日志接口的列表和常见分页对象。"""
-        containers = []
-        if isinstance(payload, dict):
-            containers.extend((payload.get("data"), payload))
-        else:
-            containers.append(payload)
-        for container in containers:
-            if isinstance(container, list):
-                return [item for item in container if isinstance(item, dict)]
-            if not isinstance(container, dict):
-                continue
-            for key in ("items", "logs", "records", "results", "rows", "list"):
-                items = container.get(key)
-                if isinstance(items, list):
-                    return [item for item in items if isinstance(item, dict)]
-        return []
-
-    @staticmethod
-    def _parse_points_log_time(value: Any) -> Optional[datetime]:
-        if isinstance(value, (int, float)):
-            timestamp = float(value)
-            if timestamp > 10_000_000_000:
-                timestamp /= 1000
-            try:
-                return datetime.fromtimestamp(timestamp).astimezone()
-            except (OSError, OverflowError, ValueError):
-                return None
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed
-        return parsed.astimezone()
-
-    @classmethod
-    def _is_today_checkin_log(cls, item: Dict[str, Any]) -> bool:
-        description = " ".join(
-            str(item.get(key) or "")
-            for key in (
-                "change_type", "type", "action", "source", "title",
-                "remark", "description", "message",
-            )
-        )
-        normalized = re.sub(r"[\s_-]+", "", description.casefold())
-        if not any(marker in normalized for marker in (
-                "签到", "checkin", "signin",
-        )):
-            return False
-        occurred_at = None
-        for key in (
-                "created_at", "createdAt", "create_time", "add_time",
-                "occurred_at", "updated_at", "date", "time",
-        ):
-            occurred_at = cls._parse_points_log_time(item.get(key))
-            if occurred_at is not None:
-                break
-        return bool(
-            occurred_at
-            and occurred_at.date() == datetime.now().astimezone().date()
-        )
-
-    def get_points_logs(
-            self,
-            page: int = 1,
-            page_size: int = 20,
-    ) -> List[Dict[str, Any]]:
-        """读取积分明细；签名只使用不含查询参数的 canonical path。"""
-        normalized_page = max(1, int(page or 1))
-        normalized_size = max(1, min(int(page_size or 20), 100))
-        path = (
-            "/api/customer/points-logs"
-            f"?page={normalized_page}&page_size={normalized_size}"
-        )
-        response = self.signed_request(
-            "GET",
-            path,
-            canonical_path="/api/customer/points-logs",
-        )
-        try:
-            payload = response.json()
-        except ValueError as error:
-            raise HDHiveWebError(
-                "HDHive 积分日志接口返回格式异常",
-                code="schema_changed",
-                status_code=response.status_code,
-            ) from error
-        if response.status_code >= 400:
-            raise HDHiveWebError(
-                "HDHive 积分日志读取失败",
-                code="request_failed",
-                status_code=response.status_code,
-            )
-        return self._points_log_items(payload)
-
-    def has_checked_in_today(self) -> bool:
-        return any(
-            self._is_today_checkin_log(item)
-            for item in self.get_points_logs(page=1, page_size=20)
-        )
-
     def checkin(self, is_gambler: bool = False) -> Dict[str, Any]:
-        """通过网页 Server Action 签到，并返回前后积分与累计天数。"""
+        """抓取首页后，通过网页 Server Action 完成一次签到。"""
         with self.related_requests(5):
-            before = self.get_account_info()
+            page_snapshot: Dict[str, Any] = {}
             response = None
-            payload = {}
             try:
                 response = self._server_actions.checkin(
                     self._authenticated_request,
                     bool(is_gambler),
                     base_url=self.BASE_URL,
+                    on_page=lambda page: page_snapshot.update(
+                        page_account_snapshot(response_text(page))
+                    ),
                 )
-            except HDHiveWebError as error:
-                if error.status_code != 400 or not self.has_checked_in_today():
-                    raise
-                status_code = error.status_code
-                message = "今日已签到"
-                error_code = error.code
-                checked_in_value = False
-                already_checked_in = True
-                success = True
-            else:
-                status_code = response.status_code
-                message = response.message
-                error_code = response.code
-                payload = response.payload or {}
-                data = response.data
-                already_checked_in = bool(
-                    data.get("already_checked_in")
-                    or any(marker in message for marker in (
-                        "已经签到", "今日已签到", "签到过", "明天再来",
-                    ))
-                    or error_code in {
-                        "ALREADY_CHECKED_IN", "CHECKIN_ALREADY_COMPLETED",
-                    }
+            except HDHiveWebError:
+                raise
+            status_code = response.status_code
+            message = response.message
+            error_code = response.code
+            payload = response.payload or {}
+            data = response.data
+            response_snapshot = page_account_snapshot(response.text)
+            before = dict(page_snapshot)
+            after = dict(response_snapshot or before)
+            for source in (data, payload):
+                if not isinstance(source, dict):
+                    continue
+                if "points" in source and "points" not in after:
+                    after["points"] = source["points"]
+                if "signin_days_total" in source and "signin_days" not in after:
+                    after["signin_days"] = source["signin_days_total"]
+                if "signin_days" in source and "signin_days" not in after:
+                    after["signin_days"] = source["signin_days"]
+            already_checked_in = bool(
+                data.get("already_checked_in")
+                or data.get("checked_in") is False
+                or any(marker in message for marker in (
+                    "已经签到", "今日已签到", "签到过", "明天再来",
+                ))
+                or error_code in {
+                    "ALREADY_CHECKED_IN", "CHECKIN_ALREADY_COMPLETED",
+                }
+            )
+            checked_in_value = data.get("checked_in")
+            success = bool(
+                already_checked_in
+                or (
+                        status_code < 400
+                        and payload.get("success") is not False
                 )
-                checked_in_value = data.get("checked_in")
-                success = bool(
-                    already_checked_in
-                    or (
-                            status_code < 400
-                            and payload.get("success") is not False
-                    )
-                )
-                if (
-                        not success
-                        and status_code == 400
-                        and self.has_checked_in_today()
-                ):
-                    already_checked_in = True
-                    success = True
-                    message = "今日已签到"
-            after = (
-                before if already_checked_in
-                else self.get_account_info() if success
-                else before
             )
         points_before = int(before.get("points") or 0)
         points_after = int(after.get("points") or 0)

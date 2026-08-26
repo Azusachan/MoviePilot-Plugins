@@ -48,7 +48,7 @@ BIND_SECRET_RE = re.compile(
     r'[\\"]bindSecret[\\"]\s*:\s*[\\"]([^\\"]+)', re.I
 )
 LOGIN_ACTION_FALLBACK = "602b98dd108c13ebbb69c9e649267ed988f9c3ce8e"
-CHECKIN_ACTION_FALLBACK = "40e9312e9877f7458a63aa744854e511c8c6bd6b08"
+CHECKIN_ACTION_FALLBACK = "4068b21f57fce3dc23dca0ca104769e9e42c011d22"
 ACTION_CACHE_TTL = 60 * 60
 LOGIN_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%22(auth)%22%2C%7B%22children%22%3A"
@@ -196,12 +196,17 @@ class ServerActionProtocol:
             self,
             request: Callable[..., Any],
             path: str,
+            require_token: bool = True,
             **kwargs,
     ) -> Any:
-        """清除旧 Action Cookie，并通过目标页面 GET 获取新值。"""
+        """清除旧 Action Cookie，并通过目标页面 GET 获取新值。
+
+        普通首页签到由当前 Next.js 页面 Action 直接承载，不依赖资源解锁
+        使用的短期令牌；登录、验证码和资源解锁仍保持令牌校验。
+        """
         clear_server_action_token(self._cookies)
         response = request("GET", path, **kwargs)
-        if server_action_token(self._cookies):
+        if not require_token or server_action_token(self._cookies):
             return response
         status_code = int(getattr(response, "status_code", 0) or 0)
         self._raise(
@@ -354,9 +359,12 @@ class ServerActionProtocol:
             base_url: str = "https://hdhive.com",
             refresh_action: bool = False,
             retry_token: bool = True,
+            on_page: Optional[Callable[[Any], None]] = None,
     ) -> ServerActionResponse:
         """预检首页、发现并提交签到 Action。"""
-        page_response = self.preflight(request, "/")
+        page_response = self.preflight(request, "/", require_token=False)
+        if on_page:
+            on_page(page_response)
         action_id = self._cached_action(
             "checkin",
             lambda: self.discover(
@@ -391,6 +399,7 @@ class ServerActionProtocol:
                     base_url=base_url,
                     refresh_action=True,
                     retry_token=retry_token,
+                    on_page=on_page,
                 )
             raise
         if response.status_code == 404 and not refresh_action:
@@ -401,6 +410,7 @@ class ServerActionProtocol:
                 base_url=base_url,
                 refresh_action=True,
                 retry_token=retry_token,
+                on_page=on_page,
             )
         if response.payload is None:
             self._raise(
@@ -414,6 +424,7 @@ class ServerActionProtocol:
                 is_gambler,
                 base_url=base_url,
                 retry_token=False,
+                on_page=on_page,
             )
         return response
 

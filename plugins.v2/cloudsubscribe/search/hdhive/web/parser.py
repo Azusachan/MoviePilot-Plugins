@@ -88,6 +88,34 @@ def decode_embedded_text(value: Any) -> str:
     return text
 
 
+def page_account_snapshot(page_text: str) -> Dict[str, Any]:
+    """从首页/Action 的 Flight 内容读取用户可见账户快照。 """
+
+    text = decode_embedded_text(page_text)
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'["\']user_meta["\']\s*:', text):
+        start = text.find("{", match.end())
+        if start < 0:
+            continue
+        try:
+            value, _ = decoder.raw_decode(text, start)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        snapshot: Dict[str, Any] = {}
+        for source, target in (
+                ("points", "points"),
+                ("signin_days_total", "signin_days"),
+                ("signin_days", "signin_days"),
+        ):
+            if source in value:
+                snapshot[target] = value[source]
+        if snapshot:
+            return snapshot
+    return {}
+
+
 def _nested_dict(value: Any, key: str) -> Optional[Dict[str, Any]]:
     pending = [value]
     while pending:

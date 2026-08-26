@@ -579,7 +579,7 @@ class PluginEventHandler(OwnerDelegator):
 
     def _run_remote_auto_subscribe(self, event_data: dict) -> None:
         try:
-            result = self.run_auto_subscribe()
+            result = self.run_auto_subscribe(notify=False)
         except Exception as error:
             self._post_command_message(
                 event_data,
@@ -675,11 +675,6 @@ class PluginEventHandler(OwnerDelegator):
                 daemon=True,
                 name="cloudsubscribe-command-auto-subscribe",
             ).start()
-            self._post_command_message(
-                event_data,
-                "【网盘订阅】正在执行榜单订阅",
-                "请求已接收，完成后将发送订阅结果。",
-            )
             return
 
         if action == "cloudsubscribe_links":
