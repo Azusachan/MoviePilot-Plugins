@@ -475,7 +475,9 @@ class MediaServerNotifier:
                 service.instance.refresh_library_by_items, items
             )
         try:
-            success = bool(future.result(timeout=self._REFRESH_TIMEOUT_SECONDS))
+            result = future.result(timeout=self._REFRESH_TIMEOUT_SECONDS)
+            # MoviePilot Plex refresh returns None after submitting the HTTP request.
+            success = bool(result) or (service.type == "plex" and result is None)
         except FutureTimeoutError:
             future.cancel()
             logger.error(

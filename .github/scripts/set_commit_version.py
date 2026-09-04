@@ -51,7 +51,7 @@ def main() -> None:
     # MoviePilot compares dot-separated numeric components. A PEP 440 local
     # version such as +plex.<sha> would be treated as older than upstream.
     # Last component tracks fork features without changing the upstream marker.
-    version = f"{base}.{commit_count}.{int(commit[:8], 16)}.5"
+    version = f"{base}.{commit_count}.{int(commit[:8], 16)}.6"
 
     package = json.loads(PACKAGE.read_text(encoding="utf-8"))
     info = package["CloudSubscribe"]

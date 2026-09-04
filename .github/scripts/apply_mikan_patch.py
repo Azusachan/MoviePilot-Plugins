@@ -70,6 +70,11 @@ replace("plugins.v2/cloudsubscribe/core/api/search.py",
         '            "butailing": "不太灵",',
         '            "mikan": "蜜柑",\n            "butailing": "不太灵",')
 print("Mikan integration applied")
+replace("plugins.v2/cloudsubscribe/handlers/notification/media_server.py",
+        '            success = bool(future.result(timeout=self._REFRESH_TIMEOUT_SECONDS))',
+        '            result = future.result(timeout=self._REFRESH_TIMEOUT_SECONDS)\n'
+        '            # MoviePilot Plex refresh returns None after submitting the HTTP request.\n'
+        '            success = bool(result) or (service.type == "plex" and result is None)')
 replace("plugins.v2/cloudsubscribe/utils/file_parser.py",
         '                if relative_path:\n                    item.setdefault("_relative_path", relative_path)',
         '                if relative_path and hasattr(item, "setdefault"):\n'

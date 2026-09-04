@@ -59,6 +59,9 @@ already-matched release, explicit episode number, season and Chinese fansub tags
 Other sources retain the normal platform matcher. Native file identities are kept
 intact for cloud move and playback URL generation.
 
+Fork revision 6 treats MoviePilot's Plex void refresh return as an accepted
+request (exceptions and False still fail), not evidence of completed indexing.
+
 Mikan results, and Japanese-animation candidates from all other automated search
 sources, require both a named translation group in release tags and an explicit
 Chinese-language marker. No-group, explicitly unsubtitled, and encode-only releases
