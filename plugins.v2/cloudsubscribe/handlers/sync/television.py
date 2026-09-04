@@ -8,7 +8,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
-from ..notification import EmbyMediaResolver
+from ..notification import MediaServerEpisodeResolver
 from ...core import OwnerDelegator
 
 
@@ -139,34 +139,34 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         f"{mediainfo.title_year} S{season:02d} "
                         "TMDB 季网页未返回剧集信息，跳过播出过滤"
                     )
-            # 1. 先读取 Emby 实际剧集，不混入订阅 note。
+            # 1. 先通过 MoviePilot 的通用媒体服务器接口读取实际剧集。
             self._set_task_phase(subscribe, "检查媒体库内容", 30)
-            emby_valid, emby_episodes = self._timed_sync_call(
-                "emby_scan",
-                EmbyMediaResolver.episode_numbers,
+            mediaserver_valid, mediaserver_episodes = self._timed_sync_call(
+                "mediaserver_scan",
+                MediaServerEpisodeResolver.episode_numbers,
                 self._chain,
                 mediainfo,
                 season,
             )
             existing_episodes_in_resources: Set[int] = (
-                    emby_episodes & expected_episodes
+                    mediaserver_episodes & expected_episodes
             )
-            if not emby_valid:
+            if not mediaserver_valid:
                 if transient_target:
-                    emby_episodes = set()
+                    mediaserver_episodes = set()
                     logger.debug(
-                        f"{mediainfo.title_year} S{season:02d} 未读取到 Emby 数据，"
+                        f"{mediainfo.title_year} S{season:02d} 未读取到媒体服务器数据，"
                         "临时媒体目标继续按网盘实际内容检查"
                     )
                 else:
                     logger.warning(
-                        f"{mediainfo.title_year} S{season:02d} 无法读取 Emby 实际数据，"
+                        f"{mediainfo.title_year} S{season:02d} 无法读取媒体服务器实际数据，"
                         "本轮跳过且不访问115，不修改订阅进度"
                     )
                     return transferred_count
             logger.debug(
-                f"Emby 实际存在剧集："
-                f"{self._format_episode_ranges(emby_episodes & expected_episodes)}"
+                f"媒体服务器实际存在剧集："
+                f"{self._format_episode_ranges(mediaserver_episodes & expected_episodes)}"
             )
 
             # 2. 再读取115目标目录；不扫描本地 STRM 路径。
@@ -207,18 +207,21 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         total_episode=total_ep,
                     )
                 logger.debug(
-                    f"Emby 与115合并后已存在 "
+                    f"媒体服务器与115合并后已存在 "
                     f"{self._format_episode_ranges(existing_episodes_in_resources)}，缺失 "
                     f"{self._format_episode_ranges(set(missing_episodes))}"
                 )
                 if restored_missing:
                     logger.warning(
-                        "Emby 与115均不存在，已删除订阅误标并恢复缺集："
+                        "媒体服务器与115均不存在，已删除订阅误标并恢复缺集："
                         f"{self._format_episode_ranges(restored_missing)}"
                     )
 
             if not missing_episodes and not discover_manual_episodes:
-                logger.info(f"{mediainfo.title_year} S{season:02d} Emby 与115已完整存在")
+                logger.info(
+                    f"{mediainfo.title_year} S{season:02d} "
+                    "媒体服务器与115已完整存在"
+                )
                 if not transient_target:
                     self._subscribe_handler.check_and_finish_subscribe(
                         subscribe=subscribe,

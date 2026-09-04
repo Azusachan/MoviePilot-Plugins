@@ -15,6 +15,46 @@ from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 
 
+class MediaServerEpisodeResolver:
+    """Read existing TV episodes through MoviePilot's generic media-server API."""
+
+    @staticmethod
+    def episode_numbers(
+            chain, mediainfo: MediaInfo, season: int
+    ) -> tuple[bool, Set[int]]:
+        """Return whether an active server was checked and its existing episodes."""
+        services = MediaServerHelper().get_services()
+        if not services or not chain or not mediainfo:
+            return False, set()
+
+        mediaserver_chain = MediaServerChain()
+        checked = False
+        episodes: Set[int] = set()
+        for server_name, service in services.items():
+            if service.instance.is_inactive():
+                continue
+            try:
+                exists_media = chain.media_exists(
+                    mediainfo=mediainfo,
+                    server=server_name,
+                )
+                checked = True
+                if not exists_media or not exists_media.itemid:
+                    continue
+                episode_ids = mediaserver_chain.get_season_episode_ids(
+                    server=server_name,
+                    item_id=exists_media.itemid,
+                    season=season,
+                )
+                episodes.update(int(episode) for episode in (episode_ids or {}))
+            except Exception as error:
+                logger.warning(
+                    f"读取媒体服务器剧集清单失败：{server_name} - "
+                    f"{mediainfo.title_year} S{season:02d}，原因：{error}"
+                )
+        return checked, episodes
+
+
 class EmbyMediaResolver:
     """读取 Emby 中已入库剧集的实际文件路径，供洗版建立现有版本基线。"""
 

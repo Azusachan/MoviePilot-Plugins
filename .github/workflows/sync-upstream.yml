@@ -1,0 +1,128 @@
+name: Sync upstream and release Plex build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 19 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloudsubscribe-plex-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-test-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/odomu/MoviePilot-Plugins.git || true
+          git fetch --prune upstream main
+          echo "UPSTREAM_SHA=$(git rev-parse upstream/main)" >> "$GITHUB_ENV"
+
+      - name: Detect upstream change
+        id: change
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(cat .github/UPSTREAM_COMMIT 2>/dev/null || true)"
+          if [ "$current" = "$UPSTREAM_SHA" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild fork tree from upstream
+        if: steps.change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fork_files="$(mktemp -d)"
+          mkdir -p "$fork_files/.github/scripts" "$fork_files/.github/workflows" "$fork_files/tests"
+          cp .github/scripts/apply_plex_patch.py "$fork_files/.github/scripts/"
+          cp .github/scripts/set_commit_version.py "$fork_files/.github/scripts/"
+          cp .github/workflows/sync-upstream.yml "$fork_files/.github/workflows/"
+          cp tests/test_plex_episode_resolver.py "$fork_files/tests/"
+          cp FORK.md "$fork_files/"
+          git read-tree --reset -u upstream/main
+          cp -R "$fork_files/." .
+          python3 .github/scripts/apply_plex_patch.py
+          version="$(python3 .github/scripts/set_commit_version.py "$UPSTREAM_SHA")"
+          echo "FORK_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Test backend patch
+        if: steps.change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -v
+          python3 -m compileall -q plugins.v2/cloudsubscribe
+          python3 .github/scripts/get_plugin_meta.py >/dev/null
+        env:
+          GITHUB_EVENT_NAME: workflow_dispatch
+          INPUT_SOURCE_DIRECTORY: plugins.v2
+          INPUT_PLUGIN_ID: CloudSubscribe
+
+      - name: Setup Node.js
+        if: steps.change.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build frontend
+        if: steps.change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@10.25.0 --activate
+          pnpm --dir frontend/cloudsubscribe install --frozen-lockfile
+          pnpm --dir frontend/cloudsubscribe build
+          rm -rf plugins.v2/cloudsubscribe/dist
+          cp -R frontend/cloudsubscribe/dist plugins.v2/cloudsubscribe/dist
+          test -f plugins.v2/cloudsubscribe/dist/assets/remoteEntry.js
+
+      - name: Commit synchronized build
+        if: steps.change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "sync: upstream ${UPSTREAM_SHA:0:12} with Plex compatibility"
+          git push origin HEAD:main
+
+      - name: Package plugin
+        if: steps.change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="cloudsubscribe_v${FORK_VERSION}.zip"
+          (cd plugins.v2 && zip -r "$GITHUB_WORKSPACE/$asset" cloudsubscribe \
+            -x '*/__pycache__/*' '*.pyc' '*.pyo' '*/node_modules/*')
+          unzip -l "$asset" | grep -q 'cloudsubscribe/dist/assets/remoteEntry.js'
+          echo "ASSET_NAME=$asset" >> "$GITHUB_ENV"
+
+      - name: Create release
+        if: steps.change.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="CloudSubscribe_v${FORK_VERSION}"
+          gh release create "$tag" "$ASSET_NAME" \
+            --target main \
+            --title "网盘订阅助手 Plex build v${FORK_VERSION}" \
+            --notes "Plex compatibility build based on odomu/MoviePilot-Plugins@$UPSTREAM_SHA"
