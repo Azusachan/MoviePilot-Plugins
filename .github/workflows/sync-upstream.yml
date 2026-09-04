@@ -54,7 +54,7 @@ jobs:
           cp .github/workflows/sync-upstream.yml "$fork_files/.github/workflows/"
           cp tests/test_plex_episode_resolver.py "$fork_files/tests/"
           cp FORK.md "$fork_files/"
-          for path in .github/scripts/apply_mikan_patch.py plugins.v2/cloudsubscribe/search/mikan.py plugins.v2/cloudsubscribe/search/fansubs.py frontend/cloudsubscribe/src/config/fields/search/mikan.js tests/test_mikan.py tests/test_fansubs.py; do
+          for path in .github/scripts/apply_mikan_patch.py plugins.v2/cloudsubscribe/search/mikan.py plugins.v2/cloudsubscribe/search/fansubs.py plugins.v2/cloudsubscribe/search/pending.py frontend/cloudsubscribe/src/config/fields/search/mikan.js tests/test_mikan.py tests/test_fansubs.py tests/test_pending.py; do
             mkdir -p "$fork_files/$(dirname "$path")"
             cp "$path" "$fork_files/$path"
           done

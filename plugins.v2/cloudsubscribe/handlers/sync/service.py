@@ -1912,6 +1912,12 @@ class SyncHandler:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             if pending_key in pending:
                 return pending_key
+            if subscribe_id and season and target_episodes and not upgrade:
+                from ...search.pending import unreserved_episodes
+                target_episodes[:] = unreserved_episodes(pending, subscribe_id, season, target_episodes)
+                if not target_episodes:
+                    logger.info("跳过重复候选：目标集已有待完成的离线任务")
+                    return ""
         if not self._offline_download.add_offline_download(share_url, staging_dir):
             return ""
         now = time.time()

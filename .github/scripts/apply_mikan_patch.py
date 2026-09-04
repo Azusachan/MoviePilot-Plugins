@@ -70,6 +70,16 @@ replace("plugins.v2/cloudsubscribe/core/api/search.py",
         '            "butailing": "不太灵",',
         '            "mikan": "蜜柑",\n            "butailing": "不太灵",')
 print("Mikan integration applied")
+replace("plugins.v2/cloudsubscribe/handlers/sync/service.py",
+        '            if pending_key in pending:\n                return pending_key\n        if not self._offline_download.add_offline_download(share_url, staging_dir):',
+        '            if pending_key in pending:\n                return pending_key\n'
+        '            if subscribe_id and season and target_episodes and not upgrade:\n'
+        '                from ...search.pending import unreserved_episodes\n'
+        '                target_episodes[:] = unreserved_episodes(pending, subscribe_id, season, target_episodes)\n'
+        '                if not target_episodes:\n'
+        '                    logger.info("跳过重复候选：目标集已有待完成的离线任务")\n'
+        '                    return ""\n'
+        '        if not self._offline_download.add_offline_download(share_url, staging_dir):')
 replace("plugins.v2/cloudsubscribe/handlers/search/service.py",
         '        for result in results:\n            result.setdefault("source", source)',
         '        from ...search.fansubs import filter_fansubs, is_japanese_anime\n'
