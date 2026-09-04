@@ -153,14 +153,19 @@ class PluginEventHandler(OwnerDelegator):
             return None
 
     def on_subscribe_added(self, event: Event):
-        """新增订阅由搜索调度钩子自动分流。"""
+        """将接管范围内的新增订阅立即加入现有防抖搜索队列。"""
+        if not self._enabled or not self._takeover_new_subscribes:
+            return
         sid = self._get_subscribe_id_from_event(event)
-        if not sid:
+        if not sid or sid <= 0:
             return
         if self._is_subscribe_excluded(sid):
             logger.debug(f"新增订阅不在插件处理范围：subscribe_id={sid}")
             return
-        logger.debug(f"新增订阅等待搜索调度：subscribe_id={sid}")
+        if self.queue_subscribe_search(subscribe_id=sid, subscribe_state="N"):
+            logger.info(f"新增订阅已提交即时搜索队列：subscribe_id={sid}")
+        else:
+            logger.warning(f"新增订阅即时搜索未入队，保留定时重试：subscribe_id={sid}")
 
     def on_subscribe_modified(self, event: Event):
         """ 用户手动修改订阅站点时，不自动覆盖用户操作 """
