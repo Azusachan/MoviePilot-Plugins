@@ -26,6 +26,20 @@ def release_matches(title, expected, season):
     return any(title_matches(part.strip(), expected) for part in clean.split(" / "))
 
 
+def release_episodes(title):
+    """Read explicit anime episode brackets; never interpret resolution/year tags."""
+    matches = re.findall(r"\[(\d{1,2})(?:\s*[-~]\s*(\d{1,2}))?(?:v\d)?\]", title, re.I)
+    if not matches:
+        matches = re.findall(r"\s-\s(\d{1,2})(?:v\d)?(?=\s|\[|$)", title, re.I)
+        matches = [(number, '') for number in matches]
+    episodes = set()
+    for start, end in matches:
+        first, last = int(start), int(end or start)
+        if 0 < first <= last <= 99:
+            episodes.update(range(first, last + 1))
+    return sorted(episodes)
+
+
 def parse_rows(html, base_url):
     results = []
     seen = set()
@@ -95,6 +109,10 @@ class MikanSearchService:
         for keyword in titles[:3]:
             rows = self._rows(keyword)
             matched = [row for row in rows if release_matches(row["title"], titles, query.season)]
+            matched = [dict(row, season=query.season or 1,
+                            episodes=release_episodes(row["title"]),
+                            preview_episodes={str(query.season or 1): release_episodes(row["title"])})
+                       for row in matched]
             logger.info(f"[MIKAN] 关键词={keyword}，返回={len(rows)}，标题匹配={len(matched)}")
             results.extend(matched)
         normalized = normalize_magnets(results, "mikan")

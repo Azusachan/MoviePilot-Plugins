@@ -45,6 +45,10 @@ integration script and tests, then reapplies integration with exact markers.
 An upstream marker conflict stops the release for review.
 # Personal anime subtitle policy (fork revision 2)
 
+Fork revision 3 supplies explicit season/episode fields for Mikan `[08]`,
+`[01-03]`, and ` - 08v2` titles. Resolution and year tags are not episode numbers.
+This avoids unnecessary remote torrent metadata lookups during offline submission.
+
 Mikan results, and Japanese-animation candidates from all other automated search
 sources, require both a named translation group in release tags and an explicit
 Chinese-language marker. No-group, explicitly unsubtitled, and encode-only releases

@@ -20,6 +20,13 @@ exec(compile(tree, "mikan.py", "exec"), namespace)
 
 
 class MikanTests(unittest.TestCase):
+    def test_anime_episode_brackets(self):
+        parse = namespace['release_episodes']
+        self.assertEqual(parse('[桜都字幕组] Example [08][1080P][简繁内封]'), [8])
+        self.assertEqual(parse('[Group] Example [01-03][2026][1080]'), [1,2,3])
+        self.assertEqual(parse('[Group] Example - 08v2 [1080p]'), [8])
+        self.assertEqual(parse('[Group] Example [1080][2026]'), [])
+
     def test_magnet_extraction_and_duplicate_hash(self):
         row = '<tr><td><a href="/Home/Episode/abc">[Group] Example [08]</a></td><td><a href="magnet:?xt=urn:btih:' + 'a' * 40 + '&amp;tr=https://tracker.example">magnet</a></td></tr>'
         result = namespace["parse_rows"]('<table>' + row * 2 + '</table>', 'https://mikanani.me')
