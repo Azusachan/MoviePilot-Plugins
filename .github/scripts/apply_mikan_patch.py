@@ -14,6 +14,30 @@ def replace(path, old, new):
     file.write_text(text.replace(old, new), encoding="utf-8")
 
 
+replace("plugins.v2/cloudsubscribe/core/hook/events.py",
+        '        """新增订阅由搜索调度钩子自动分流。"""\n'
+        '        sid = self._get_subscribe_id_from_event(event)\n'
+        '        if not sid:\n'
+        '            return\n'
+        '        if self._is_subscribe_excluded(sid):\n'
+        '            logger.debug(f"新增订阅不在插件处理范围：subscribe_id={sid}")\n'
+        '            return\n'
+        '        logger.debug(f"新增订阅等待搜索调度：subscribe_id={sid}")',
+        '        """将接管范围内的新增订阅立即加入现有防抖搜索队列。"""\n'
+        '        if not self._enabled or not self._takeover_new_subscribes:\n'
+        '            return\n'
+        '        sid = self._get_subscribe_id_from_event(event)\n'
+        '        if not sid or sid <= 0:\n'
+        '            return\n'
+        '        if self._is_subscribe_excluded(sid):\n'
+        '            logger.debug(f"新增订阅不在插件处理范围：subscribe_id={sid}")\n'
+        '            return\n'
+        '        if self.queue_subscribe_search(subscribe_id=sid, subscribe_state="N"):\n'
+        '            logger.info(f"新增订阅已提交即时搜索队列：subscribe_id={sid}")\n'
+        '        else:\n'
+        '            logger.warning(f"新增订阅即时搜索未入队，保留定时重试：subscribe_id={sid}")')
+
+
 replace("plugins.v2/cloudsubscribe/__init__.py",
         '"pinglian", "online_docs",\n            )',
         '"pinglian", "online_docs", "mikan",\n            )')

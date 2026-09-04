@@ -59,6 +59,13 @@ Fork revision `.1` adds Mikan. Normal merges preserve fork changes and history.
 Integration scripts check exact markers; a conflict stops the PR for review.
 # Personal anime subtitle policy (fork revision 2)
 
+Fork revision 7 immediately queues `SubscribeAdded` events when the plugin and
+`takeover_new_subscribes` are enabled and the subscription is in scope. Movies and
+TV use the existing per-media debounced queue; no direct download is started by
+the callback. Disabled/excluded subscriptions and invalid IDs are ignored. Cron
+still retries unresolved subscriptions. This does not replay previously added
+subscriptions on upgrade; those can be searched manually or wait for Cron.
+
 Fork revision 3 supplies explicit season/episode fields for Mikan `[08]`,
 `[01-03]`, and ` - 08v2` titles. Resolution and year tags are not episode numbers.
 This avoids unnecessary remote torrent metadata lookups during offline submission.
