@@ -54,9 +54,14 @@ jobs:
           cp .github/workflows/sync-upstream.yml "$fork_files/.github/workflows/"
           cp tests/test_plex_episode_resolver.py "$fork_files/tests/"
           cp FORK.md "$fork_files/"
+          for path in .github/scripts/apply_mikan_patch.py plugins.v2/cloudsubscribe/search/mikan.py frontend/cloudsubscribe/src/config/fields/search/mikan.js tests/test_mikan.py; do
+            mkdir -p "$fork_files/$(dirname "$path")"
+            cp "$path" "$fork_files/$path"
+          done
           git read-tree --reset -u upstream/main
           cp -R "$fork_files/." .
           python3 .github/scripts/apply_plex_patch.py
+          python3 .github/scripts/apply_mikan_patch.py
           version="$(python3 .github/scripts/set_commit_version.py "$UPSTREAM_SHA")"
           echo "FORK_VERSION=$version" >> "$GITHUB_ENV"
 
@@ -65,6 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip install beautifulsoup4
           python3 -m unittest discover -s tests -v
           python3 -m compileall -q plugins.v2/cloudsubscribe
           python3 .github/scripts/get_plugin_meta.py >/dev/null

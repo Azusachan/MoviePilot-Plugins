@@ -118,6 +118,7 @@ class SearchHandler:
             enable_cloud_upgrade: bool = False,
             upgrade_subscribe_ids: Optional[List[int]] = None,
             should_stop: Any = None,
+            mikan_config=None,
     ):
         """
         初始化搜索处理器
@@ -133,6 +134,7 @@ class SearchHandler:
         :param pansou_channels: PanSou 搜索频道
         :param search_source_order: 自定义搜索源优先级列表，如 ["pansou", "hdhive"]
         """
+        self._mikan_config = mikan_config or {}
         self._pansou_client = pansou_client
         self._hdhive_client = hdhive_client
         self._seedhub_client = seedhub_client

@@ -1,3 +1,4 @@
+import {createMikanGroups} from "./mikan.js";
 import {createButailingGroups} from "./butailing.js";
 import {createCommonSearchGroups} from "./common.js";
 import {createDian115Groups} from "./dian115.js";
@@ -21,6 +22,7 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       {value: "juying", title: "聚影", icon: "mdi-movie-search-outline"},
       {value: "pinglian", title: "盘链", icon: "mdi-link-variant"},
       {value: "seedhub", title: "SeedHub", icon: "mdi-seed-outline"},
+      {value: "mikan", title: "蜜柑", icon: "mdi-magnet"},
       {value: "butailing", title: "不太灵", icon: "mdi-magnet"},
       {value: "online_docs", title: "在线文档", icon: "mdi-file-document-outline"},
     ],
@@ -29,6 +31,7 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       ...createPansouGroups(options.pansou || {}),
       ...createJuyingGroups(options),
       ...createSeedhubGroups(),
+      ...createMikanGroups(),
       ...createButailingGroups(),
       ...createHdhiveGroups(options),
       ...createDian115Groups(options),

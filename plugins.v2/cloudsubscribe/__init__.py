@@ -111,7 +111,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.3.0.30.4113148313"
+    plugin_version = "1.3.0.30.4113148313.1"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -742,7 +742,7 @@ class CloudSubscribe(_PluginBase):
 
             source_names = (
                 "hdhive", "dian115", "pansou", "juying", "seedhub", "butailing",
-                "pinglian", "online_docs",
+                "pinglian", "online_docs", "mikan",
             )
             raw_order = config.get("search_source_order", []) or []
             if isinstance(raw_order, str):
@@ -1673,6 +1673,7 @@ class CloudSubscribe(_PluginBase):
         self._init_subscribe_handler()
 
         self._search_handler = SearchHandler(
+            mikan_config=self.get_config() or {},
             pansou_client=self._pansou_client,
             hdhive_client=self._hdhive_client,
             seedhub_client=self._seedhub_client,

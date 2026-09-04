@@ -213,7 +213,7 @@ class FormContent:
         if key == "search_source_order":
             return [{"title": title, "value": value} for title, value in (
                 ("HDHive", "hdhive"), ("Dian115", "dian115"), ("PanSou", "pansou"),
-                ("聚影", "juying"), ("SeedHub", "seedhub"), ("不太灵", "butailing"),
+                ("聚影", "juying"), ("SeedHub", "seedhub"), ("不太灵", "butailing"), ("蜜柑", "mikan"),
                 ("盘链", "pinglian"), ("在线文档", "online_docs"),
             )]
         if key == "resource_type_order":

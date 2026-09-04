@@ -77,6 +77,7 @@ class SearchApi(OwnerDelegator):
             "seedhub_base_url", "seedhub_result_limit", "seedhub_request_interval",
             "seedhub_timeout",
         }),
+        "mikan": frozenset({"mikan_base_url", "mikan_result_limit", "mikan_timeout", "mikan_request_interval"}),
         "butailing": frozenset({
             "butailing_base_url", "butailing_result_limit", "butailing_request_interval",
             "butailing_timeout",
@@ -634,7 +635,7 @@ class SearchApi(OwnerDelegator):
         # 各渠道仍会自行识别真实资源类型，但不会因目标盘配置而丢弃候选。
         if source in {
             "hdhive", "dian115", "juying", "seedhub",
-            "butailing", "pinglian", "pansou",
+            "butailing", "pinglian", "pansou", "mikan",
         }:
             resource_type_order = [
                 "115", "123", "quark", "guangya", "tianyi", "alipan",
@@ -752,6 +753,7 @@ class SearchApi(OwnerDelegator):
             0, int(confirmed_hdhive_unlock_points or 0)
         )
         handler = SearchHandler(
+            mikan_config=config,
             pansou_client=pansou_client,
             hdhive_client=hdhive_client,
             seedhub_client=seedhub_client,
@@ -1019,6 +1021,7 @@ class SearchApi(OwnerDelegator):
             "pansou": "PanSou",
             "juying": "聚影",
             "seedhub": "SeedHub",
+            "mikan": "蜜柑",
             "butailing": "不太灵",
             "pinglian": "盘链",
             "online_docs": "在线文档",

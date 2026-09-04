@@ -70,10 +70,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
+        # Backend fixtures are checked before publishing the Mikan fork.
         if: ${{ matrix.plugin.has_frontend }}
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Verify fork backend
+        if: ${{ matrix.plugin.id == 'CloudSubscribe' }}
+        run: |
+          python3 -m pip install beautifulsoup4
+          python3 -m unittest discover -s tests -v
+          python3 -m compileall -q plugins.v2/cloudsubscribe
 
       - name: Build frontend
         if: ${{ matrix.plugin.has_frontend }}

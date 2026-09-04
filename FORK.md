@@ -29,3 +29,17 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
 
 If upstream changes a patch marker, the action stops before publishing. Do not
 edit generated upstream files directly; update the patch script and tests.
+# Mikan search
+
+The fork includes a public Mikan search provider, defaulting to https://mikanani.me.
+Enable `mikan` in search source order and `magnet` in resource types. It searches
+up to three title aliases, matches release titles, deduplicates info hashes,
+and reuses the existing subscription filtering and 115 offline pipeline.
+The configurable URL, request interval, timeout and result limit are exposed in
+the Mikan settings tab. No Mikan account is required. Later seasons without an
+explicit season marker are conservatively rejected; full absolute-number mapping
+and per-show RSS/subgroup pinning are not implemented yet.
+
+Fork revision `.1` adds Mikan. Upstream sync preserves the provider, UI field file,
+integration script and tests, then reapplies integration with exact markers.
+An upstream marker conflict stops the release for review.

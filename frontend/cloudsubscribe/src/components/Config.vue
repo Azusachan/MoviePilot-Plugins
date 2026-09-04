@@ -653,6 +653,7 @@ const sourceNames = {
   dian115: "Dian115",
   juying: "聚影",
   seedhub: "SeedHub",
+  mikan: "蜜柑",
   butailing: "不太灵",
   pinglian: "盘链",
   online_docs: "在线文档",
@@ -671,6 +672,7 @@ const autoSubscribeTestMessage = computed(() => {
   return autoSubscribeTestResult.value?.message || "测试完成";
 });
 const sourceTestConfigKeys = {
+  mikan: ["mikan_base_url", "mikan_result_limit", "mikan_request_interval", "mikan_timeout"],
   pansou: [
     "pansou_url",
     "pansou_username",

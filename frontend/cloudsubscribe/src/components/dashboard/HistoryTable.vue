@@ -689,6 +689,7 @@ const sourceNames = {
   dian115: "Dian115",
   juying: "聚影",
   seedhub: "SeedHub",
+  mikan: "蜜柑",
   butailing: "不太灵",
   pinglian: "盘链",
   online_docs: "在线文档",

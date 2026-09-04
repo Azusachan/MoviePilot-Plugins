@@ -106,4 +106,7 @@ def create_search_registry(
             owner._online_docs_client,
             resource_types,
         ))
+    if "mikan" in owner._search_source_order and "magnet" in resource_types:
+        from .mikan import create_mikan_provider
+        registry.register(create_mikan_provider(owner._mikan_config, owner._search_proxy))
     return registry
