@@ -70,6 +70,25 @@ replace("plugins.v2/cloudsubscribe/core/api/search.py",
         '            "butailing": "不太灵",',
         '            "mikan": "蜜柑",\n            "butailing": "不太灵",')
 print("Mikan integration applied")
+replace("plugins.v2/cloudsubscribe/utils/file_parser.py",
+        '                if relative_path:\n                    item.setdefault("_relative_path", relative_path)',
+        '                if relative_path and hasattr(item, "setdefault"):\n'
+        '                    item.setdefault("_relative_path", relative_path)')
+replace("plugins.v2/cloudsubscribe/handlers/sync/postprocess.py",
+        '            episode_files = self._match_episode_files(\n'
+        '                video_files,\n                mediainfo,\n                subscribe,\n'
+        '                max(1, int(season or 1)),\n                target_episodes,\n            )',
+        '            resource = item.get("resource") or {}\n'
+        '            if resource.get("source") == "mikan":\n'
+        '                from ...search.mikan import mikan_file_candidates\n'
+        '                candidates = mikan_file_candidates(video_files, resource.get("title") or "",\n'
+        '                                                   max(1, int(season or 1)), target_episodes)\n'
+        '                episode_files = {episode: self._search_handler.select_file_candidate(files, mediainfo, subscribe)\n'
+        '                                 for episode, files in candidates.items()}\n'
+        '            else:\n'
+        '                episode_files = self._match_episode_files(\n'
+        '                    video_files, mediainfo, subscribe,\n'
+        '                    max(1, int(season or 1)), target_episodes,\n                )')
 replace("plugins.v2/cloudsubscribe/handlers/sync/service.py",
         '            if pending_key in pending:\n                return pending_key\n        if not self._offline_download.add_offline_download(share_url, staging_dir):',
         '            if pending_key in pending:\n                return pending_key\n'

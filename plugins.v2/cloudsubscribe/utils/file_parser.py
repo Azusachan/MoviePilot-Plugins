@@ -73,6 +73,6 @@ class MediaFileParser:
                     item.get("children") or [], relative_path
                 )
             else:
-                if relative_path:
+                if relative_path and hasattr(item, "setdefault"):
                     item.setdefault("_relative_path", relative_path)
                 yield item

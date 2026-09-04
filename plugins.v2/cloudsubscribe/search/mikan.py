@@ -12,6 +12,7 @@ from app.log import logger
 from .magnet import media_titles, normalize_magnets
 from .matching import title_matches, unique_texts, extract_season
 from .fansubs import filter_fansubs
+from .fansubs import fansub_priority
 from ..core.search import SearchCapability, SearchPolicy, SearchProvider
 
 
@@ -38,6 +39,23 @@ def release_episodes(title):
         if 0 < first <= last <= 99:
             episodes.update(range(first, last + 1))
     return sorted(episodes)
+
+
+def mikan_file_candidates(files, release_title, season, targets):
+    """Use bilingual names from the already-matched release, never guess a title."""
+    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", release_title)
+    clean = re.split(r"\s*\[|\s+-\s+\d", clean, maxsplit=1)[0]
+    aliases = [part.strip() for part in clean.split(" / ") if part.strip()]
+    candidates = {episode: [] for episode in targets}
+    for file in files:
+        name = str(file.get('name') or '')
+        episodes = release_episodes(name)
+        if (len(episodes) != 1 or episodes[0] not in candidates
+                or fansub_priority(name) is None
+                or not release_matches(name, aliases, season)):
+            continue
+        candidates[episodes[0]].append(file)
+    return candidates
 
 
 def parse_rows(html, base_url):

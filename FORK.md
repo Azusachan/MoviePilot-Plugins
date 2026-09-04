@@ -53,6 +53,12 @@ Fork revision 4 reserves pending Magnet episodes per subscription/season, avoidi
 simultaneous downloads of simplified/traditional/embedded variants of one episode.
 Reservations disappear with the pending task; failures can be retried later.
 
+Fork revision 5 preserves immutable CloudFile objects during file-tree traversal.
+Mikan finalization validates actual filenames against the bilingual aliases in the
+already-matched release, explicit episode number, season and Chinese fansub tags.
+Other sources retain the normal platform matcher. Native file identities are kept
+intact for cloud move and playback URL generation.
+
 Mikan results, and Japanese-animation candidates from all other automated search
 sources, require both a named translation group in release tags and an explicit
 Chinese-language marker. No-group, explicitly unsubtitled, and encode-only releases

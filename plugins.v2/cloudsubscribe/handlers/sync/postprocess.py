@@ -1337,13 +1337,18 @@ class PostprocessService(OwnerDelegator):
                     continue
                 if episode > 0:
                     target_episodes.append(episode)
-            episode_files = self._match_episode_files(
-                video_files,
-                mediainfo,
-                subscribe,
-                max(1, int(season or 1)),
-                target_episodes,
-            )
+            resource = item.get("resource") or {}
+            if resource.get("source") == "mikan":
+                from ...search.mikan import mikan_file_candidates
+                candidates = mikan_file_candidates(video_files, resource.get("title") or "",
+                                                   max(1, int(season or 1)), target_episodes)
+                episode_files = {episode: self._search_handler.select_file_candidate(files, mediainfo, subscribe)
+                                 for episode, files in candidates.items()}
+            else:
+                episode_files = self._match_episode_files(
+                    video_files, mediainfo, subscribe,
+                    max(1, int(season or 1)), target_episodes,
+                )
             matched = [
                 (episode, episode_files[episode][0], episode_files[episode][1])
                 for episode in target_episodes
