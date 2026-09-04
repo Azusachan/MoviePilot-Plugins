@@ -9,7 +9,7 @@ Emby-specific path and media-stream logic used elsewhere.
 
 Published versions use:
 
-`<upstream-version>.<upstream-commit-count>.<short-commit-as-decimal>`
+`<upstream-version>.<upstream-commit-count>.<short-commit-as-decimal>.<fork-revision>`
 
 Only numeric components are used because MoviePilot's version comparator treats
 unknown text components as older than a normal release. The full commit remains
@@ -21,14 +21,29 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
 
 `sync-upstream.yml` checks upstream daily and can also be run manually. It:
 
-1. Rebuilds the tracked tree from the newest upstream `main` commit.
-2. Applies the fail-closed Plex patch.
-3. Derives a commit-based version.
-4. Runs unit tests, Python compilation, and the frontend build.
-5. Pushes and publishes a release only when every step succeeds.
+1. Creates a `codex/sync-upstream-<full-SHA>` branch from upstream and opens a PR
+   against fork `main` **before** attempting the merge.
+2. Merges fork `main` into that branch using `git merge --no-ff`. Conflicts are
+   never auto-resolved: the merge is aborted and the PR stays visibly conflicting.
+3. Checks the fail-closed Plex/Mikan integration and derives a commit-based version.
+4. Runs backend tests, compilation, and a frontend build, publishing the
+   `upstream-sync/validation` commit status and failure comments on the PR.
+5. After successful validation, merges the exact tested PR head using a merge
+   commit, then explicitly dispatches `plugins-release.yml` for CloudSubscribe.
 
-If upstream changes a patch marker, the action stops before publishing. Do not
-edit generated upstream files directly; update the patch script and tests.
+No rebase, tree replacement, force push, or direct push to `main` is used.
+An existing unresolved sync PR is resumed rather than creating daily duplicates.
+If `main` advances during tests, the run stops and must be rerun to merge/retest.
+Resolve conflicts or failed integration on the PR branch, push normally, and rerun
+the sync workflow; blocked PRs are never silently discarded. A closed unmerged PR
+may be proposed again if its upstream commit remains unmerged.
+
+GitHub Actions must be allowed to create PRs in repository Actions settings.
+The workflow explicitly records validation status and dispatches release; it does
+not rely on `GITHUB_TOKEN` PR/push events automatically triggering other workflows.
+The release workflow builds assets after merging; failed releases remain visible
+as failed Actions runs and can be retried manually. Patch scripts remain
+compatibility assertions, not a mechanism to overwrite conflicts.
 # Mikan search
 
 The fork includes a public Mikan search provider, defaulting to https://mikanani.me.
@@ -40,9 +55,8 @@ the Mikan settings tab. No Mikan account is required. Later seasons without an
 explicit season marker are conservatively rejected; full absolute-number mapping
 and per-show RSS/subgroup pinning are not implemented yet.
 
-Fork revision `.1` adds Mikan. Upstream sync preserves the provider, UI field file,
-integration script and tests, then reapplies integration with exact markers.
-An upstream marker conflict stops the release for review.
+Fork revision `.1` adds Mikan. Normal merges preserve fork changes and history.
+Integration scripts check exact markers; a conflict stops the PR for review.
 # Personal anime subtitle policy (fork revision 2)
 
 Fork revision 3 supplies explicit season/episode fields for Mikan `[08]`,
