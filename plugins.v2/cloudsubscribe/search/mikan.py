@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from app.log import logger
 from .magnet import media_titles, normalize_magnets
 from .matching import title_matches, unique_texts, extract_season
+from .fansubs import filter_fansubs
 from ..core.search import SearchCapability, SearchPolicy, SearchProvider
 
 
@@ -97,6 +98,9 @@ class MikanSearchService:
             logger.info(f"[MIKAN] 关键词={keyword}，返回={len(rows)}，标题匹配={len(matched)}")
             results.extend(matched)
         normalized = normalize_magnets(results, "mikan")
+        before = len(normalized)
+        normalized = filter_fansubs(normalized)
+        logger.info(f"[MIKAN] 字幕组与中文字幕过滤：{before} → {len(normalized)}")
         limit = min(self.limit, query.result_limit) if query.result_limit else self.limit
         logger.info(f"[MIKAN] 去重后候选={len(normalized)}，返回上限={limit}")
         return normalized[:limit]

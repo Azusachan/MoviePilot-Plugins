@@ -607,6 +607,11 @@ class SearchHandler:
             target_episodes: Optional[List[int]],
             apply_platform_rules: bool,
     ) -> List[Dict]:
+        from ...search.fansubs import filter_fansubs, is_japanese_anime
+        if is_japanese_anime(mediainfo):
+            before = len(results)
+            results = filter_fansubs(results)
+            logger.info(f"[{source.upper()}] 日番字幕策略：{before} → {len(results)}")
         for result in results:
             result.setdefault("source", source)
         ordered = self._prefilter_resource_order(
@@ -923,6 +928,7 @@ class SearchHandler:
             self._resource_type_order(resource),
             self._resource_availability_order(resource),
             resource.get("is_official") is not True,
+            -int(resource.get("fansub_priority") or 0),
             *self._resource_target_coverage(resource, season, targets),
             self._resource_unlock_points(resource.get("unlock_points")),
             -int(resource.get("platform_priority") or 0),
@@ -955,6 +961,7 @@ class SearchHandler:
                 type_order,
                 self._resource_availability_order(item),
                 item.get("is_official") is not True,
+                -int(item.get("fansub_priority") or 0),
                 *coverage,
                 self._resource_unlock_points(item.get("unlock_points")),
                 -int(item.get("platform_priority") or 0),

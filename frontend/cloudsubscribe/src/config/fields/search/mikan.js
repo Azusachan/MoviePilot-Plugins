@@ -1,6 +1,6 @@
 export function createMikanGroups() {
   return [{tab: "mikan", title: "蜜柑", icon: "mdi-magnet",
-    hint: "公开搜索无需账号。按标题匹配磁力资源，复用订阅规则与115离线下载。",
+    hint: "公开搜索无需账号。仅接受标注中文字幕及字幕组的资源；排除无字幕与仅压制组资源。偏好：SweetSub/千夏/拨雪/喵萌 → 诸神/澄空/华盟/北宇治/霜庭 → 桜都/豌豆/动漫国/极影 → 其他明确字幕组。同梯队不分先后。",
     fields: [
       {key: "mikan_base_url", label: "服务地址", cols: 12},
       {key: "test_mikan", label: "测试搜索", type: "test-source", source: "mikan", cols: 12},

@@ -70,6 +70,21 @@ replace("plugins.v2/cloudsubscribe/core/api/search.py",
         '            "butailing": "不太灵",',
         '            "mikan": "蜜柑",\n            "butailing": "不太灵",')
 print("Mikan integration applied")
+replace("plugins.v2/cloudsubscribe/handlers/search/service.py",
+        '        for result in results:\n            result.setdefault("source", source)',
+        '        from ...search.fansubs import filter_fansubs, is_japanese_anime\n'
+        '        if is_japanese_anime(mediainfo):\n'
+        '            before = len(results)\n'
+        '            results = filter_fansubs(results)\n'
+        '            logger.info(f"[{source.upper()}] 日番字幕策略：{before} → {len(results)}")\n'
+        '        for result in results:\n            result.setdefault("source", source)')
+replace("plugins.v2/cloudsubscribe/handlers/search/service.py",
+        '            *self._resource_target_coverage(resource, season, targets),',
+        '            -int(resource.get("fansub_priority") or 0),\n'
+        '            *self._resource_target_coverage(resource, season, targets),')
+replace("plugins.v2/cloudsubscribe/handlers/search/service.py",
+        '                *coverage,',
+        '                -int(item.get("fansub_priority") or 0),\n                *coverage,')
 replace("frontend/cloudsubscribe/src/components/Config.vue",
         'const sourceTestConfigKeys = {',
         'const sourceTestConfigKeys = {\n  mikan: ["mikan_base_url", "mikan_result_limit", "mikan_request_interval", "mikan_timeout"],')
