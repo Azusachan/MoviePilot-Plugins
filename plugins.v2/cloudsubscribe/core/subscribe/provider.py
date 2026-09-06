@@ -7,6 +7,21 @@ from threading import Event
 from typing import Any, Iterator, Optional
 
 
+def ranking_scan_limit(options: dict[str, Any]) -> int:
+    """为榜单过滤预留后续候选，实际新增数量仍由 ``limit`` 控制。"""
+    internal_limit = options.get("_candidate_scan_limit")
+    if internal_limit is not None:
+        try:
+            return max(1, min(int(internal_limit), 500))
+        except (TypeError, ValueError):
+            pass
+    try:
+        limit = max(1, min(int(options.get("limit") or 20), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    return min(500, max(100, limit * 5))
+
+
 @dataclass
 class SubscribeContext:
     owner: Any = None

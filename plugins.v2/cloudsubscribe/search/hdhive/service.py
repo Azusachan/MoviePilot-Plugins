@@ -84,9 +84,9 @@ class HDHiveSearchService(OwnerDelegator):
         candidate = str(resource.get("source_url") or "").strip()
         if not candidate:
             return ""
-        resolved = urljoin("https://hdhive.com/", candidate)
+        resolved = urljoin("https://re0.me/", candidate)
         parsed = urlparse(resolved)
-        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != "hdhive.com":
+        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != "re0.me":
             return ""
         if not re.fullmatch(
                 r"/resource/(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9_-]+",
@@ -139,7 +139,7 @@ class HDHiveSearchService(OwnerDelegator):
             return ""
         if normalized_type not in {"movie", "tv"} or normalized_tmdb_id <= 0:
             return ""
-        return f"https://hdhive.com/tmdb/{normalized_type}/{normalized_tmdb_id}"
+        return f"https://re0.me/tmdb/{normalized_type}/{normalized_tmdb_id}"
 
     @staticmethod
     def _valid_share_value(value: Any, resource_type: str) -> bool:

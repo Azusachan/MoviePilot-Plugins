@@ -1,4 +1,4 @@
-"""不太灵搜索能力声明。"""
+"""UIndex 搜索能力声明。"""
 
 from typing import Any, Mapping
 
@@ -9,13 +9,13 @@ from ...core.search import (
 )
 
 
-def create_butailing_provider(
+def create_uindex_provider(
         service: Any,
         cache_context: Mapping[str, Any],
 ) -> SearchProvider:
     return SearchProvider(
-        key="butailing",
-        name="不太灵",
+        key="uindex",
+        name="UIndex",
         resource_types=frozenset({"magnet"}),
         services={
             SearchCapability.RESOURCE_SEARCH: service,

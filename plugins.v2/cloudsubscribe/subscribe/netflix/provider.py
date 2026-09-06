@@ -5,10 +5,11 @@ from datetime import datetime, timezone
 from threading import RLock
 from typing import Iterator
 
-from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
-from ...core.subscribe.registry import register
 from .client import NetflixClient
 from .service import NetflixService
+from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
+from ...core.subscribe.provider import ranking_scan_limit
+from ...core.subscribe.registry import register
 
 GLOBAL_CATEGORIES = (
     "Films (English)", "Films (Non-English)", "TV (English)", "TV (Non-English)"
@@ -42,11 +43,12 @@ class NetflixSubscribeProvider(SubscribeProvider):
     def fetch(self, options: dict, context: SubscribeContext) -> Iterator[MediaCandidate]:
         proxy = context.proxy_for(options.get("proxy"))
         limit = max(1, min(int(options.get("limit") or 10), 100))
+        scan_limit = ranking_scan_limit(options)
         base_url = str(options.get("base_url") or NetflixClient.BASE_URL).strip()
         client = self.client if base_url.rstrip("/") == self.client.base_url else NetflixClient(base_url)
         seen: set[str] = set()
         if options.get("rich_metadata"):
-            yield from self._fetch_rich(options, context, limit, proxy, seen, client)
+            yield from self._fetch_rich(options, context, scan_limit, proxy, seen, client)
             return
         if options.get("global", True):
             dataset = str(options.get("global_dataset") or "weekly")
@@ -60,7 +62,7 @@ class NetflixSubscribeProvider(SubscribeProvider):
             for category in categories or GLOBAL_CATEGORIES:
                 if category not in GLOBAL_CATEGORIES:
                     continue
-                for item in self.service.candidates(rows, category, "global", limit):
+                for item in self.service.candidates(rows, category, "global", scan_limit):
                     if item.unique_seed not in seen:
                         seen.add(item.unique_seed)
                         yield item

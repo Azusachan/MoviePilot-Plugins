@@ -49,5 +49,5 @@ export function createTianyiGroups(options) {
       hint: "作用于天翼云盘 HTTP 请求，范围 10-300 秒。",
       fields: [{key: "tianyi_request_timeout", label: "请求超时（秒）", type: "number", min: 10, max: 300, cols: 6}],
     },
-  ];
+  ]
 }

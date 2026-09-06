@@ -16,7 +16,7 @@ from app.log import logger
 from .action import ServerActionProtocol, ServerActionResponse
 from .parser import decode_embedded_text, response_body, response_text
 
-BASE_URL = "https://hdhive.com"
+BASE_URL = "https://re0.me"
 ALPHABET = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 CHALLENGE_PATH = "/security-check"
 TEXT_TOP = 20
@@ -535,7 +535,7 @@ class HDHiveCaptchaSolver:
         challenge_id = parse_qs(parsed.query).get("challenge", [""])[0]
         if (
                 parsed.scheme == "https"
-                and parsed.hostname == "hdhive.com"
+                and parsed.hostname == "re0.me"
                 and parsed.path == CHALLENGE_PATH
                 and UUID_RE.fullmatch(challenge_id)
         ):
@@ -549,7 +549,7 @@ class HDHiveCaptchaSolver:
     @staticmethod
     def _safe_path(value: str, fallback: str = "/") -> str:
         resolved = urlsplit(urljoin(f"{BASE_URL}/", str(value or "").lstrip("/")))
-        if resolved.scheme != "https" or resolved.hostname != "hdhive.com":
+        if resolved.scheme != "https" or resolved.hostname != "re0.me":
             return fallback
         path = resolved.path or "/"
         return f"{path}?{resolved.query}" if resolved.query else path

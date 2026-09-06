@@ -200,17 +200,31 @@ class PluginEventHandler(OwnerDelegator):
             text: str,
             buttons: Optional[list] = None,
     ) -> None:
-        self.post_message(
-            mtype=NotificationType.Plugin,
-            channel=event_data.get("channel"),
-            source=event_data.get("source"),
-            title=title,
-            text=text,
-            userid=self._event_userid(event_data),
-            username=event_data.get("username"),
-            buttons=buttons,
-            disable_web_page_preview=True,
-        )
+        message_args = {
+            "mtype": NotificationType.Plugin,
+            "channel": event_data.get("channel"),
+            "source": event_data.get("source"),
+            "title": title,
+            "text": text,
+            "userid": self._event_userid(event_data),
+            "username": event_data.get("username"),
+            "buttons": buttons,
+            "disable_web_page_preview": True,
+        }
+        try:
+            response = self.chain.send_direct_message(Notification(
+                **message_args,
+                save_history=False,
+            ))
+            if response and getattr(response, "success", False):
+                return
+            logger.warning(f"Telegram 命令回复直发失败，回退普通通知：{title}")
+        except Exception as error:
+            logger.warning(f"Telegram 命令回复直发异常，回退普通通知：{error}")
+        try:
+            self.post_message(**message_args)
+        except Exception as error:
+            logger.error(f"Telegram 命令回复发送失败：{error}", exc_info=True)
 
     @staticmethod
     def _progress_message_data(response) -> Optional[dict]:

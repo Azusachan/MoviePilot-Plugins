@@ -289,6 +289,8 @@
                 <v-text-field
                   v-else-if="field.type === 'proxy'"
                   v-model="config[field.key]"
+                  :name="field.key"
+                  autocomplete="off"
                   :label="field.label"
                   :hint="field.hint"
                   :placeholder="field.placeholder"
@@ -312,6 +314,8 @@
                 <v-text-field
                   v-else-if="field.type === 'auto-subscribe-proxy'"
                   v-model="config[field.key]"
+                  :name="field.key"
+                  autocomplete="off"
                   :label="field.label"
                   :hint="field.hint"
                   :placeholder="field.placeholder"
@@ -352,6 +356,8 @@
                   v-model="config[field.key]"
                   :label="field.label"
                   :type="field.type || 'text'"
+                  :name="field.key"
+                  :autocomplete="field.type === 'password' ? 'new-password' : field.autocomplete || 'off'"
                   :hint="field.hint"
                   :placeholder="field.placeholder"
                   :persistent-hint="Boolean(field.hint)"
@@ -448,28 +454,12 @@ function testSourceTitle(source) {
 }
 
 function isAutoSubscribeConfigured(provider) {
-  if (provider === "douban") {
-    return Boolean(
-      props.config.auto_subscribe_douban_ranks?.length || hasText(props.config.auto_subscribe_douban_rss_urls),
-    );
-  }
-  if (provider === "maoyan") {
-    return Boolean(
-      props.config.auto_subscribe_maoyan_movie_box ||
-      Object.keys(props.config.auto_subscribe_maoyan_web_platform_map || {}).length,
-    );
-  }
-  if (provider === "netflix") {
-    return Boolean(
-      (props.config.auto_subscribe_netflix_global && props.config.auto_subscribe_netflix_global_media_types?.length) ||
-      Object.keys(props.config.auto_subscribe_netflix_country_selections || {}).length,
-    );
-  }
-  return provider === "mikan";
+  // 所有支持的榜单提供方均允许直接测试连通性并抓取示例（未配置具体分类时自动使用默认榜单）
+  return ["douban", "tmdb", "bangumi", "anilist", "maoyan", "netflix", "mikan"].includes(provider);
 }
 
 function autoSubscribeTestTitle(provider) {
-  return isAutoSubscribeConfigured(provider) ? "抓取最多 3 条示例，不创建订阅" : "请先配置至少一个榜单";
+  return "测试抓取最多 3 条榜单示例，仅验证连通性，不创建订阅";
 }
 
 function onlineDocuments(key) {
@@ -687,5 +677,14 @@ function mediaLibraryWebhookUrl(field, serverName) {
   .online-document-row :deep(.v-select) {
     grid-column: 1;
   }
+}
+
+:deep(input:-webkit-autofill),
+:deep(input:-webkit-autofill:hover),
+:deep(input:-webkit-autofill:focus),
+:deep(input:-webkit-autofill:active) {
+  -webkit-box-shadow: 0 0 0 1000px rgb(var(--v-theme-surface)) inset !important;
+  -webkit-text-fill-color: rgb(var(--v-theme-on-surface)) !important;
+  transition: background-color 5000s ease-in-out 0s;
 }
 </style>

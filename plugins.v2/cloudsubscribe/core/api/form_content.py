@@ -34,13 +34,16 @@ class FormContent:
         "auto_subscribe_douban_rsshub_base": "RSSHub 服务地址", "auto_subscribe_douban_rss_urls": "自定义 RSS 地址",
         "auto_subscribe_douban_proxy": "豆瓣启用代理",
         "auto_subscribe_douban_enabled": "启用豆瓣榜单",
+        "auto_subscribe_douban_limit": "豆瓣每榜条数",
         "auto_subscribe_douban_ranks": "豆瓣热门榜单", "auto_subscribe_douban_media_type": "豆瓣媒体类型",
         "auto_subscribe_douban_min_vote": "豆瓣最低评分", "auto_subscribe_douban_min_year": "豆瓣最低年份",
+        "auto_subscribe_douban_min_month": "豆瓣起始月份",
         "auto_subscribe_maoyan_enabled": "启用猫眼榜单",
         "auto_subscribe_maoyan_base_url": "猫眼服务地址", "auto_subscribe_maoyan_movie_box": "猫眼电影票房榜",
         "auto_subscribe_maoyan_platforms": "猫眼网播平台", "auto_subscribe_maoyan_categories": "猫眼网播类型",
         "auto_subscribe_maoyan_limit": "猫眼每榜条数", "auto_subscribe_maoyan_media_type": "猫眼媒体类型",
         "auto_subscribe_maoyan_min_vote": "猫眼最低评分", "auto_subscribe_maoyan_min_year": "猫眼最低年份",
+        "auto_subscribe_maoyan_min_month": "猫眼起始月份",
         "auto_subscribe_netflix_enabled": "启用 Netflix 榜单",
         "auto_subscribe_netflix_base_url": "Netflix 服务地址", "auto_subscribe_netflix_global": "Netflix 全球榜",
         "auto_subscribe_netflix_global_dataset": "Netflix 全球数据源",
@@ -50,12 +53,21 @@ class FormContent:
         "auto_subscribe_netflix_max_workers": "Netflix 元数据并发数",
         "auto_subscribe_netflix_use_cache": "Netflix 启用周更缓存",
         "auto_subscribe_netflix_min_vote": "Netflix 最低评分", "auto_subscribe_netflix_min_year": "Netflix 最低年份",
+        "auto_subscribe_netflix_min_month": "Netflix 起始月份",
+        "auto_subscribe_tmdb_limit": "TMDB 每榜条数",
+        "auto_subscribe_tmdb_min_month": "TMDB 起始月份",
+        "auto_subscribe_bangumi_limit": "Bangumi 每榜条数",
+        "auto_subscribe_bangumi_min_month": "Bangumi 起始月份",
+        "auto_subscribe_anilist_limit": "AniList 每榜条数",
+        "auto_subscribe_anilist_min_month": "AniList 起始月份",
         "auto_subscribe_mikan_enabled": "启用 Mikan 新番",
+        "auto_subscribe_mikan_limit": "Mikan 每榜条数",
         "auto_subscribe_mikan_year": "Mikan 番组年份", "auto_subscribe_mikan_season": "Mikan 季度",
         "auto_subscribe_mikan_base_urls": "Mikan 服务地址",
         "auto_subscribe_mikan_resolve_bangumi_id": "抓取 Bangumi ID",
         "auto_subscribe_mikan_proxy": "Mikan 启用代理",
         "auto_subscribe_mikan_min_vote": "Mikan 最低评分", "auto_subscribe_mikan_min_year": "Mikan 最低年份",
+        "auto_subscribe_mikan_min_month": "Mikan 起始月份",
         "subscribe_filter_mode": "订阅筛选模式", "exclude_subscribes": "排除订阅", "include_subscribes": "指定订阅",
         "cross_transfer_enabled": "跨盘资源自动转存", "skip_other_season_dirs": "跳过其他季目录",
         "transfer_task_batch_size": "任务内每批处理文件数", "subscription_concurrency": "订阅并发数",
@@ -99,9 +111,7 @@ class FormContent:
         "pinglian_result_limit": "盘链候选上限", "pinglian_request_interval": "盘链请求间隔",
         "pinglian_timeout": "盘链请求超时", "seedhub_base_url": "SeedHub 服务地址",
         "seedhub_result_limit": "SeedHub 候选上限", "seedhub_request_interval": "SeedHub 请求间隔",
-        "seedhub_timeout": "SeedHub 请求超时", "butailing_base_url": "不太灵服务地址",
-        "butailing_result_limit": "不太灵候选上限", "butailing_request_interval": "不太灵请求间隔",
-        "butailing_timeout": "不太灵请求超时", "online_docs": "在线文档",
+        "seedhub_timeout": "SeedHub 请求超时", "online_docs": "在线文档",
         "checkin_cron": "签到执行周期", "checkin_auto_retry": "签到失败自动重试", "checkin_retry_count": "签到重试次数",
         "emby_mediainfo_enabled": "启用 Emby 媒体信息提取",
         "timeout_default_connect": "普通连接超时（秒）", "timeout_default_pool": "普通连接池超时（秒）",
@@ -164,7 +174,7 @@ class FormContent:
         "netflix": "Netflix", "mikan": "Mikan", "enabled": "启用",
         "cron": "执行周期", "proxy": "代理", "base_url": "服务地址",
         "request_interval": "请求间隔", "timeout": "超时", "limit": "数量上限",
-        "min_vote": "最低评分", "min_year": "最低年份", "checkin": "签到",
+        "min_vote": "最低评分", "min_year": "最低年份", "min_month": "起始月份", "checkin": "签到",
         "retry": "重试", "count": "次数", "search": "搜索", "source": "来源",
         "order": "优先级", "resource": "资源", "type": "类型", "media": "媒体",
         "path": "目录", "transfer": "转存", "download": "下载", "threads": "线程",
@@ -213,7 +223,7 @@ class FormContent:
         if key == "search_source_order":
             return [{"title": title, "value": value} for title, value in (
                 ("HDHive", "hdhive"), ("Dian115", "dian115"), ("PanSou", "pansou"),
-                ("聚影", "juying"), ("SeedHub", "seedhub"), ("不太灵", "butailing"),
+                ("聚影", "juying"), ("SeedHub", "seedhub"),
                 ("盘链", "pinglian"), ("在线文档", "online_docs"),
             )]
         if key == "resource_type_order":
@@ -226,7 +236,7 @@ class FormContent:
             return [{"title": title, "value": value} for title, value in (
                 ("北美票房榜", "movie-ustop"), ("一周口碑电影榜", "movie-weekly"),
                 ("实时热门电影", "movie-real-time"), ("热门综艺", "show-domestic"),
-                ("热门电影", "movie-hot-gaia"), ("热门电视剧", "tv-hot"), ("电影 TOP250", "movie-top250"),
+                ("热门电影", "movie-hot-gaia"), ("热门电视剧", "tv-hot"),
             )]
         return [{"title": title, "value": value} for title, value in cls._SELECTS.get(key, [])]
 
@@ -278,7 +288,7 @@ class FormContent:
                      ("transfer", "strm", "nfo", "image_scrape", "media_server", "platform_media")):
                 group = "转存与媒体库"
             elif any(token in key for token in
-                     ("search", "pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "butailing",
+                     ("search", "pansou", "dian115", "juying", "pinglian", "seedhub",
                       "online_docs", "magnet")):
                 group = "搜索资源"
             elif any(token in key for token in

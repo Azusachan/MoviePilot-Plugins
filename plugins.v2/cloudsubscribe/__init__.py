@@ -58,7 +58,6 @@ from .drive.p123 import P123ClientManager, P123Drive, create_p123_provider
 from .drive.quark import QuarkClient, QuarkDrive, create_quark_provider
 from .drive.tianyi import TianyiClient, TianyiDrive, create_tianyi_provider
 from .handlers import SearchHandler, SyncHandler, SubscribeHandler, WebhookHandler
-from .search.butailing import ButailingClient
 from .search.hdhive import (
     HDHiveOpenAPIClient, HDHiveOpenAPIError,
 )
@@ -66,12 +65,17 @@ from .search.juying import JuyingClient
 from .search.online_docs import OnlineDocumentClient
 from .search.pansou import PanSouClient
 from .search.pinglian import PinglianClient
+from .search.piratebay import PirateBayClient
 from .search.seedhub import SeedHubClient
+from .search.uindex import UIndexClient
 from .subscribe import (  # noqa: F401 - 导入即注册自动订阅渠道
+    create_anilist_provider,
+    create_bangumi_provider,
     create_douban_provider,
     create_maoyan_provider,
     create_mikan_provider,
     create_netflix_provider,
+    create_tmdb_provider,
 )
 from .utils import configure_magnet_metadata_url
 from .utils.http_client import build_proxy_url, validate_proxy_address
@@ -111,7 +115,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.4"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -188,13 +192,20 @@ class CloudSubscribe(_PluginBase):
     _pansou_refresh: bool = True
     _pansou_timeout: int = 30
     _seedhub_enabled: bool = False
+    _seedhub_base_url: str = "https://www.seedhub.cc"
     _seedhub_result_limit: int = 20
     _seedhub_request_interval: float = 1.0
     _seedhub_timeout: int = 20
-    _butailing_enabled: bool = False
-    _butailing_result_limit: int = 20
-    _butailing_request_interval: float = 1.0
-    _butailing_timeout: int = 30
+    _piratebay_enabled: bool = False
+    _piratebay_base_url: str = "https://apibay.org"
+    _piratebay_result_limit: int = 20
+    _piratebay_request_interval: float = 1.0
+    _piratebay_timeout: int = 20
+    _uindex_enabled: bool = False
+    _uindex_base_url: str = "https://uindex.org"
+    _uindex_result_limit: int = 20
+    _uindex_request_interval: float = 1.0
+    _uindex_timeout: int = 20
     _juying_enabled: bool = False
     _juying_username: str = ""
     _juying_password: str = ""
@@ -222,31 +233,6 @@ class CloudSubscribe(_PluginBase):
     _search_cache_enabled: bool = True
     _search_cache_ttl_minutes: int = 30
     _search_concurrency: int = 2
-    _hdhive_candidate_limit: int = 4
-    _hdhive_request_interval: float = 5.0
-    _hdhive_unlocks_per_minute: int = 2
-    _hdhive_torrentclaw_enabled: bool = False
-    _hdhive_torrentclaw_subtitle_languages: List[str] = ["zh"]
-
-    _hdhive_enabled: bool = False
-    _hdhive_username: str = ""
-    _hdhive_password: str = ""
-    _hdhive_query_mode: str = "web"
-    # OpenAPI 应用凭证：应用 Secret 放 X-API-Key（沿用 hdhive_api_key 配置键）
-    _hdhive_api_key: str = ""
-    _hdhive_client_id: str = ""
-    _hdhive_redirect_uri: str = ""
-    _hdhive_response_mode: str = "redirect"
-    # OAuth 用户授权（授权码为一次性输入，换取 Token 后自动清空）
-    _hdhive_auth_code: str = ""
-    _hdhive_access_token: str = ""
-    _hdhive_refresh_token: str = ""
-    _hdhive_token_expires_at: float = 0
-    _hdhive_auto_unlock: bool = False
-    _hdhive_max_unlock_points: int = 50
-    _hdhive_max_points_per_sub: int = 20
-    _hdhive_checkin_enabled: bool = False
-    _hdhive_checkin_mode: str = "normal"
     _checkin_cron: str = "0 8 * * *"
     _checkin_auto_retry: bool = True
     _checkin_retry_count: int = 2
@@ -264,6 +250,31 @@ class CloudSubscribe(_PluginBase):
     _dian115_candidate_limit: int = 4
     _dian115_request_interval: float = 1.0
     _dian115_unlocks_per_minute: int = 6
+
+    _hdhive_enabled: bool = False
+    _hdhive_base_url: str = "https://re0.me"
+    _hdhive_username: str = ""
+    _hdhive_password: str = ""
+    _hdhive_query_mode: str = "web"
+    _hdhive_api_key: str = ""
+    _hdhive_client_id: str = ""
+    _hdhive_redirect_uri: str = ""
+    _hdhive_response_mode: str = "redirect"
+    _hdhive_auth_code: str = ""
+    _hdhive_access_token: str = ""
+    _hdhive_refresh_token: str = ""
+    _hdhive_token_expires_at: float = 0
+    _hdhive_auto_unlock: bool = False
+    _hdhive_max_unlock_points: int = 50
+    _hdhive_max_points_per_sub: int = 20
+    _hdhive_checkin_enabled: bool = False
+    _hdhive_checkin_mode: str = "normal"
+    _hdhive_candidate_limit: int = 4
+    _hdhive_request_interval: float = 5.0
+    _hdhive_unlocks_per_minute: int = 2
+    _hdhive_torrentclaw_enabled: bool = False
+    _hdhive_torrentclaw_subtitle_languages: List[str] = ["zh"]
+    _hdhive_client: Optional[Any] = None
 
     # 是否屏蔽系统订阅（True=已屏蔽系统订阅，False=已恢复系统订阅）
     _block_system_subscribe: bool = False
@@ -331,7 +342,8 @@ class CloudSubscribe(_PluginBase):
     # 运行时对象
     _pansou_client: Optional[PanSouClient] = None
     _seedhub_client: Optional[SeedHubClient] = None
-    _butailing_client: Optional[ButailingClient] = None
+    _piratebay_client: Optional[PirateBayClient] = None
+    _uindex_client: Optional[UIndexClient] = None
     _juying_client: Optional[JuyingClient] = None
     _pinglian_client: Optional[PinglianClient] = None
     _online_docs_client: Optional[OnlineDocumentClient] = None
@@ -343,7 +355,6 @@ class CloudSubscribe(_PluginBase):
     _alipan_drive: Optional[AliPanDrive] = None
     _cloud_drive_registry: Optional[CloudDriveRegistry] = None
     _cloud_drive: Optional[CloudDriveProvider] = None
-    _hdhive_client: Optional[Any] = None
 
     # 处理器
     _search_handler: Optional[SearchHandler] = None
@@ -526,6 +537,13 @@ class CloudSubscribe(_PluginBase):
         """应用配置并重建相关服务；普通保存不重置同步任务状态。"""
         config = dict(config or {})
         original_config = dict(config)
+        # 丢弃已移除搜索渠道的历史配置，避免旧字段继续进入运行态或保存结果。
+        removed_config_prefixes = ("but" + "ailing_",)
+        config = {
+            key: value
+            for key, value in config.items()
+            if not str(key).lower().startswith(removed_config_prefixes)
+        }
         legacy_download_keys = (
             "block_platform_downloads", "takeover_platform_downloads"
         )
@@ -552,7 +570,7 @@ class CloudSubscribe(_PluginBase):
             config["platform_download_policy"] = policy
         if config != original_config:
             if self.update_config(config):
-                logger.info("订阅接管配置已迁移为新平台下载策略")
+                logger.info("插件配置已清理并迁移到当前格式")
             else:
                 logger.warning("订阅接管配置迁移持久化失败，本次运行仍使用迁移后配置")
         hot_keys = {
@@ -741,8 +759,8 @@ class CloudSubscribe(_PluginBase):
             ).strip().lower()
 
             source_names = (
-                "hdhive", "dian115", "pansou", "juying", "seedhub", "butailing",
-                "pinglian", "online_docs",
+                "hdhive", "dian115", "pansou", "juying", "seedhub",
+                "pinglian", "piratebay", "uindex", "online_docs",
             )
             raw_order = config.get("search_source_order", []) or []
             if isinstance(raw_order, str):
@@ -775,16 +793,12 @@ class CloudSubscribe(_PluginBase):
                 self._search_proxy = ""
             self._pansou_enabled = "pansou" in selected_sources
             self._pansou_url = config.get("pansou_url", "https://so.252035.xyz/")
-            self._hdhive_base_url = str(
-                config.get("hdhive_base_url", "https://hdhive.com") or "https://hdhive.com").strip()
             self._dian115_base_url = str(
                 config.get("dian115_base_url", "https://m.dian115.com") or "https://m.dian115.com").strip()
             self._juying_base_url = str(
                 config.get("juying_base_url", "https://www.jying.top") or "https://www.jying.top").strip()
             self._seedhub_base_url = str(
                 config.get("seedhub_base_url", "https://www.seedhub.cc") or "https://www.seedhub.cc").strip()
-            self._butailing_base_url = str(config.get("butailing_base_url",
-                                                      "https://web5.mukaku.com/prod/api/v1/") or "https://web5.mukaku.com/prod/api/v1/").strip()
             self._pinglian_base_url = str(
                 config.get("pinglian_base_url", "https://pinglian.lol") or "https://pinglian.lol").strip()
             raw_doc_urls = config.get("online_docs") or config.get("online_docs_urls") or []
@@ -841,6 +855,8 @@ class CloudSubscribe(_PluginBase):
                 5, min(int(config.get("pansou_timeout", 30) or 30), 120)
             )
             self._seedhub_enabled = "seedhub" in selected_sources
+            self._seedhub_base_url = str(
+                config.get("seedhub_base_url", "https://www.seedhub.cc") or "https://www.seedhub.cc").strip()
             self._seedhub_result_limit = max(
                 1, min(int(config.get("seedhub_result_limit", 20) or 20), 80)
             )
@@ -850,15 +866,29 @@ class CloudSubscribe(_PluginBase):
             self._seedhub_timeout = max(
                 5, min(int(config.get("seedhub_timeout", 20) or 20), 60)
             )
-            self._butailing_enabled = "butailing" in selected_sources
-            self._butailing_result_limit = max(
-                1, min(int(config.get("butailing_result_limit", 20) or 20), 80)
+            self._piratebay_enabled = "piratebay" in selected_sources
+            self._piratebay_base_url = str(
+                config.get("piratebay_base_url", "https://apibay.org") or "https://apibay.org").strip()
+            self._piratebay_result_limit = max(
+                1, min(int(config.get("piratebay_result_limit", 20) or 20), 80)
             )
-            self._butailing_request_interval = max(
-                1.0, min(float(config.get("butailing_request_interval", 1) or 1), 10.0)
+            self._piratebay_request_interval = max(
+                0.2, min(float(config.get("piratebay_request_interval", 1) or 1), 10.0)
             )
-            self._butailing_timeout = max(
-                5, min(int(config.get("butailing_timeout", 30) or 30), 60)
+            self._piratebay_timeout = max(
+                5, min(int(config.get("piratebay_timeout", 20) or 20), 60)
+            )
+            self._uindex_enabled = "uindex" in selected_sources
+            self._uindex_base_url = str(
+                config.get("uindex_base_url", "https://uindex.org") or "https://uindex.org").strip()
+            self._uindex_result_limit = max(
+                1, min(int(config.get("uindex_result_limit", 20) or 20), 80)
+            )
+            self._uindex_request_interval = max(
+                0.2, min(float(config.get("uindex_request_interval", 1) or 1), 10.0)
+            )
+            self._uindex_timeout = max(
+                5, min(int(config.get("uindex_timeout", 20) or 20), 60)
             )
             self._juying_enabled = "juying" in selected_sources
             self._juying_username = str(
@@ -896,40 +926,8 @@ class CloudSubscribe(_PluginBase):
             if self._subscribe_filter_mode == "include":
                 logger.info(f"订阅过滤模式：指定模式，仅处理 {len(self._include_subscribes)} 个勾选订阅")
 
-            self._hdhive_enabled = "hdhive" in selected_sources
-            self._hdhive_query_mode = str(
-                config.get("hdhive_query_mode", "web") or "web"
-            )
-            if self._hdhive_query_mode not in {"api", "web"}:
-                self._hdhive_query_mode = "web"
-            self._hdhive_api_key = (config.get("hdhive_api_key", "") or "").strip()
-            self._hdhive_client_id = (config.get("hdhive_client_id", "") or "").strip()
-            self._hdhive_redirect_uri = (config.get("hdhive_redirect_uri", "") or "").strip()
-            self._hdhive_response_mode = str(
-                config.get("hdhive_response_mode", "redirect") or "redirect"
-            ).strip().lower()
-            if self._hdhive_response_mode not in {"redirect", "postmessage"}:
-                self._hdhive_response_mode = "redirect"
-            self._hdhive_auth_code = (config.get("hdhive_auth_code", "") or "").strip()
-            self._hdhive_access_token = config.get("hdhive_access_token", "")
-            self._hdhive_refresh_token = config.get("hdhive_refresh_token", "")
-            self._hdhive_token_expires_at = float(config.get("hdhive_token_expires_at", 0) or 0)
-            self._hdhive_auto_unlock = config.get("hdhive_auto_unlock", False)
-            self._hdhive_max_unlock_points = int(config.get("hdhive_max_unlock_points", 50) or 50)
-            self._hdhive_max_points_per_sub = int(config.get("hdhive_max_points_per_sub", 20) or 20)
-            self._hdhive_username = config.get("hdhive_username", "")
-            self._hdhive_password = config.get("hdhive_password", "")
-            self._hdhive_checkin_enabled = bool(
-                config.get("hdhive_checkin_enabled", False)
-            )
-            self._hdhive_checkin_mode = str(
-                config.get("hdhive_checkin_mode", "normal") or "normal"
-            ).strip().lower()
-            if self._hdhive_checkin_mode not in {"normal", "gambler"}:
-                self._hdhive_checkin_mode = "normal"
             self._checkin_cron = str(
                 config.get("checkin_cron")
-                or config.get("hdhive_checkin_cron")
                 or "0 8 * * *"
             ).strip()
             self._checkin_auto_retry = bool(
@@ -965,6 +963,53 @@ class CloudSubscribe(_PluginBase):
             self._dian115_max_points_per_sub = max(
                 0, int(config.get("dian115_max_points_per_sub", 20) or 0)
             )
+
+            self._hdhive_enabled = "hdhive" in selected_sources
+            self._hdhive_base_url = str(
+                config.get("hdhive_base_url", "https://re0.me") or "https://re0.me"
+            ).strip()
+            self._hdhive_query_mode = config.get("hdhive_query_mode", "web")
+            self._hdhive_api_key = config.get("hdhive_api_key", "")
+            self._hdhive_client_id = config.get("hdhive_client_id", "")
+            self._hdhive_redirect_uri = config.get("hdhive_redirect_uri", "")
+            self._hdhive_response_mode = config.get("hdhive_response_mode", "redirect")
+            self._hdhive_auth_code = config.get("hdhive_auth_code", "")
+            self._hdhive_access_token = config.get("hdhive_access_token", "")
+            self._hdhive_refresh_token = config.get("hdhive_refresh_token", "")
+            self._hdhive_token_expires_at = float(config.get("hdhive_token_expires_at", 0) or 0)
+            self._hdhive_auto_unlock = config.get("hdhive_auto_unlock", False)
+            self._hdhive_max_unlock_points = int(config.get("hdhive_max_unlock_points", 50) or 50)
+            self._hdhive_max_points_per_sub = int(config.get("hdhive_max_points_per_sub", 20) or 20)
+            self._hdhive_username = config.get("hdhive_username", "")
+            self._hdhive_password = config.get("hdhive_password", "")
+            self._hdhive_checkin_enabled = bool(
+                config.get("hdhive_checkin_enabled", False)
+            )
+            self._hdhive_checkin_mode = str(
+                config.get("hdhive_checkin_mode", "normal") or "normal"
+            ).strip().lower()
+            if self._hdhive_checkin_mode not in {"normal", "gambler"}:
+                self._hdhive_checkin_mode = "normal"
+            self._hdhive_candidate_limit = max(
+                1, min(int(config.get("hdhive_candidate_limit", 4) or 4), 20)
+            )
+            self._hdhive_request_interval = max(
+                2.0, min(float(config.get("hdhive_request_interval", 5) or 5), 10.0)
+            )
+            self._hdhive_unlocks_per_minute = max(
+                1, min(int(config.get("hdhive_unlocks_per_minute", 2) or 2), 3)
+            )
+            self._hdhive_torrentclaw_enabled = bool(
+                config.get("hdhive_torrentclaw_enabled", False)
+            )
+            raw_subtitle_languages = config.get("hdhive_torrentclaw_subtitle_languages")
+            if isinstance(raw_subtitle_languages, str):
+                raw_subtitle_languages = re.split(r"[,，\s]+", raw_subtitle_languages)
+            self._hdhive_torrentclaw_subtitle_languages = [
+                                                              str(language).strip().lower().replace("_", "-")
+                                                              for language in (raw_subtitle_languages or [])
+                                                              if str(language).strip()
+                                                          ] or ["zh"]
 
             self._transfer_task_batch_size = int(
                 config.get("transfer_task_batch_size", 50) or 50
@@ -1008,15 +1053,6 @@ class CloudSubscribe(_PluginBase):
             self._search_concurrency = max(
                 1, min(int(config.get("search_concurrency", 2) or 2), 5)
             )
-            self._hdhive_candidate_limit = max(
-                1, min(int(config.get("hdhive_candidate_limit", 4) or 4), 20)
-            )
-            self._hdhive_request_interval = max(
-                2.0, min(float(config.get("hdhive_request_interval", 5) or 5), 10.0)
-            )
-            self._hdhive_unlocks_per_minute = max(
-                1, min(int(config.get("hdhive_unlocks_per_minute", 2) or 2), 3)
-            )
             self._dian115_candidate_limit = max(
                 1, min(int(config.get("dian115_candidate_limit", 4) or 4), 20)
             )
@@ -1026,19 +1062,6 @@ class CloudSubscribe(_PluginBase):
             self._dian115_unlocks_per_minute = max(
                 1, min(int(config.get("dian115_unlocks_per_minute", 6) or 6), 10)
             )
-            self._hdhive_torrentclaw_enabled = bool(
-                config.get("hdhive_torrentclaw_enabled", False)
-            )
-            raw_subtitle_languages = config.get(
-                "hdhive_torrentclaw_subtitle_languages", ["zh"]
-            )
-            if isinstance(raw_subtitle_languages, str):
-                raw_subtitle_languages = re.split(r"[,，\s]+", raw_subtitle_languages)
-            self._hdhive_torrentclaw_subtitle_languages = [
-                str(language).strip().lower().replace("_", "-")
-                for language in (raw_subtitle_languages or [])
-                if str(language).strip()
-            ]
 
             # 洗版配置
             self._upgrade_subscribe_ids = config.get("upgrade_subscribe_ids", []) or []
@@ -1165,6 +1188,7 @@ class CloudSubscribe(_PluginBase):
             "enabled", "cron", "auto_subscribe_enabled", "auto_subscribe_cron",
             "auto_subscribe_douban_enabled", "auto_subscribe_maoyan_enabled",
             "auto_subscribe_netflix_enabled", "auto_subscribe_mikan_enabled",
+            "auto_subscribe_tmdb_enabled", "auto_subscribe_bangumi_enabled", "auto_subscribe_anilist_enabled",
             "checkin_cron", "checkin_auto_retry", "checkin_retry_count",
             "p115_checkin_enabled", "hdhive_checkin_enabled",
             "dian115_checkin_enabled", "juying_checkin_enabled",
@@ -1289,7 +1313,6 @@ class CloudSubscribe(_PluginBase):
         self._cloud_drive_registry = CloudDriveRegistry()
         self._pansou_client = None
         self._seedhub_client = None
-        self._butailing_client = None
         self._juying_client = None
         self._pinglian_client = None
         self._online_docs_client = None
@@ -1297,32 +1320,42 @@ class CloudSubscribe(_PluginBase):
         if proxy:
             logger.info("搜索渠道已启用统一请求代理")
 
-        if self._pansou_enabled and self._pansou_url:
-            self._pansou_client = PanSouClient(
-                base_url=self._pansou_url,
-                username=self._pansou_username,
-                password=self._pansou_password,
-                auth_enabled=self._pansou_auth_enabled,
-                proxy=proxy,
-                search_timeout=self._pansou_timeout,
-                get_data_func=self.get_data,
-                save_data_func=self.save_data,
-            )
+        # 初始化 PanSou 客户端（网盘资源列表与自动订阅通用）
+        pansou_url = self._pansou_url or "https://pansou.cc"
+        self._pansou_client = PanSouClient(
+            base_url=pansou_url,
+            username=self._pansou_username,
+            password=self._pansou_password,
+            auth_enabled=bool(self._pansou_auth_enabled and self._pansou_username and self._pansou_password),
+            proxy=proxy,
+            search_timeout=self._pansou_timeout,
+            get_data_func=self.get_data,
+            save_data_func=self.save_data,
+        )
 
-        if self._seedhub_enabled:
-            self._seedhub_client = SeedHubClient(
-                base_url=self._seedhub_base_url,
-                proxy=proxy,
-                request_timeout=self._seedhub_timeout,
-                request_interval=self._seedhub_request_interval,
-            )
-        if self._butailing_enabled:
-            self._butailing_client = ButailingClient(
-                base_url=self._butailing_base_url,
-                proxy=proxy,
-                request_timeout=self._butailing_timeout,
-                request_interval=self._butailing_request_interval,
-            )
+        # 初始化 SeedHub 客户端
+        self._seedhub_client = SeedHubClient(
+            base_url=self._seedhub_base_url or "https://www.seedhub.cc",
+            proxy=proxy,
+            request_timeout=self._seedhub_timeout,
+            request_interval=self._seedhub_request_interval,
+        )
+
+        # 初始化海盗湾客户端
+        self._piratebay_client = PirateBayClient(
+            base_url=self._piratebay_base_url or "https://apibay.org",
+            proxy=proxy,
+            timeout=self._piratebay_timeout,
+            request_interval=self._piratebay_request_interval,
+        )
+
+        # 初始化 UIndex 客户端
+        self._uindex_client = UIndexClient(
+            base_url=self._uindex_base_url or "https://uindex.org",
+            proxy=proxy,
+            timeout=self._uindex_timeout,
+            request_interval=self._uindex_request_interval,
+        )
         if self._juying_enabled or self._juying_checkin_enabled:
             self._juying_client = JuyingClient(
                 base_url=self._juying_base_url,
@@ -1676,7 +1709,8 @@ class CloudSubscribe(_PluginBase):
             pansou_client=self._pansou_client,
             hdhive_client=self._hdhive_client,
             seedhub_client=self._seedhub_client,
-            butailing_client=self._butailing_client,
+            piratebay_client=self._piratebay_client,
+            uindex_client=self._uindex_client,
             juying_client=self._juying_client,
             pinglian_client=self._pinglian_client,
             online_docs_client=self._online_docs_client,
@@ -1684,7 +1718,10 @@ class CloudSubscribe(_PluginBase):
             hdhive_enabled=self._hdhive_enabled,
             dian115_enabled=self._dian115_enabled,
             seedhub_enabled=self._seedhub_enabled,
-            butailing_enabled=self._butailing_enabled,
+            piratebay_enabled=self._piratebay_enabled,
+            piratebay_result_limit=self._piratebay_result_limit,
+            uindex_enabled=self._uindex_enabled,
+            uindex_result_limit=self._uindex_result_limit,
             juying_enabled=self._juying_enabled,
             pinglian_enabled=self._pinglian_enabled,
             hdhive_query_mode=self._hdhive_query_mode,
@@ -1709,7 +1746,6 @@ class CloudSubscribe(_PluginBase):
             pansou_refresh=self._pansou_refresh,
             pansou_timeout=self._pansou_timeout,
             seedhub_result_limit=self._seedhub_result_limit,
-            butailing_result_limit=self._butailing_result_limit,
             juying_result_limit=self._juying_result_limit,
             pinglian_result_limit=self._pinglian_result_limit,
             search_source_order=self._search_source_order,

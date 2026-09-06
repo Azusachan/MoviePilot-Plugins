@@ -1,10 +1,11 @@
 """猫眼自动订阅能力组装。"""
 from typing import Iterator
 
-from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
-from ...core.subscribe.registry import register
 from .client import MaoyanClient
 from .service import MaoyanService
+from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
+from ...core.subscribe.provider import ranking_scan_limit
+from ...core.subscribe.registry import register
 
 PLATFORMS = {
     "all": "", "tx": "3", "iqiyi": "2", "youku": "1",
@@ -30,13 +31,15 @@ class MaoyanSubscribeProvider(SubscribeProvider):
 
     def fetch(self, options: dict, context: SubscribeContext) -> Iterator[MediaCandidate]:
         limit = max(1, min(int(options.get("limit") or 10), 100))
+        scan_limit = ranking_scan_limit(options)
         proxy = context.proxy_for(options.get("proxy"))
         base_url = str(options.get("base_url") or MaoyanClient.BASE_URL).strip()
         client = self.client if base_url.rstrip("/") == self.client.base_url else MaoyanClient(base_url)
         seen: set[str] = set()
         if options.get("movie_box", True):
-            for item in self.service.movie_box(client.get_json("/dashboard-ajax/movie", proxy), limit):
+            for item in self.service.movie_box(client.get_json("/dashboard-ajax/movie", proxy), scan_limit):
                 if item.unique_seed not in seen:
+                    item.source_meta["rank_key"] = "movie_box"
                     seen.add(item.unique_seed)
                     yield item
         mapping = options.get("web_platform_map")
@@ -61,8 +64,9 @@ class MaoyanSubscribeProvider(SubscribeProvider):
                     "/dashboard/webHeatData?seriesType="
                     f"{SERIES_TYPES[category]}&platformType={PLATFORMS[platform]}&showDate=2"
                 )
-                for item in self.service.web_heat(client.get_json(path, proxy), limit, platform):
+                for item in self.service.web_heat(client.get_json(path, proxy), scan_limit, platform):
                     if item.unique_seed not in seen:
+                        item.source_meta["rank_key"] = f"web_heat:{platform}:{category}"
                         seen.add(item.unique_seed)
                         yield item
 

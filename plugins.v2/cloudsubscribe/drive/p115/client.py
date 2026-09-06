@@ -259,6 +259,7 @@ class P115ClientManager:
         self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         self.client: Optional[Any] = None
         self._login_checked = False
+        self._login_check_lock = threading.Lock()
         self.is_vip = False
         self.vip_expire_date = ""
 
@@ -416,40 +417,44 @@ class P115ClientManager:
 
     def check_login(self) -> bool:
         """检查登录状态，并缓存会员状态供离线下载判断。"""
-        self._login_checked = True
-        self.is_vip = False
-        self.vip_expire_date = ""
-        if not self.client:
-            return False
-
-        try:
-            user_info = self._rate_limited_call(self.client.user_my_info)
-            if user_info.get("state"):
-                data = user_info.get("data") or {}
-                vip_data = data.get("vip") or {}
-                uname = data.get("uname", "未知")
-                self.is_vip = (
-                        self._as_bool(vip_data.get("is_vip"))
-                        or self._as_bool(vip_data.get("is_forever"))
-                )
-                self.vip_expire_date = "永久" if self._as_bool(vip_data.get("is_forever")) \
-                    else str(vip_data.get("expire_str") or "")
-                vip_text = "会员" if self.is_vip else "非会员"
-                if self.is_vip and self.vip_expire_date:
-                    vip_text = f"{vip_text}（有效期：{self.vip_expire_date}）"
-                logger.info(f"115 登录成功: {uname}，会员状态: {vip_text}")
+        if self._login_checked:
+            return True
+        with self._login_check_lock:
+            if self._login_checked:
                 return True
-            logger.error(
-                f"115 登录状态无效：ssoent={self._login_ssoent()}，"
-                f"{user_info.get('error') or user_info.get('message') or '接口未返回原因'}"
-            )
-            return False
-        except Exception as e:
-            logger.error(
-                f"检查 115 登录状态失败："
-                f"HTTP={self._http_status_code(e) or 'unknown'}，"
-                f"ssoent={self._login_ssoent()}，{self._error_summary(e)}"
-            )
+            self.is_vip = False
+            self.vip_expire_date = ""
+            if not self.client:
+                return False
+
+            try:
+                user_info = self._rate_limited_call(self.client.user_my_info)
+                if user_info.get("state"):
+                    data = user_info.get("data") or {}
+                    vip_data = data.get("vip") or {}
+                    uname = data.get("uname", "未知")
+                    self.is_vip = (
+                            self._as_bool(vip_data.get("is_vip"))
+                            or self._as_bool(vip_data.get("is_forever"))
+                    )
+                    self.vip_expire_date = "永久" if self._as_bool(vip_data.get("is_forever")) \
+                        else str(vip_data.get("expire_str") or "")
+                    vip_text = "会员" if self.is_vip else "非会员"
+                    if self.is_vip and self.vip_expire_date:
+                        vip_text = f"{vip_text}（有效期：{self.vip_expire_date}）"
+                    self._login_checked = True
+                    logger.info(f"115 登录成功: {uname}，会员状态: {vip_text}")
+                    return True
+                logger.error(
+                    f"115 登录状态无效：ssoent={self._login_ssoent()}，"
+                    f"{user_info.get('error') or user_info.get('message') or '接口未返回原因'}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"检查 115 登录状态失败："
+                    f"HTTP={self._http_status_code(e) or 'unknown'}，"
+                    f"ssoent={self._login_ssoent()}，{self._error_summary(e)}"
+                )
             return False
 
     def get_account_info(self, cache_ttl: int = 3600) -> Dict[str, Any]:

@@ -26,5 +26,5 @@ export function createDriveSection(options) {
       ...createTianyiGroups(options),
       ...createAliPanGroups(options),
     ],
-  };
+  }
 }

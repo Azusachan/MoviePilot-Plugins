@@ -99,7 +99,6 @@
         </template>
       </div>
     </div>
-
   </div>
 </template>
 
@@ -426,10 +425,7 @@ async function runCheckin(provider) {
   }
 }
 
-watch(
-  () => props.providers.map((provider) => `${provider.key}:${providerEnabled(provider)}`).join(","),
-  loadHistories,
-);
+watch(() => props.providers.map((provider) => `${provider.key}:${providerEnabled(provider)}`).join(","), loadHistories);
 onMounted(loadHistories)
 </script>
 

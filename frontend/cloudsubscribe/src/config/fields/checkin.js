@@ -13,7 +13,7 @@ export function createCheckinSection() {
         hint: "集中显示全部签到渠道最近 7 天状态，并在对应渠道行内执行立即签到。",
         fields: [
           {
-            key: "hdhive_checkin_timeline",
+            key: "checkin_timeline",
             type: "checkin-timeline",
             providers: [
               {
@@ -191,5 +191,5 @@ export function createCheckinSection() {
         ],
       },
     ],
-  };
+  }
 }

@@ -124,7 +124,7 @@ class _UnlockLimiter:
 class HDHiveResourceService:
     """负责 HDHive 资源查询、解析、缓存和解锁。"""
 
-    BASE_URL = "https://hdhive.com"
+    BASE_URL = "https://re0.me"
     _RESOURCE_CACHE_TTL = 5 * 60
     _RESOURCE_CACHE_LIMIT = 128
     _RESOURCE_LOCKS = tuple(threading.Lock() for _ in range(64))
@@ -931,7 +931,7 @@ class HDHiveResourceService:
         stale_count = 0
         limit = (
             None if candidate_limit is None
-            else max(1, min(int(candidate_limit or 4), 20))
+            else max(1, min(int(candidate_limit or 4), 50))
         )
         for row in detail_rows:
             if limit is not None and len(accepted_groups) >= limit:

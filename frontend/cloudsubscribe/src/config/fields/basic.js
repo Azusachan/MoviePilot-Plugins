@@ -108,5 +108,5 @@ export function createBasicSection(cloudDriveItems) {
         ],
       },
     ],
-  };
+  }
 }

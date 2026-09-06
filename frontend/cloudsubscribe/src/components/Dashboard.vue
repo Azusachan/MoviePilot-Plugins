@@ -1,10 +1,10 @@
 <template>
   <CheckinDashboard
-      v-if="isCheckinDashboard"
-      :api="api"
-      :config="config"
-      :allow-refresh="allowRefresh"
-      :refresh-interval="refreshInterval" />
+    v-if="isCheckinDashboard"
+    :api="api"
+    :config="config"
+    :allow-refresh="allowRefresh"
+    :refresh-interval="refreshInterval" />
   <div v-else ref="widgetRef" class="cloud-dashboard">
     <v-card :flat="cardFlat" :loading="loading" class="dashboard-card">
       <v-card-item class="dashboard-header">
@@ -46,9 +46,9 @@
           <div v-if="recentHistory.length" class="recent-list">
             <div v-for="item in recentHistory" :key="historyKey(item)">
               <v-icon
-                  :icon="item.status === '成功' ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
-                  :color="item.status === '成功' ? 'success' : 'error'"
-                  size="16" />
+                :icon="item.status === '成功' ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
+                :color="item.status === '成功' ? 'success' : 'error'"
+                size="16" />
               <span>{{ item.title || item.file_name || "未知媒体" }}</span>
               <small>{{ item.time || "" }}</small>
             </div>
@@ -103,33 +103,33 @@ const refreshSeconds = computed(() => {
 })
 const recentHistory = computed(() => (overview.value.recent_history || []).slice(0, 3));
 const activeTaskCount = computed(
-    () =>
-        (overview.value.runtime?.tasks || []).filter((task) =>
-            ["queued", "running", "stopping", "postprocessing"].includes(task.status),
-        ).length,
+  () =>
+    (overview.value.runtime?.tasks || []).filter((task) =>
+      ["queued", "running", "stopping", "postprocessing"].includes(task.status),
+    ).length,
 )
 const statusColor = computed(() =>
-    ["starting", "running"].includes(overview.value.runtime?.status)
-        ? "primary"
-        : overview.value.runtime?.status === "stopping"
-            ? "warning"
-            : "success",
+  ["starting", "running"].includes(overview.value.runtime?.status)
+    ? "primary"
+    : overview.value.runtime?.status === "stopping"
+      ? "warning"
+      : "success",
 )
 const statusText = computed(() =>
-    ["starting", "running"].includes(overview.value.runtime?.status)
-        ? "正在运行"
-        : overview.value.runtime?.status === "stopping"
-            ? "正在停止"
-            : "当前空闲",
+  ["starting", "running"].includes(overview.value.runtime?.status)
+    ? "正在运行"
+    : overview.value.runtime?.status === "stopping"
+      ? "正在停止"
+      : "当前空闲",
 )
 const refreshedText = computed(() =>
-    refreshedAt.value
-        ? `更新于 ${new Date(refreshedAt.value).toLocaleTimeString("zh-CN", {
-          hour12: false,
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`
-        : "",
+  refreshedAt.value
+    ? `更新于 ${new Date(refreshedAt.value).toLocaleTimeString("zh-CN", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`
+    : "",
 )
 
 function historyKey(item) {
@@ -158,8 +158,8 @@ async function loadOverview() {
 
 function runtimeIsActive(value) {
   return (
-      ["starting", "running", "stopping"].includes(value?.status) ||
-      (value?.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+    ["starting", "running", "stopping"].includes(value?.status) ||
+    (value?.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
   )
 }
 
@@ -190,12 +190,12 @@ function scheduleFallbackRefresh(delay = refreshSeconds.value * 1000) {
   clearRefreshTimer();
   if (refreshSeconds.value <= 0 || !isPageVisible()) return;
   refreshTimer = window.setTimeout(
-      async () => {
-        refreshTimer = null;
-        await loadOverview();
-        scheduleFallbackRefresh();
-      },
-      Math.max(1000, Number(delay) || 0),
+    async () => {
+      refreshTimer = null;
+      await loadOverview();
+      scheduleFallbackRefresh();
+    },
+    Math.max(1000, Number(delay) || 0),
   )
 }
 

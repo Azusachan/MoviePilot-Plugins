@@ -8,12 +8,12 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     task: "当前没有订阅处理任务",
     progress: 0,
     tasks: [],
-  });
+  })
   const active = computed(
-      () =>
-          ["starting", "running", "stopping"].includes(runtime.status) ||
-          (runtime.tasks || []).some((task) => ["queued", "running", "stopping"].includes(task.status)),
-  );
+    () =>
+      ["starting", "running", "stopping"].includes(runtime.status) ||
+      (runtime.tasks || []).some((task) => ["queued", "running", "stopping"].includes(task.status)),
+  )
 
   let runtimeRequest = null;
   let runtimeFallbackTimer = null;
@@ -27,10 +27,10 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
 
   function hasActiveRuntime() {
     return (
-        Date.now() < startRequestedUntil ||
-        ["starting", "running", "stopping"].includes(runtime.status) ||
-        (runtime.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
-    );
+      Date.now() < startRequestedUntil ||
+      ["starting", "running", "stopping"].includes(runtime.status) ||
+      (runtime.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+    )
   }
 
   function isPageVisible() {
@@ -74,13 +74,13 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     clearRuntimeFallback();
     if (!isPageVisible()) return;
     runtimeFallbackTimer = window.setTimeout(
-        async () => {
-          runtimeFallbackTimer = null;
-          await loadRuntime();
-          if (!runtimeStream) scheduleRuntimeFallback();
-        },
-        Math.max(1000, Number(delay) || 0),
-    );
+      async () => {
+        runtimeFallbackTimer = null;
+        await loadRuntime();
+        if (!runtimeStream) scheduleRuntimeFallback();
+      },
+      Math.max(1000, Number(delay) || 0),
+    )
   }
 
   function notifySettled() {
@@ -100,7 +100,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     }
     const nextHistoryRevision = Number(nextRuntime.history_revision);
     const historyChanged =
-        historyRevision !== null && Number.isFinite(nextHistoryRevision) && nextHistoryRevision > historyRevision;
+      historyRevision !== null && Number.isFinite(nextHistoryRevision) && nextHistoryRevision > historyRevision
     if (Number.isFinite(nextHistoryRevision)) {
       historyRevision = historyRevision === null ? nextHistoryRevision : Math.max(historyRevision, nextHistoryRevision);
     }
@@ -113,7 +113,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
         ...nextRuntime,
         status: "starting",
         task: "正在准备订阅任务",
-      });
+      })
     } else {
       Object.assign(runtime, nextRuntime);
       if (nextRuntime.status === "running") {
@@ -147,7 +147,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
         runtimeStreamDisabled = true;
         scheduleRuntimeFallback(1000);
       },
-    });
+    })
     if (!source) return false;
     runtimeStream = source;
     return true;
@@ -165,13 +165,13 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
   function armStartupGuard() {
     clearStartupGuard();
     startupGuardTimer = window.setTimeout(
-        async () => {
-          startupGuardTimer = null;
-          await loadRuntime();
-          ensureRuntimeUpdates();
-        },
-        Math.max(0, startRequestedUntil - Date.now() + 100),
-    );
+      async () => {
+        startupGuardTimer = null;
+        await loadRuntime();
+        ensureRuntimeUpdates();
+      },
+      Math.max(0, startRequestedUntil - Date.now() + 100),
+    )
   }
 
   function handleVisibilityChange() {
@@ -194,7 +194,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
       } finally {
         runtimeRequest = null;
       }
-    })();
+    })()
     return runtimeRequest;
   }
 
@@ -202,12 +202,12 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     try {
       const selectedCount = Math.max(0, Number(selection?.groupCount || 0));
       const payload = selectedCount
-          ? {
+        ? {
             selected_count: selectedCount,
             subscribe_ids: Array.isArray(selection?.subscribeIds) ? selection.subscribeIds : [],
             history_targets: Array.isArray(selection?.targets) ? selection.targets : [],
           }
-          : {};
+        : {}
       const result = await api.post(`plugin/${pluginId}/sync/start`, payload);
       if (!result?.success) throw new Error(result?.message || "启动失败");
       const selectedScope = result?.data?.scope === "selected";
@@ -222,7 +222,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
         task: selectedScope ? `正在准备所选 ${mediaCount} 个媒体目标` : "正在准备全部订阅",
         progress: 0,
         tasks: [],
-      });
+      })
       notify(result.message || "订阅搜索任务已启动");
       armStartupGuard();
       ensureRuntimeUpdates();
@@ -257,7 +257,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
       }
       const result = await api.post(`plugin/${pluginId}/sync/task/stop`, {
         task_id: taskId,
-      });
+      })
       if (!result?.success) throw new Error(result?.message || "停止任务失败");
       ensureRuntimeUpdates();
       return true;
@@ -277,12 +277,12 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
       tmdb_id: record.tmdb_id,
       season: record.season,
       episode: record.episode,
-    }));
+    }))
     const result = await api.post(`plugin/${pluginId}/history/upgrade`, {
       source: "history",
       scope,
       records: identities,
-    });
+    })
     if (!result?.success) throw new Error(result?.message || "洗版任务提交失败");
     startRequestedUntil = Date.now() + 10000;
     runtimeStreamDisabled = false;
@@ -292,7 +292,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
       task: "正在准备洗版任务",
       progress: 0,
       tasks: [],
-    });
+    })
     armStartupGuard();
     ensureRuntimeUpdates();
     return result.message || "洗版任务已提交";
@@ -301,11 +301,11 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
   onMounted(() => {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     void loadRuntime().finally(ensureRuntimeUpdates);
-  });
+  })
   onUnmounted(() => {
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     stopRuntimeUpdates();
-  });
+  })
 
   return {
     offlineSupported,
@@ -316,5 +316,5 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     stopSync,
     stopTask,
     upgradeHistory,
-  };
+  }
 }

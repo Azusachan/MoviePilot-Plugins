@@ -122,5 +122,5 @@ export function createPansouGroups(options = {}) {
         },
       ],
     },
-  ];
+  ]
 }

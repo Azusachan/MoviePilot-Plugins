@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,10 +28,12 @@ from .provider import SubscribeContext
 from .registry import SubscribeProviderRegistry, registry
 from ..config import DEFAULT_AUTO_SUBSCRIBE_USERNAME
 from ..media import (
+    apply_media_identity,
     call_with_supported_kwargs,
     legacy_media_ids,
     media_identity as platform_media_identity,
     recognize_media,
+    tmdb_id_of,
 )
 from ...utils.http_client import (
     build_proxy_url,
@@ -176,8 +179,23 @@ class AutoSubscribeService:
             resolved.append(result)
 
         groups = self._merge_resolved(resolved)
+        subscribed_by_rank: dict[str, int] = {}
         for group in groups:
-            outcomes.append(self._subscribe_group(group, config))
+            open_ranks = self._open_rank_keys(group, config, subscribed_by_rank)
+            if not open_ranks:
+                outcomes.append(SubscribeOutcome(
+                    SubscribeStatus.FILTERED,
+                    group[0].candidate,
+                    reason="已达到每榜新增数量",
+                    identity=group[0].identity,
+                    mediainfo=group[0].mediainfo,
+                ))
+                continue
+            outcome = self._subscribe_group(group, config)
+            outcomes.append(outcome)
+            if outcome.status == SubscribeStatus.SUBSCRIBED:
+                for key in open_ranks:
+                    subscribed_by_rank[key] = subscribed_by_rank.get(key, 0) + 1
 
         stats: dict[str, int] = {}
         for outcome in outcomes:
@@ -278,7 +296,7 @@ class AutoSubscribeService:
         return self.run()
 
     def api_test_auto_subscribe(self, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        """抓取指定榜单的少量示例，仅验证来源，不识别、不查重、不创建订阅。"""
+        """抓取指定榜单的少量示例，仅验证来源连通性，不使用任何过滤规则。"""
         config = dict(getattr(self.owner, "_applied_config", None) or {})
         submitted_config = (payload or {}).get("config")
         if isinstance(submitted_config, dict):
@@ -287,7 +305,13 @@ class AutoSubscribeService:
         if provider_id not in self.registry.ids():
             return {"success": False, "message": "缺少或不支持的榜单来源"}
         provider = self.registry.get(provider_id)
-        options = self._provider_options(config, provider_id)
+        # 测试榜单不需要使用过滤规则简化代码：直接移除评分、年份和类型过滤
+        options = dict(self._provider_options(config, provider_id))
+        options.pop("min_year", None)
+        options.pop("min_month", None)
+        options.pop("min_vote", None)
+        options.pop("media_type", None)
+        options["_candidate_scan_limit"] = 3
         try:
             proxy = self._proxy_from_config(config, strict=True)
         except ValueError as error:
@@ -313,14 +337,19 @@ class AutoSubscribeService:
         except Exception as error:
             logger.warning(f"{provider.provider_name} 测试失败：{error}")
             return {"success": False, "message": f"{provider.provider_name} 测试失败：{error}"}
+
+        if samples:
+            sample_titles = "、".join(str(item.get("title") or "") for item in samples)
+            return {
+                "success": True,
+                "message": f"{provider.provider_name} 测试成功：{sample_titles}",
+                "data": {"provider_id": provider_id, "items": samples},
+            }
+
         return {
-            "success": bool(samples),
-            "message": (
-                f"{provider.provider_name} 测试成功："
-                + "、".join(str(item.get("title") or "") for item in samples)
-                if samples else f"{provider.provider_name} 已连通但没有示例数据"
-            ),
-            "data": {"provider_id": provider_id, "items": samples},
+            "success": False,
+            "message": f"{provider.provider_name} 已连通但未返回任何条目（请检查是否已选择监听榜单）",
+            "data": {"provider_id": provider_id, "items": []},
         }
 
     def api_test_auto_subscribe_proxy(self, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -356,11 +385,13 @@ class AutoSubscribeService:
     @staticmethod
     def _provider_options(config: dict[str, Any], provider_id: str) -> dict[str, Any]:
         prefix = f"auto_subscribe_{provider_id}_"
-        return {
+        options = {
             key[len(prefix):]: value
             for key, value in config.items()
             if key.startswith(prefix)
         }
+        options.setdefault("min_month", datetime.datetime.now().month)
+        return options
 
     @staticmethod
     def _debug_provider_options(options: dict[str, Any]) -> dict[str, Any]:
@@ -370,6 +401,20 @@ class AutoSubscribeService:
             for key, value in options.items()
             if key in {"rsshub_base", "rss_urls", "ranks", "base_url", "enabled"}
         }
+
+    @classmethod
+    def _provider_limit(cls, config: dict[str, Any], provider_id: str) -> int:
+        defaults = {
+            "douban": 30,
+            "tmdb": 20,
+            "bangumi": 50,
+            "anilist": 30,
+            "maoyan": 10,
+            "netflix": 10,
+            "mikan": 100,
+        }
+        value = cls._provider_options(config, provider_id).get("limit")
+        return max(1, min(cls._as_int(value, defaults.get(provider_id, 20)), 100))
 
     def _proxy_from_config(
             self, config: dict[str, Any], strict: bool = False
@@ -434,6 +479,16 @@ class AutoSubscribeService:
         )
         if minimum_year and media_year and media_year < minimum_year:
             return False
+        minimum_month = self._as_int(options.get("min_month"))
+        media_month = self._media_month(resolved)
+        if (
+                minimum_year
+                and minimum_month
+                and media_year == minimum_year
+                and media_month
+                and media_month < minimum_month
+        ):
+            return False
         if resolved.identity.media_type == "tv" and config.get("auto_subscribe_skip_season_zero", True):
             resolved_season = getattr(resolved.mediainfo, "season", None)
             if resolved_season is None:
@@ -441,6 +496,26 @@ class AutoSubscribeService:
             if int(1 if resolved_season is None else resolved_season) == 0:
                 return False
         return True
+
+    @staticmethod
+    def _media_month(resolved: _ResolvedMedia) -> int:
+        """读取电影上映月或剧集首播月；来源未提供日期时不做月份误杀。"""
+        values = [
+            getattr(resolved.mediainfo, "release_date", None),
+            getattr(resolved.mediainfo, "first_air_date", None),
+            resolved.candidate.source_meta.get("release_date"),
+            resolved.candidate.source_meta.get("first_air_date"),
+            resolved.candidate.source_meta.get("air_date"),
+        ]
+        for value in values:
+            if isinstance(value, (datetime.date, datetime.datetime)):
+                return value.month
+            matched = re.match(r"^\s*\d{4}[-/.](\d{1,2})", str(value or ""))
+            if matched:
+                month = int(matched.group(1))
+                if 1 <= month <= 12:
+                    return month
+        return 0
 
     def _recognize(self, candidate: MediaCandidate) -> Optional[_ResolvedMedia]:
         meta = MetaInfo(candidate.title)
@@ -461,20 +536,30 @@ class AutoSubscribeService:
         )
         if not mediainfo:
             return None
-        if candidate.source == "netflix":
-            tmdb_id = getattr(mediainfo, "tmdb_id", None)
-            if not tmdb_id:
-                logger.warning(f"Netflix 榜单未匹配到 TMDB，跳过：{candidate.title}")
-                return None
-            localized = recognize_media(
+        candidate_tmdb_id = tmdb_id_of({"tmdb_id": candidate.tmdb_id})
+        tmdb_id = tmdb_id_of(mediainfo) or candidate_tmdb_id
+        if not tmdb_id:
+            tmdb_media = recognize_media(
                 self.media_chain,
                 meta=meta,
-                tmdb_id=tmdb_id,
                 mtype=getattr(mediainfo, "type", getattr(meta, "type", None)),
                 cache=True,
             )
-            if localized:
-                mediainfo = localized
+            tmdb_id = tmdb_id_of(tmdb_media)
+            if tmdb_id:
+                mediainfo = tmdb_media
+                logger.debug(
+                    f"{candidate.source} 榜单已补充 TMDB 身份："
+                    f"{candidate.title} -> {tmdb_id}"
+                )
+        if not tmdb_id:
+            logger.warning(
+                f"{candidate.source} 榜单未匹配到 TMDB，跳过：{candidate.title}"
+            )
+            return None
+        apply_media_identity(mediainfo, "themoviedb", tmdb_id)
+        if hasattr(mediainfo, "tmdb_id"):
+            mediainfo.tmdb_id = int(tmdb_id)
         media_type = "movie" if mediainfo.type == MediaType.MOVIE else "tv"
         season = None if media_type == "movie" else int(
             1 if candidate.season is None else candidate.season
@@ -485,14 +570,10 @@ class AutoSubscribeService:
         else:
             meta.type = MediaType.MOVIE
             meta.begin_season = None
-        source, source_id = self._primary_id(candidate, mediainfo)
-        if not source or not source_id:
-            logger.warning(f"自动订阅跳过无稳定媒体ID：{candidate.title}")
-            return None
         identity = media_identity(
             media_type=media_type,
-            source=source,
-            media_id=source_id,
+            source="themoviedb",
+            media_id=str(tmdb_id),
             season=season,
             title=getattr(mediainfo, "title", candidate.title),
             year=getattr(mediainfo, "year", candidate.year),
@@ -502,35 +583,15 @@ class AutoSubscribeService:
         return _ResolvedMedia(candidate, mediainfo, meta, identity, aliases)
 
     @staticmethod
-    def _primary_id(candidate: MediaCandidate, mediainfo: Any) -> tuple[str, str]:
-        pairs = (
-            ("tmdb", getattr(mediainfo, "tmdb_id", None)),
-            (
-                str(
-                    getattr(mediainfo, "media_source", None)
-                    or getattr(mediainfo, "source", "")
-                    or ""
-                ).lower(),
-                getattr(mediainfo, "media_id", None),
-            ),
-            ("douban", getattr(mediainfo, "douban_id", None)),
-            ("bangumi", getattr(mediainfo, "bangumi_id", None)),
-            ("tmdb", candidate.tmdb_id),
-            ("douban", candidate.douban_id),
-            ("bangumi", candidate.bangumi_id),
-        )
-        for source, value in pairs:
-            if source and value not in (None, ""):
-                return str(source), str(value)
-        return "", ""
-
-    @staticmethod
     def _aliases(
             candidate: MediaCandidate, mediainfo: Any, media_type: str, season: Optional[int]
     ) -> set[tuple[str, str, str, Optional[int]]]:
         aliases = set()
         values = {
-            "tmdb": getattr(mediainfo, "tmdb_id", None) or candidate.tmdb_id,
+            "tmdb": (
+                    tmdb_id_of(mediainfo)
+                    or tmdb_id_of({"tmdb_id": candidate.tmdb_id})
+            ),
             "douban": getattr(mediainfo, "douban_id", None) or candidate.douban_id,
             "bangumi": getattr(mediainfo, "bangumi_id", None) or candidate.bangumi_id,
             "imdb": getattr(mediainfo, "imdb_id", None) or candidate.imdb_id,
@@ -558,6 +619,32 @@ class AutoSubscribeService:
                 groups[target].extend(groups.pop(index))
                 group_aliases[target].update(group_aliases.pop(index))
         return groups
+
+    @staticmethod
+    def _group_rank_keys(group: list[_ResolvedMedia]) -> set[str]:
+        """返回归并媒体涉及的榜单桶，用于按榜单限制实际新增数量。"""
+        keys = set()
+        for item in group:
+            candidate = item.candidate
+            meta = candidate.source_meta or {}
+            rank = meta.get("rank_key") or meta.get("category") or meta.get("rank") or "default"
+            scope = meta.get("scope") or meta.get("platform") or ""
+            keys.add(f"{candidate.source}:{rank}:{scope}")
+        return keys
+
+    @classmethod
+    def _open_rank_keys(
+            cls,
+            group: list[_ResolvedMedia],
+            config: dict[str, Any],
+            subscribed_by_rank: dict[str, int],
+    ) -> set[str]:
+        return {
+            key
+            for key in cls._group_rank_keys(group)
+            if subscribed_by_rank.get(key, 0)
+               < cls._provider_limit(config, key.split(":", 1)[0])
+        }
 
     def _subscribe_group(
             self, group: list[_ResolvedMedia], config: dict[str, Any]
@@ -623,9 +710,15 @@ class AutoSubscribeService:
             title=subscribe_title,
             year=getattr(item.mediainfo, "year", item.candidate.year),
             mtype=getattr(item.mediainfo, "type", None),
-            tmdbid=getattr(item.mediainfo, "tmdb_id", None),
-            doubanid=getattr(item.mediainfo, "douban_id", None),
-            bangumiid=getattr(item.mediainfo, "bangumi_id", None),
+            tmdbid=tmdb_id_of(item.mediainfo),
+            doubanid=(
+                    getattr(item.mediainfo, "douban_id", None)
+                    or item.candidate.douban_id
+            ),
+            bangumiid=(
+                    getattr(item.mediainfo, "bangumi_id", None)
+                    or item.candidate.bangumi_id
+            ),
             media_source=media_source,
             media_id=media_id,
             season=season,
@@ -681,12 +774,13 @@ class AutoSubscribeService:
 
     @staticmethod
     def _identity_kwargs(group: list[_ResolvedMedia], season: Optional[int]) -> dict[str, Any]:
-        media = group[0].mediainfo
+        item = group[0]
+        media = item.mediainfo
         source, media_id = AutoSubscribeService._preferred_identity(media)
         return {
-            "tmdbid": getattr(media, "tmdb_id", None),
-            "doubanid": getattr(media, "douban_id", None),
-            "bangumiid": getattr(media, "bangumi_id", None),
+            "tmdbid": tmdb_id_of(media),
+            "doubanid": getattr(media, "douban_id", None) or item.candidate.douban_id,
+            "bangumiid": getattr(media, "bangumi_id", None) or item.candidate.bangumi_id,
             "media_source": source,
             "media_id": media_id,
             "season": season,
@@ -701,7 +795,10 @@ class AutoSubscribeService:
         seen: set[tuple[str, str]] = set()
         for item in group:
             media = item.mediainfo
-            tmdb_id = getattr(media, "tmdb_id", None) or item.candidate.tmdb_id
+            tmdb_id = (
+                    tmdb_id_of(media)
+                    or tmdb_id_of({"tmdb_id": item.candidate.tmdb_id})
+            )
             source, media_id = AutoSubscribeService._preferred_identity(media)
             values = (
                 ("themoviedb", tmdb_id),
@@ -729,8 +826,8 @@ class AutoSubscribeService:
     @staticmethod
     def _preferred_identity(media: Any) -> tuple[Optional[str], Optional[str]]:
         """TMDB 是影视订阅主身份，其他来源仅在 TMDB 缺失时使用。"""
-        tmdb_id = getattr(media, "tmdb_id", None)
-        if tmdb_id not in (None, "", 0, "0"):
+        tmdb_id = tmdb_id_of(media)
+        if tmdb_id:
             return "themoviedb", str(tmdb_id).strip()
         return platform_media_identity(media)
 
@@ -850,7 +947,7 @@ class AutoSubscribeService:
 
     def _supplement_tmdb_identity(self, subscribe: Any, mediainfo: Any) -> None:
         """把榜单识别到的 TMDB ID 补回手动订阅，避免再创建第二条记录。"""
-        tmdb_id = getattr(mediainfo, "tmdb_id", None)
+        tmdb_id = tmdb_id_of(mediainfo)
         subscribe_id = getattr(subscribe, "id", None)
         if isinstance(subscribe, dict):
             tmdb_id = tmdb_id or (

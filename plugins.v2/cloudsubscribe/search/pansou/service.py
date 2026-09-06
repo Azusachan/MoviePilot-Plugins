@@ -1,16 +1,16 @@
 """PanSou 搜索结果匹配与候选构造。"""
 
 import re
-import unicodedata
 from typing import Any, Dict, List
 
+import unicodedata
 from app.log import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
-from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 from ..magnet import clear_cache, normalize_magnets
 from ..types import resource_type_name
+from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 
 
 class PanSouSearchService(OwnerDelegator):
@@ -228,10 +228,13 @@ class PanSouSearchService(OwnerDelegator):
             max(1, int(query.result_limit or self._pansou_result_limit))
             if query.test_mode else self._pansou_result_limit
         )
-        allowed_types = [
-            "aliyun" if value == "alipan" else value
-            for value in self._resource_type_order_config
-        ]
+        allowed_types = (
+            [] if query.test_mode else
+            [
+                "aliyun" if value == "alipan" else value
+                for value in self._resource_type_order_config
+            ]
+        )
         response = self._pansou_client.request_search(
             keyword=keyword,
             cloud_types=allowed_types,
@@ -241,16 +244,35 @@ class PanSouSearchService(OwnerDelegator):
             refresh=self._pansou_refresh,
             concurrency=self._pansou_concurrency,
         )
+        raw_items = (response or {}).get("results") or []
+        # 如果带年份搜索结果为空，尝试以纯标题降级检索
+        pure_title = str(mediainfo.title or "").strip()
+        if (not raw_items) and keyword != pure_title and pure_title:
+            logger.debug(f"{prefix} 带年份关键词 '{keyword}' 无结果，降级尝试纯标题 '{pure_title}'")
+            fallback_res = self._pansou_client.request_search(
+                keyword=pure_title,
+                cloud_types=allowed_types,
+                channels=[] if query.test_mode else self._pansou_channels,
+                plugins=[] if query.test_mode else self._pansou_plugins,
+                filter_config={} if query.test_mode else self._pansou_filter,
+                refresh=self._pansou_refresh,
+                concurrency=self._pansou_concurrency,
+            )
+            if fallback_res and fallback_res.get("results"):
+                response = fallback_res
+                keyword = pure_title
+
         if not response or response.get("error"):
             reason = response.get("error") if response else "接口未返回结果"
             logger.warning(f"{prefix} 搜索失败：关键词 '{keyword}'，原因：{reason}")
             return []
         groups = self._normalize_results(
             response.get("results"), keyword, titles,
-            getattr(mediainfo, "year", None), allowed_types, limit,
+            None if query.test_mode else getattr(mediainfo, "year", None),
+            allowed_types, limit,
         )
         candidates = (
-            self._round_robin(list(groups.values()), limit)
+            [item for group in groups.values() for item in group]
             if query.test_mode else
             [
                 item for group in groups.values() for item in group
@@ -270,7 +292,7 @@ class PanSouSearchService(OwnerDelegator):
         logger.debug(
             f"{prefix} 渠道统计：原始条目={int(response.get('raw_count') or 0)}，"
             f"匹配链接={sum(len(group) for group in groups.values())}，"
-            f"已选类型={'/'.join(self._resource_type_order_config) or '无'}"
+            f"有效返回={len(usable)}"
         )
         return usable
 

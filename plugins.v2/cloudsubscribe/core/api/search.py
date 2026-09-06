@@ -14,6 +14,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
+from .page import _platform_image_url
 from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
@@ -46,6 +47,77 @@ class SearchApi(OwnerDelegator):
         "tmdb_id", "imdb_id", "tvdb_id", "douban_id",
         "bangumi_id", "anilist_id",
     )
+
+    @staticmethod
+    def _display_size(item: Dict[str, Any]) -> Any:
+        human = str(item.get("size_human") or "").strip()
+        if human:
+            return human
+        value = item.get("size")
+        if not isinstance(value, (int, float)) or value <= 0:
+            return value or 0
+        return StringUtils.format_size(int(value))
+
+    @staticmethod
+    def _sort_size(value: Any) -> float:
+        """将候选资源大小转换为稳定的排序值，兼容带单位的文本。"""
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value or "").strip().replace(",", "")
+        if not text:
+            return 0.0
+        match = re.search(r"(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|PB)?", text, re.I)
+        if not match:
+            return 0.0
+        number = float(match.group(1))
+        unit = (match.group(2) or "B").upper()
+        multipliers = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4, "PB": 1024 ** 5}
+        return number * multipliers.get(unit, 1)
+
+    @staticmethod
+    def _display_tags(item: Dict[str, Any]) -> List[str]:
+        values = [item.get("tags") or []]
+        values.extend(
+            item.get(key)
+            for key in (
+                "resolution", "quality", "source_type", "codec",
+                "audio_codec", "hdr_type", "subtitle",
+            )
+            if item.get(key)
+        )
+
+        tags: List[str] = []
+        seen_tags = set()
+
+        def append_tag(value: Any) -> None:
+            if isinstance(value, dict):
+                for nested in value.values():
+                    append_tag(nested)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for nested in value:
+                    append_tag(nested)
+                return
+
+            text = str(value or "").strip()
+            if not text:
+                return
+            if text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
+                try:
+                    parsed = ast.literal_eval(text)
+                except (SyntaxError, ValueError):
+                    parsed = None
+                if isinstance(parsed, (dict, list, tuple, set)):
+                    append_tag(parsed)
+                    return
+            if text in seen_tags:
+                return
+            seen_tags.add(text)
+            tags.append(text)
+
+        for value in values:
+            append_tag(value)
+        return tags
     _SEARCH_TEST_CONFIG_FIELDS = {
         "pansou": frozenset({
             "pansou_url", "pansou_username", "pansou_password",
@@ -53,6 +125,14 @@ class SearchApi(OwnerDelegator):
             "pansou_filter_include",
             "pansou_filter_exclude", "pansou_concurrency",
             "pansou_result_limit", "pansou_timeout",
+        }),
+        "piratebay": frozenset({
+            "piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval",
+            "piratebay_timeout",
+        }),
+        "uindex": frozenset({
+            "uindex_base_url", "uindex_result_limit", "uindex_request_interval",
+            "uindex_timeout",
         }),
         "hdhive": frozenset({
             "hdhive_base_url",
@@ -76,10 +156,6 @@ class SearchApi(OwnerDelegator):
         "seedhub": frozenset({
             "seedhub_base_url", "seedhub_result_limit", "seedhub_request_interval",
             "seedhub_timeout",
-        }),
-        "butailing": frozenset({
-            "butailing_base_url", "butailing_result_limit", "butailing_request_interval",
-            "butailing_timeout",
         }),
         "pinglian": frozenset({
             "pinglian_username", "pinglian_password", "pinglian_result_limit",
@@ -583,13 +659,14 @@ class SearchApi(OwnerDelegator):
     ):
         """使用当前表单配置创建隔离搜索器，不修改已保存配置或运行中服务。"""
         from ...handlers.search import SearchHandler
-        from ...search.butailing import ButailingClient
         from ...search.hdhive import HDHiveOpenAPIClient
         from ...search.juying import JuyingClient
         from ...search.pansou import PanSouClient
         from ...search.pinglian import PinglianClient
         from ...search.seedhub import SeedHubClient
         from ...search.online_docs import OnlineDocumentClient
+        from ...search.piratebay import PirateBayClient
+        from ...search.uindex import UIndexClient
 
         def as_list(value: Any) -> list:
             if isinstance(value, list):
@@ -634,7 +711,7 @@ class SearchApi(OwnerDelegator):
         # 各渠道仍会自行识别真实资源类型，但不会因目标盘配置而丢弃候选。
         if source in {
             "hdhive", "dian115", "juying", "seedhub",
-            "butailing", "pinglian", "pansou",
+            "pinglian", "pansou", "piratebay", "uindex",
         }:
             resource_type_order = [
                 "115", "123", "quark", "guangya", "tianyi", "alipan",
@@ -703,18 +780,22 @@ class SearchApi(OwnerDelegator):
                 config.get("seedhub_request_interval", 1) or 1
             ),
         ) if source == "seedhub" else None
-        butailing_client = (
-            ButailingClient(
-                base_url=str(config.get("butailing_base_url") or ""),
-                proxy=proxy,
-                request_timeout=int(
-                    config.get("butailing_timeout", 30) or 30
-                ),
-                request_interval=float(
-                    config.get("butailing_request_interval", 1) or 1
-                ),
-            ) if source == "butailing" else None
-        )
+        piratebay_client = PirateBayClient(
+            base_url=str(config.get("piratebay_base_url") or ""),
+            proxy=proxy,
+            request_timeout=int(config.get("piratebay_timeout", 20) or 20),
+            request_interval=float(
+                config.get("piratebay_request_interval", 1) or 1
+            ),
+        ) if source == "piratebay" else None
+        uindex_client = UIndexClient(
+            base_url=str(config.get("uindex_base_url") or ""),
+            proxy=proxy,
+            request_timeout=int(config.get("uindex_timeout", 20) or 20),
+            request_interval=float(
+                config.get("uindex_request_interval", 1) or 1
+            ),
+        ) if source == "uindex" else None
         juying_client = None
         if source == "juying":
             juying_client = JuyingClient(
@@ -755,14 +836,18 @@ class SearchApi(OwnerDelegator):
             pansou_client=pansou_client,
             hdhive_client=hdhive_client,
             seedhub_client=seedhub_client,
-            butailing_client=butailing_client,
+            piratebay_client=piratebay_client,
+            piratebay_enabled=source == "piratebay",
+            piratebay_result_limit=int(config.get("piratebay_result_limit", 20) or 20),
+            uindex_client=uindex_client,
+            uindex_enabled=source == "uindex",
+            uindex_result_limit=int(config.get("uindex_result_limit", 20) or 20),
             juying_client=juying_client,
             pinglian_client=pinglian_client,
             pansou_enabled=source == "pansou",
             hdhive_enabled=source == "hdhive",
             dian115_enabled=source == "dian115",
             seedhub_enabled=source == "seedhub",
-            butailing_enabled=source == "butailing",
             juying_enabled=source == "juying",
             pinglian_enabled=source == "pinglian",
             online_docs_client=online_docs_client,
@@ -797,9 +882,6 @@ class SearchApi(OwnerDelegator):
             pansou_timeout=pansou_timeout,
             seedhub_result_limit=int(
                 config.get("seedhub_result_limit", 20) or 20
-            ),
-            butailing_result_limit=int(
-                config.get("butailing_result_limit", 20) or 20
             ),
             juying_result_limit=int(
                 config.get("juying_result_limit", 5) or 5
@@ -899,6 +981,10 @@ class SearchApi(OwnerDelegator):
                 ),
                 "year": getattr(candidate, "year", None),
                 "poster": str(getattr(candidate, "poster_path", None) or ""),
+                "poster_url": _platform_image_url(
+                    getattr(candidate, "poster_path", None),
+                    "w500",
+                ),
                 "vote_average": getattr(candidate, "vote_average", None),
             })
             if len(items) >= 20:
@@ -1016,10 +1102,11 @@ class SearchApi(OwnerDelegator):
         source_names = {
             "hdhive": "HDHive",
             "dian115": "Dian115",
+            "piratebay": "海盗湾",
+            "uindex": "UIndex",
             "pansou": "PanSou",
             "juying": "聚影",
             "seedhub": "SeedHub",
-            "butailing": "不太灵",
             "pinglian": "盘链",
             "online_docs": "在线文档",
         }
@@ -1301,3 +1388,265 @@ class SearchApi(OwnerDelegator):
                 if len(balanced) >= target:
                     break
         return balanced
+
+    def api_vue_resource_search_resources(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """为网盘资源详情页并发检索所有可用的搜索渠道（无需在设置中手动开启即可自动搜索）。"""
+        data = payload or {}
+        title = str(data.get("title") or "").strip()
+        if not title:
+            return {"success": False, "message": "媒体标题不能为空", "data": {"items": [], "sources": []}}
+
+        original_title = str(data.get("original_title") or "").strip()
+        year = str(data.get("year") or "").strip()
+        media_type_str = str(data.get("media_type") or "movie").strip().lower()
+        media_type = MediaType.TV if media_type_str in {"tv", "television", "teleplay"} else MediaType.MOVIE
+        season = data.get("season")
+        if season is not None:
+            try:
+                season = int(season)
+            except (ValueError, TypeError):
+                season = None
+
+        mediainfo = MediaInfo()
+        mediainfo.title = title
+        mediainfo.type = media_type
+        if original_title:
+            mediainfo.original_title = original_title
+        if year:
+            mediainfo.year = str(year)
+        if data.get("tmdb_id"):
+            mediainfo.tmdb_id = data.get("tmdb_id")
+        if data.get("imdb_id"):
+            mediainfo.imdb_id = data.get("imdb_id")
+        if data.get("tvdb_id"):
+            mediainfo.tvdb_id = data.get("tvdb_id")
+        if data.get("douban_id"):
+            mediainfo.douban_id = data.get("douban_id")
+        if data.get("bangumi_id"):
+            mediainfo.bangumi_id = data.get("bangumi_id")
+        if data.get("anilist_id"):
+            mediainfo.anilist_id = data.get("anilist_id")
+        if data.get("anidb_id"):
+            mediainfo.anidb_id = data.get("anidb_id")
+
+        # 资源页可能来自豆瓣、Bangumi、AniList 等非 TMDB 榜单；统一交由
+        # MoviePilot 媒体识别链补齐 TMDB、IMDb、TVDB 及来源辅助 ID。
+        identity_source = str(data.get("media_source") or "").strip().lower()
+        if identity_source == "tmdb":
+            identity_source = "themoviedb"
+        identity_id = data.get("media_id")
+        identity_fields = {
+            "themoviedb": "tmdb_id",
+            "douban": "douban_id",
+            "bangumi": "bangumi_id",
+            "anilist": "anilist_id",
+            "imdb": "imdb_id",
+            "tvdb": "tvdb_id",
+        }
+        if identity_source and not identity_id:
+            identity_id = data.get(identity_fields.get(identity_source, ""))
+        elif not identity_source:
+            for source_name, field_name in (
+                    ("themoviedb", "tmdb_id"),
+                    ("douban", "douban_id"),
+                    ("bangumi", "bangumi_id"),
+                    ("anilist", "anilist_id"),
+                    ("imdb", "imdb_id"),
+                    ("tvdb", "tvdb_id"),
+            ):
+                value = data.get(field_name)
+                if value not in (None, "", 0, "0"):
+                    identity_source = source_name
+                    identity_id = value
+                    break
+        if identity_source and identity_id:
+            apply_media_identity(mediainfo, identity_source, identity_id)
+            if any(
+                    not getattr(mediainfo, field, None)
+                    for field in (
+                            "tmdb_id", "imdb_id", "tvdb_id", "douban_id",
+                            "bangumi_id", "anilist_id",
+                    )
+            ):
+                try:
+                    meta = MetaInfo(title)
+                    meta.type = media_type
+                    meta.year = year or None
+                    recognized = recognize_media(
+                        self.chain,
+                        meta=meta,
+                        mtype=media_type,
+                        media_source=identity_source,
+                        media_id=str(identity_id),
+                        cache=True,
+                    )
+                except Exception as error:
+                    logger.debug(f"资源搜索补充媒体身份失败：{error}")
+                    recognized = None
+                if recognized:
+                    for field in (
+                            "tmdb_id", "imdb_id", "tvdb_id", "douban_id",
+                            "bangumi_id", "anilist_id", "anidb_id",
+                    ):
+                        value = getattr(recognized, field, None)
+                        if value and not getattr(mediainfo, field, None):
+                            setattr(mediainfo, field, value)
+
+        handler = getattr(self, "_search_handler", None)
+        if not handler:
+            return {"success": False, "message": "搜索服务未就绪", "data": {"items": [], "sources": []}}
+
+        # 获取所有已注册的搜索渠道，无需用户在设置中开启
+        registered_sources = handler.get_all_search_sources()
+        if not registered_sources:
+            logger.warning("[网盘资源嗅探] 当前无可用的已注册搜索渠道")
+            return {"success": True, "message": "暂无可用搜索渠道",
+                    "data": {"items": [], "sources": [], "available_sources": []}}
+
+        # 权威渠道命名与顺序定义
+        source_display_names = {
+            "pansou": "PanSou",
+            "hdhive": "HDHive",
+            "dian115": "Dian115",
+            "juying": "聚影",
+            "seedhub": "SeedHub",
+            "pinglian": "盘链",
+            "piratebay": "海盗湾",
+            "uindex": "UIndex",
+            "online_docs": "在线文档",
+        }
+        # 优先读取用户配置的优先级顺序，其余按标准顺序排列
+        configured_order = getattr(handler, "_search_source_order", []) or []
+        default_pref = ["pansou", "hdhive", "dian115", "juying", "seedhub", "pinglian", "piratebay", "uindex"]
+        merged_order = []
+        for s in list(configured_order) + default_pref:
+            s_clean = str(s).strip().lower()
+            if s_clean in registered_sources and s_clean not in merged_order:
+                merged_order.append(s_clean)
+        for s in registered_sources:
+            if s not in merged_order:
+                merged_order.append(s)
+
+        req_source = str(data.get("source") or "").strip().lower()
+        force_refresh = bool(data.get("force") or data.get("force_refresh"))
+        if req_source:
+            sources_to_search = [req_source] if req_source in registered_sources else registered_sources
+        else:
+            sources_to_search = merged_order
+
+        logger.debug(
+            f"🔍 [网盘资源嗅探] 开始检索媒体《{title}》"
+            f"（类型: {media_type.value}, 年份: {year or '未知'}, TMDB: {mediainfo.tmdb_id or '无'}, 豆瓣: {mediainfo.douban_id or '无'}），"
+            f"目标渠道: {sources_to_search}，模式={'强制刷新' if force_refresh else '优先缓存'}"
+        )
+
+        started = time.monotonic()
+        try:
+            source_results = handler.search_sources(
+                sources=sources_to_search,
+                mediainfo=mediainfo,
+                media_type=media_type,
+                season=season,
+                apply_platform_rules=False,  # 发现页展示全量候选，不走严苛的订阅自动下载规则过滤
+                force_refresh=force_refresh,
+                result_limit=50,
+            )
+        except Exception as error:
+            logger.error(f"❌ [网盘资源嗅探] 渠道搜索发生异常：{error}", exc_info=True)
+            source_results = {}
+
+        all_items = []
+        resource_type_counts: Dict[str, int] = {}
+        for src, items in (source_results or {}).items():
+            src_items_count = len(items) if isinstance(items, list) else 0
+            logger.debug(
+                f"📡 [网盘资源嗅探] 渠道 [{source_display_names.get(src, src)}] 返回 {src_items_count} 条候选资源")
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or item.get("share_url") or "").strip()
+                raw_type = item.get("resource_type") or item.get("pan_type")
+                r_type = resource_type_from_url(url) or normalize_resource_type(raw_type)
+                # 资源弹窗保留各支持网盘的全部候选，但仍隐藏当前转存链路无法处理的类型。
+                if r_type not in SUPPORTED_RESOURCE_TYPES:
+                    continue
+
+                item_copy = dict(item)
+                item_copy["source"] = src
+                item_copy["resource_type"] = r_type
+                item_copy["resource_type_name"] = resource_type_name(
+                    r_type, r_type.upper() if r_type else "未知"
+                )
+                item_copy["can_preview"] = bool(
+                    item.get("can_preview") or (r_type in PREVIEW_RESOURCE_TYPES)
+                )
+                item_copy["tags"] = self._display_tags(item)
+                if not item_copy.get("size_formatted"):
+                    item_copy["size_formatted"] = self._display_size(item)
+                all_items.append(item_copy)
+                resource_type_counts[r_type] = resource_type_counts.get(r_type, 0) + 1
+
+        # 排序：有做种数排前面，其次按大小降序
+        all_items.sort(
+            key=lambda x: (
+                self._sort_size(x.get("seeders")),
+                self._sort_size(x.get("size")),
+            ),
+            reverse=True,
+        )
+        elapsed = round(time.monotonic() - started, 2)
+        logger.debug(
+            f"✅ [网盘资源嗅探] 《{title}》检索完成，有效候选共 {len(all_items)} 条，总耗时 {elapsed}s"
+        )
+
+        # 构造网盘分类和资源类型 tabs 统计列表
+        resource_types_list = [
+            {
+                "value": t_val,
+                "title": resource_type_name(t_val, t_val.upper()),
+                "count": t_cnt,
+            }
+            for t_val, t_cnt in sorted(
+                resource_type_counts.items(),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+        ]
+
+        # 构造规范有序的渠道列表供前端渲染Tab
+        available_channels_meta = [
+            {
+                "key": src_key,
+                "name": source_display_names.get(src_key, src_key),
+            }
+            for src_key in merged_order
+        ]
+
+        # 构造当前系统可用且支持的目标网盘列表供跨盘转存选择
+        available_drives = []
+        registry = getattr(self, "_cloud_drive_registry", None)
+        if registry:
+            for drive in registry.available():
+                if getattr(drive, "key", "") not in {"baidu", "xunlei"}:
+                    available_drives.append({
+                        "key": drive.key,
+                        "name": drive.name,
+                    })
+        if not available_drives:
+            main_key = getattr(getattr(self, "_cloud_drive", None), "key", "115")
+            main_name = getattr(getattr(self, "_cloud_drive", None), "name", "115网盘")
+            available_drives.append({"key": main_key, "name": main_name})
+
+        return {
+            "success": True,
+            "message": f"共检索到 {len(all_items)} 条候选资源 (耗时 {elapsed}s)",
+            "data": {
+                "items": all_items,
+                "sources": sources_to_search,
+                "available_sources": available_channels_meta,
+                "resource_types": resource_types_list,
+                "available_drives": available_drives,
+                "main_cloud_drive": getattr(getattr(self, "_cloud_drive", None), "key", "115"),
+                "elapsed": elapsed,
+            },
+        }

@@ -1,4 +1,4 @@
-"""网盘与搜索源账户、HDHive OAuth API。"""
+"""网盘与搜索源账户 API。"""
 
 import asyncio
 import copy
@@ -101,8 +101,7 @@ class AccountApi(OwnerDelegator):
         from ...search.dian115 import Dian115Client
         from ...search.hdhive import HDHiveClient
         from ...search.juying import JuyingClient
-        from ...search.pinglian import PinglianClient
-
+        source = str(source or "").strip().lower()
         client = None
         close_client = False
         try:

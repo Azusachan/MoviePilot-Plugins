@@ -279,7 +279,7 @@ class MovieSyncProcessor(OwnerDelegator):
                 share_url = resource.get("url", "")
                 resource_title = resource.get("title", "")
 
-                # 检查是否是刚搜索出尚未真正解锁的延期解锁 HDHive 资源
+                # 检查是否是刚搜索出尚未真正解锁的延期解锁资源
                 if (resource.get("need_unlock") or resource.get("need_access")) and not share_url:
                     resource_ref = resource.get("resource_ref")
                     if resource_ref and upgrade_target_exists and movie_history_score >= 0:
@@ -339,6 +339,13 @@ class MovieSyncProcessor(OwnerDelegator):
                 )
 
                 try:
+                    if self._is_offline_url(share_url) or self._is_magnet_url(share_url):
+                        if self._is_offline_blacklisted(resource, share_url):
+                            logger.info(
+                                f"🚫 离线任务命中黑名单（1天内失败或超时），跳过该资源并选择其他候选：{resource_title}"
+                            )
+                            continue
+
                     if self._is_magnet_url(share_url):
                         provider_name = self._prepare_magnet_resource(
                             resource, share_url

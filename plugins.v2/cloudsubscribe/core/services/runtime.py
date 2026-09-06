@@ -1109,6 +1109,8 @@ class SyncRuntimeService(OwnerDelegator):
             try:
                 offline_tasks.restart_offline_task(task_id)
                 restarted += 1
+                if self._sync_handler:
+                    self._sync_handler._remove_offline_blacklist(task_id)
             except Exception as error:
                 restart_failed += 1
                 logger.error(f"重启离线任务失败 {task_id}：{error}")

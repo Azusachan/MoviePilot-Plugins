@@ -871,6 +871,7 @@ class PostprocessService(OwnerDelegator):
                     task_done = bool(task and task.get("completed"))
                     if task and bool(task.get("failed")):
                         reason = "Magnet 离线下载失败"
+                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                         self._cleanup_failed_offline_task(item, reason)
                         self._mark_offline_history_status(pending_key, "失败", reason)
                         pending.pop(pending_key, None)
@@ -879,6 +880,7 @@ class PostprocessService(OwnerDelegator):
                     if not task_done:
                         if now - created_at >= self._OFFLINE_TIMEOUT:
                             reason = "Magnet 离线下载超过 30 分钟未完成，已退出"
+                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._cleanup_failed_offline_task(item, reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
                             pending.pop(pending_key, None)
@@ -906,6 +908,8 @@ class PostprocessService(OwnerDelegator):
                         notification_contexts.append((item, pending_key))
                         completed += len(finalized)
                     else:
+                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"),
+                                                    "Magnet 下载完成但未匹配到目标媒体文件")
                         failed += 1
                     continue
                 if task_type == "ed2k":
@@ -916,6 +920,7 @@ class PostprocessService(OwnerDelegator):
                     if task and bool(task.get("failed")):
                         reason = "离线下载失败"
                         logger.error(f"{reason}：{file_name}")
+                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                         self._mark_offline_history_status(pending_key, "失败", reason)
                         pending.pop(pending_key, None)
                         failed += 1
@@ -924,6 +929,7 @@ class PostprocessService(OwnerDelegator):
                         if now - created_at >= self._OFFLINE_TIMEOUT:
                             reason = "115 离线下载超过 30 分钟未完成，已退出"
                             logger.error(f"{reason}：{file_name}")
+                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
                             pending.pop(pending_key, None)
                             failed += 1
@@ -938,6 +944,7 @@ class PostprocessService(OwnerDelegator):
                         if directory_valid and not file_index:
                             reason = "离线任务及目标文件均不存在"
                             logger.warning(f"{reason}：{file_name}")
+                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
                             pending.pop(pending_key, None)
                             failed += 1
@@ -946,6 +953,7 @@ class PostprocessService(OwnerDelegator):
                         if now - created_at >= self._OFFLINE_TIMEOUT:
                             reason = "115 离线下载超过 30 分钟未完成，已退出"
                             logger.error(f"{reason}：{file_name}")
+                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
                             pending.pop(pending_key, None)
                             failed += 1

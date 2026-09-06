@@ -6,7 +6,8 @@ const SOURCE_ITEMS = [
   {title: "PanSou", value: "pansou"},
   {title: "聚影", value: "juying"},
   {title: "SeedHub", value: "seedhub"},
-  {title: "不太灵", value: "butailing"},
+  {title: "海盗湾", value: "piratebay"},
+  {title: "UIndex", value: "uindex"},
   {title: "盘链", value: "pinglian"},
   {title: "在线文档", value: "online_docs"},
 ]

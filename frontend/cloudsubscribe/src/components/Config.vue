@@ -195,18 +195,6 @@
                 {{ testResult.display_limit }}
                 个候选，不受正式搜索候选上限配置影响
               </div>
-              <v-tabs
-                v-if="testResourceTabs.length > 1"
-                v-model="activeTestResourceType"
-                density="compact"
-                color="primary"
-                show-arrows
-                class="source-test-tabs mb-2">
-                <v-tab v-for="tab in testResourceTabs" :key="tab.value" :value="tab.value">
-                  {{ tab.title }}
-                  <v-badge :content="tab.count" inline color="primary" class="ml-1" />
-                </v-tab>
-              </v-tabs>
               <div class="source-test-result-scroll">
                 <v-list v-if="filteredTestItems.length" density="compact" class="source-test-result-list">
                   <v-list-item
@@ -249,28 +237,13 @@
                         </v-chip>
                         <div class="source-test-item-actions">
                           <v-btn
-                            v-if="canAccessHdhiveResource(item)"
-                            icon="mdi-link-variant-plus"
-                            size="x-small"
-                            variant="text"
-                            title="获取资源链接"
-                            :loading="accessingResource === previewResourceKey(item)"
-                            :disabled="Boolean(previewingUrl) || Boolean(accessingResource)"
-                            @click="accessResource(item)" />
-                          <v-btn
                             v-if="canPreviewResource(item)"
                             icon="mdi-eye-outline"
                             size="x-small"
                             variant="text"
-                            :title="
-                              String(item?.source || '').toLowerCase() === 'hdhive'
-                                ? item?.is_unlocked
-                                  ? '预览已解锁分享内容'
-                                  : '只读预览资源内容'
-                                : '预览资源内容'
-                            "
+                            :title="'预览资源内容'"
                             :loading="previewingUrl === previewResourceKey(item)"
-                            :disabled="Boolean(previewingUrl) || Boolean(accessingResource)"
+                            :disabled="Boolean(previewingUrl)"
                             @click="previewResource(item)" />
                           <v-btn
                             v-if="item.url"
@@ -285,7 +258,7 @@
                             size="x-small"
                             variant="text"
                             color="warning"
-                            :title="`确认消耗 ${Number(item.unlock_points || 0)} 积分解锁`"
+                            :title="Number(item.unlock_points || 0) > 0 ? `确认消耗 ${Number(item.unlock_points || 0)} 积分解锁` : '获取免费资源链接'"
                             @click="confirmUnlock(item)" />
                         </div>
                       </div>
@@ -351,29 +324,30 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-    <v-dialog v-model="previewVisible" max-width="720">
+    <v-dialog v-model="previewVisible" max-width="760" scrollable class="resource-preview-dialog">
       <v-card class="source-preview-card">
-        <v-card-title class="d-flex align-center ga-2">
-          <v-icon icon="mdi-file-tree-outline" color="primary" />
-          <span>资源内容预览</span>
-          <v-spacer />
-          <a
-            v-if="previewMeta.share_url"
-            class="source-preview-header-link text-caption"
-            :href="previewMeta.share_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            :title="previewMeta.share_url">
-            {{ previewMeta.share_url }}
-          </a>
-          <v-btn
-            v-if="previewMeta.share_url"
-            icon="mdi-content-copy"
-            size="small"
-            variant="text"
-            title="复制网盘链接"
-            @click="copyText(previewMeta.share_url, '网盘链接')" />
-          <v-btn icon="mdi-close" size="small" variant="text" title="关闭" @click="previewVisible = false" />
+        <v-card-title class="source-preview-header d-flex align-center justify-space-between py-3 px-4">
+          <div class="d-flex align-center ga-2 min-w-0">
+            <v-icon icon="mdi-folder-open-outline" color="primary" />
+            <div class="min-w-0">
+              <div class="text-subtitle-1 font-weight-bold">资源内容预览</div>
+              <div
+                class="text-caption text-medium-emphasis text-truncate"
+                :title="previewMeta.display_name || previewMeta.share_url">
+                {{ previewMeta.display_name || previewMeta.share_url || "文件树解析" }}
+              </div>
+            </div>
+          </div>
+          <div class="d-flex align-center ga-1">
+            <v-btn
+              v-if="previewMeta.share_url"
+              icon="mdi-content-copy"
+              size="small"
+              variant="text"
+              title="复制网盘链接"
+              @click="copyText(previewMeta.share_url, '网盘链接')" />
+            <v-btn icon="mdi-close" size="small" variant="text" title="关闭" @click="previewVisible = false" />
+          </div>
         </v-card-title>
         <v-card-text class="source-preview-body">
           <div
@@ -384,17 +358,26 @@
               previewMeta.provider_name ||
               previewMeta.share_url
             "
-            class="source-preview-meta text-caption text-medium-emphasis">
-            <span v-if="previewMeta.provider_name">网盘: {{ previewMeta.provider_name }}</span>
-            <span v-if="previewMeta.resource_type_name">类型: {{ previewMeta.resource_type_name }}</span>
-            <span v-if="previewMeta.display_name" class="source-preview-meta__title">
-              标题: {{ previewMeta.display_name }}
+            class="source-preview-meta text-caption text-medium-emphasis mb-3">
+            <span v-if="previewMeta.provider_name">
+              网盘
+              <strong>{{ previewMeta.provider_name }}</strong>
             </span>
-            <span v-if="previewMeta.info_hash">Info Hash: {{ previewMeta.info_hash }}</span>
-            <span v-if="previewMeta.size">总大小: {{ formatPreviewSize(previewMeta.size) }}</span>
-            <span>当前层项目数: {{ previewItems.length }}</span>
+            <span v-if="previewMeta.resource_type_name">
+              类型
+              <strong>{{ previewMeta.resource_type_name }}</strong>
+            </span>
+            <span v-if="previewMeta.size">
+              总大小
+              <strong>{{ formatPreviewSize(previewMeta.size) }}</strong>
+            </span>
+            <span>
+              当前层
+              <strong class="text-primary">{{ previewItems.length }}</strong>
+              项
+            </span>
           </div>
-          <div v-if="previewBreadcrumbs.length > 1" class="source-preview-breadcrumbs">
+          <div v-if="previewBreadcrumbs.length > 1" class="source-preview-breadcrumbs mb-3">
             <template v-for="(breadcrumb, index) in previewBreadcrumbs" :key="`${breadcrumb.id}-${index}`">
               <v-icon v-if="index" icon="mdi-chevron-right" size="small" />
               <v-btn
@@ -456,8 +439,11 @@
         </v-card-title>
         <v-card-text>
           <p class="mb-3">
-            确认消耗
-            {{ Number(unlockItem?.unlock_points || 0) }} 积分解锁此资源？
+            <template v-if="Number(unlockItem?.unlock_points || 0) > 0">
+              确认消耗
+              {{ Number(unlockItem?.unlock_points || 0) }} 积分解锁此资源？
+            </template>
+            <template v-else>此资源免费，确认获取资源链接？</template>
           </p>
           <div class="text-body-2 text-medium-emphasis text-truncate" :title="unlockItem?.title || ''">
             {{ unlockItem?.title || "未命名资源" }}
@@ -519,12 +505,12 @@ function normalizeAutoSubscribeYears(target) {
   ].forEach((key) => {
     const value = Number(target[key]);
     if (!Number.isFinite(value) || value === 0) target[key] = currentYear;
-  });
+  })
   if (typeof target.auto_subscribe_douban_rss_urls === "string") {
     target.auto_subscribe_douban_rss_urls = target.auto_subscribe_douban_rss_urls
       .split(/[\n,，]+/)
       .map((value) => value.trim())
-      .filter(Boolean);
+      .filter(Boolean)
   }
   if (!Array.isArray(target.auto_subscribe_mikan_base_urls)) {
     const value = String(target.auto_subscribe_mikan_base_urls || "").trim();
@@ -568,7 +554,6 @@ const qrVisible = ref(false),
   directoryProvider = ref("115"),
   saving = ref(false),
   refreshingAccounts = ref([]),
-  hdhiveOauthAction = ref(""),
   testingSource = ref(""),
   testingAutoSubscribe = ref(""),
   autoSubscribeTestVisible = ref(false),
@@ -582,7 +567,6 @@ const qrVisible = ref(false),
   tmdbSearched = ref(false),
   tmdbCandidates = ref([]),
   selectedTmdbId = ref(0),
-  activeTestResourceType = ref("all"),
   testResult = ref({}),
   sourceTestVisible = ref(false),
   testSubmitted = ref(false),
@@ -590,7 +574,6 @@ const qrVisible = ref(false),
   testElapsed = ref(null),
   previewVisible = ref(false),
   previewingUrl = ref(""),
-  accessingResource = ref(""),
   previewLoading = ref(false),
   previewError = ref(""),
   previewItems = ref([]),
@@ -600,10 +583,8 @@ const qrVisible = ref(false),
   previewShareUrl = ref(""),
   previewSource = ref(""),
   previewJuyingResourceId = ref(""),
-  previewHdhiveResourceRef = ref(""),
   previewProviderData = ref({}),
   previewPendingResource = ref({}),
-  previewHdhiveUnlocked = ref(false),
   previewTargetSeason = ref(null),
   previewTargetEpisodes = ref([]),
   unlockVisible = ref(false),
@@ -613,7 +594,6 @@ const qrVisible = ref(false),
   message = ref(""),
   messageType = ref("success"),
   messageVisible = ref(false)
-let hdhiveOauthWindow = null
 let previewRequestId = 0
 const options = reactive({
   subscribes: [],
@@ -629,48 +609,57 @@ const options = reactive({
   rsshubLoading: false,
 })
 const sections = computed(() => createConfigSections(options, config))
-const testResourceTabs = computed(() => {
-  const types = Array.isArray(testResult.value?.resource_types) ? testResult.value.resource_types : []
-  if (!types.length) return []
-  const displayedCount = Number(testResult.value?.displayed_count ?? testResult.value?.items?.length ?? 0)
-  return [
-    {
-      value: "all",
-      title: "全部",
-      count: displayedCount,
-    },
-    ...types,
-  ]
-})
 const filteredTestItems = computed(() => {
   const items = Array.isArray(testResult.value?.items) ? testResult.value.items : []
-  if (activeTestResourceType.value === "all") return items
-  return items.filter((item) => item.resource_type === activeTestResourceType.value)
+  return items;
 })
 const sourceNames = {
-  pansou: "PanSou",
   hdhive: "HDHive",
+  pansou: "PanSou",
   dian115: "Dian115",
   juying: "聚影",
   seedhub: "SeedHub",
-  butailing: "不太灵",
   pinglian: "盘链",
   online_docs: "在线文档",
+  piratebay: "海盗湾",
+  uindex: "UIndex",
 }
 const autoSubscribeProviderNames = {
   douban: "豆瓣榜单",
   maoyan: "猫眼榜单",
   netflix: "Netflix 榜单",
   mikan: "Mikan 新番",
-};
+  tmdb: "TMDB 榜单",
+  bangumi: "Bangumi 榜单",
+  anilist: "AniList 榜单",
+}
 const autoSubscribeTestItems = computed(() => {
   const items = autoSubscribeTestResult.value?.data?.items || autoSubscribeTestResult.value?.items || [];
   return Array.isArray(items) ? items : [];
-});
+})
 const autoSubscribeTestMessage = computed(() => {
   return autoSubscribeTestResult.value?.message || "测试完成";
-});
+})
 const sourceTestConfigKeys = {
+  hdhive: [
+    "hdhive_base_url",
+    "hdhive_query_mode",
+    "hdhive_api_key",
+    "hdhive_client_id",
+    "hdhive_redirect_uri",
+    "hdhive_response_mode",
+    "hdhive_auth_code",
+    "hdhive_access_token",
+    "hdhive_refresh_token",
+    "hdhive_token_expires_at",
+    "hdhive_username",
+    "hdhive_password",
+    "hdhive_candidate_limit",
+    "hdhive_request_interval",
+    "hdhive_unlocks_per_minute",
+    "hdhive_torrentclaw_enabled",
+    "hdhive_torrentclaw_subtitle_languages",
+  ],
   pansou: [
     "pansou_url",
     "pansou_username",
@@ -684,21 +673,6 @@ const sourceTestConfigKeys = {
     "pansou_result_limit",
     "pansou_timeout",
   ],
-  hdhive: [
-    "hdhive_query_mode",
-    "hdhive_api_key",
-    "hdhive_client_id",
-    "hdhive_access_token",
-    "hdhive_refresh_token",
-    "hdhive_token_expires_at",
-    "hdhive_username",
-    "hdhive_password",
-    "hdhive_candidate_limit",
-    "hdhive_request_interval",
-    "hdhive_unlocks_per_minute",
-    "hdhive_torrentclaw_enabled",
-    "hdhive_torrentclaw_subtitle_languages",
-  ],
   dian115: [
     "dian115_email",
     "dian115_password",
@@ -708,7 +682,6 @@ const sourceTestConfigKeys = {
   ],
   juying: ["juying_username", "juying_password", "juying_result_limit", "juying_request_interval"],
   seedhub: ["seedhub_result_limit", "seedhub_request_interval", "seedhub_timeout"],
-  butailing: ["butailing_result_limit", "butailing_request_interval", "butailing_timeout"],
   pinglian: [
     "pinglian_username",
     "pinglian_password",
@@ -717,6 +690,8 @@ const sourceTestConfigKeys = {
     "pinglian_timeout",
   ],
   online_docs: ["online_docs"],
+  piratebay: ["piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval", "piratebay_timeout"],
+  uindex: ["uindex_base_url", "uindex_result_limit", "uindex_request_interval", "uindex_timeout"],
 }
 const sourceTest = reactive({
   source: "",
@@ -841,7 +816,7 @@ async function testAutoSubscribeProxy() {
         username: String(config.auto_subscribe_proxy_username || "").trim(),
         password: String(config.auto_subscribe_proxy_password || ""),
       }),
-    );
+    )
     if (response.success === false) throw new Error(response.message || "代理测试失败");
     notify(response.message || "榜单代理连接成功");
   } catch (error) {
@@ -920,23 +895,12 @@ function previewFileStem(value) {
 
 function canPreviewResource(item) {
   const source = String(item?.source || "").toLowerCase()
-  const hdhivePreview = source === "hdhive" && Boolean(item?.resource_ref && item?.resource_type);
   return Boolean(
     item?.can_preview &&
     (item?.url ||
       (source === "juying" && item?.provider_data?.resource_id) ||
-      hdhivePreview ||
+      (source === "hdhive" && item?.resource_ref) ||
       (item?.pending_resolution && ["seedhub", "pinglian"].includes(source))),
-  )
-}
-
-function canAccessHdhiveResource(item) {
-  return Boolean(
-    String(item?.source || "").toLowerCase() === "hdhive" &&
-    item?.need_access &&
-    !item?.url &&
-    Number(item?.unlock_points || 0) === 0 &&
-    (item?.is_free || item?.is_unlocked),
   )
 }
 
@@ -973,7 +937,9 @@ async function requestResourceUrl(item) {
 }
 
 function applySearchAccountPoints(source, deductedPoints) {
-  const normalizedSource = String(source || "").trim().toLowerCase();
+  const normalizedSource = String(source || "")
+    .trim()
+    .toLowerCase();
   const points = Number(deductedPoints);
   if (!normalizedSource || !Number.isFinite(points) || points <= 0) return;
   const account = options.searchAccounts?.[normalizedSource];
@@ -988,27 +954,15 @@ function applySearchAccountPoints(source, deductedPoints) {
         available: Math.max(0, available - points),
       },
     },
-  };
-}
-
-async function accessResource(item) {
-  if (!canAccessHdhiveResource(item)) return
-  const resourceKey = previewResourceKey(item)
-  if (accessingResource.value || previewingUrl.value) return
-  accessingResource.value = resourceKey
-  try {
-    const message = await requestResourceUrl(item)
-    notify(`${message}，现在可以预览或复制`)
-  } catch (error) {
-    notify(error?.response?.data?.message || error.message || String(error), "error")
-  } finally {
-    accessingResource.value = ""
   }
 }
 
+const previewHdhiveResourceRef = ref("");
+const previewHdhiveUnlocked = ref(false);
+
 async function previewResource(item) {
   if (!canPreviewResource(item)) return
-  if (accessingResource.value || previewingUrl.value) return
+  if (previewingUrl.value) return;
   const requestId = ++previewRequestId
   previewingUrl.value = previewResourceKey(item)
   const shareUrl = String(item.url || "")
@@ -1144,12 +1098,20 @@ async function unlockResource() {
   if (shouldPreview) await previewResource(item)
 }
 
+function isPointUnlockResource(item) {
+  const source = String(item?.source || "").toLowerCase();
+  return ["hdhive", "dian115"].includes(source);
+}
+
 function testItemStatus(item) {
-  if (item?.need_unlock) {
+  if (item?.need_unlock && Number(item.unlock_points || 0) > 0) {
     return {
       label: `${Number(item.unlock_points || 0)} 积分`,
       color: "warning",
     }
+  }
+  if (isPointUnlockResource(item) && Number(item?.unlock_points || 0) === 0) {
+    return {label: "免费", color: "success"};
   }
   if (item?.need_access) return { label: "待获取", color: "info" }
   return null
@@ -1329,6 +1291,9 @@ async function handleCheckinResult(result) {
   )
 }
 
+let hdhiveOauthWindow = null;
+const hdhiveOauthAction = ref("");
+
 function hdhiveOAuthPayload() {
   return {
     client_id: String(config.hdhive_client_id || "").trim(),
@@ -1397,7 +1362,7 @@ async function exchangeHdhiveOAuth(callbackData = {}) {
 }
 
 function handleHdhiveOAuthMessage(event) {
-  if (event.origin !== "https://hdhive.com") return
+  if (event.origin !== "https://re0.me") return;
   const payload = event.data
   if (
     !payload ||
@@ -1415,7 +1380,6 @@ function openSourceTest(source) {
   tmdbCandidates.value = []
   tmdbSearched.value = false
   selectedTmdbId.value = 0
-  activeTestResourceType.value = "all"
   testResult.value = {}
   testSubmitted.value = false
   testError.value = ""
@@ -1434,7 +1398,6 @@ async function searchTmdbCandidates() {
   tmdbSearched.value = false
   tmdbCandidates.value = []
   selectedTmdbId.value = 0
-  activeTestResourceType.value = "all"
   testResult.value = {}
   testSubmitted.value = false
   testError.value = ""
@@ -1485,7 +1448,6 @@ async function testSource(candidate) {
     }
     testResult.value = response.data?.data || response.data || {}
     testElapsed.value = testResult.value.elapsed_seconds ?? null
-    activeTestResourceType.value = "all"
     testSubmitted.value = true
     notify(response.message || "搜索渠道测试完成")
   } catch (e) {
@@ -1516,7 +1478,7 @@ async function testAutoSubscribe(provider) {
         provider_id: provider,
         config: JSON.parse(JSON.stringify(config)),
       }),
-    );
+    )
     autoSubscribeTestResult.value = response;
     if (response.success === false) autoSubscribeTestError.value = response.message || "榜单测试失败";
   } catch (error) {
@@ -1563,9 +1525,9 @@ watch(previewVisible, (visible) => {
   previewSource.value = ""
   previewJuyingResourceId.value = ""
   previewHdhiveResourceRef.value = "";
-  previewProviderData.value = {};
-  previewPendingResource.value = {}
   previewHdhiveUnlocked.value = false
+  previewProviderData.value = {};
+  previewPendingResource.value = {};
   previewTargetSeason.value = null
   previewTargetEpisodes.value = []
 })
@@ -1911,6 +1873,12 @@ watch(
 
 .source-preview-card {
   max-height: min(78vh, 720px);
+  border-radius: 10px;
+}
+
+.source-preview-header {
+  min-height: 58px;
+  background: rgb(var(--v-theme-surface));
 }
 
 .source-preview-body {
@@ -1943,26 +1911,18 @@ watch(
 }
 
 .source-preview-meta {
-  padding-bottom: 8px;
+  display: flex;
+  gap: 8px 18px;
+  padding: 9px 12px;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.22);
   overflow-wrap: anywhere;
   line-height: 1.55;
 }
 
 .source-preview-meta > span {
-  margin-right: 16px;
-}
-
-.source-preview-meta__title {
-  white-space: normal;
-}
-
-.source-preview-header-link {
-  display: block;
-  max-width: min(44%, 320px);
-  min-width: 0;
-  overflow: hidden;
-  color: rgb(var(--v-theme-primary));
-  text-overflow: ellipsis;
+  margin-right: 0;
   white-space: nowrap;
 }
 
