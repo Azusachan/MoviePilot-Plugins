@@ -370,11 +370,11 @@ class JuyingResourceService:
                douban_id: Optional[object], imdb_id: Optional[object],
                season: Optional[int],
                resource_type_order: Iterable[str], limit: int = 5,
-               test_mode: bool = False) -> List[Dict[str, Any]]:
+               resource_list_mode: bool = False) -> List[Dict[str, Any]]:
         normalized_limit = max(1, min(int(limit or 5), 80))
         allowed_order = (
             list(RESOURCE_TYPE_ORDER)
-            if test_mode
+            if resource_list_mode
             else list(dict.fromkeys(
                 str(value).strip().casefold()
                 for value in resource_type_order
@@ -388,7 +388,7 @@ class JuyingResourceService:
             rows = self._load_search_context(str(title or "").strip(), alternatives,
                                              extract_year(year), "tv" if media_type == "tv" else "movie",
                                              tmdb_id, douban_id, imdb_id, season,
-                                             filter_season=not test_mode)
+                                             filter_season=not resource_list_mode)
             order_map = {value: index for index, value in enumerate(allowed_order)}
             fallback_order = len(allowed_order)
             rows.sort(
@@ -399,11 +399,11 @@ class JuyingResourceService:
             rows = [
                 row for row in rows
                 if row["resource_type"] in allowed_order
-                   and (test_mode or row["link_exposed"])
+                   and (resource_list_mode or row["link_exposed"])
             ][:normalized_limit]
             results = []
             for row in rows:
-                if test_mode:
+                if resource_list_mode:
                     results.append({
                         **{
                             key: value for key, value in row.items()

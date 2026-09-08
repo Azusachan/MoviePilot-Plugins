@@ -5,10 +5,10 @@ const SOURCE_ITEMS = [
   {title: "Dian115", value: "dian115"},
   {title: "PanSou", value: "pansou"},
   {title: "聚影", value: "juying"},
+  {title: "盘链", value: "pinglian"},
   {title: "SeedHub", value: "seedhub"},
   {title: "海盗湾", value: "piratebay"},
   {title: "UIndex", value: "uindex"},
-  {title: "盘链", value: "pinglian"},
   {title: "在线文档", value: "online_docs"},
 ]
 

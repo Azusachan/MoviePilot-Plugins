@@ -204,7 +204,7 @@ class SeedHubSearchService:
             season: Optional[int],
             douban_id: Optional[object],
             limit: int,
-            test_mode: bool,
+            resource_list_mode: bool,
     ) -> List[Dict[str, Any]]:
         normalized_keywords = unique_texts(keywords)
         if not titles or not normalized_keywords:
@@ -227,7 +227,7 @@ class SeedHubSearchService:
         )
         movie_id = selected["movie_id"]
         entries = self._client.detail_entries(movie_id)
-        if not test_mode and media_type == "tv" and season:
+        if not resource_list_mode and media_type == "tv" and season:
             entries = [
                 item for item in entries
                 if extract_season(item.get("title")) in (None, season)
@@ -235,7 +235,7 @@ class SeedHubSearchService:
         normalized_limit = max(1, min(int(limit or 20), 80))
         results = (
             self._pending_entries(movie_id, entries, normalized_limit)
-            if test_mode else
+            if resource_list_mode else
             self._resolve_entries(movie_id, entries, normalized_limit)
         )
         selected_douban_id = str(selected.get("douban_id") or "").strip()
@@ -269,9 +269,9 @@ class SeedHubSearchService:
             douban_id=getattr(mediainfo, "douban_id", None),
             limit=(
                 query.result_limit or self._result_limit
-                if query.test_mode else self._result_limit
+                if query.resource_list_mode else self._result_limit
             ),
-            test_mode=query.test_mode,
+            resource_list_mode=query.resource_list_mode,
         )
         return normalize_magnets(resources, "seedhub")
 

@@ -569,7 +569,7 @@ class SearchHandler:
             target_episodes: Optional[List[int]] = None,
             target_episode_air_dates: Optional[Dict[int, str]] = None,
             subscribe: Any = None,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> List[Dict]:
         try:
@@ -583,15 +583,11 @@ class SearchHandler:
             target_episodes=tuple(target_episodes or ()),
             target_episode_air_dates=dict(target_episode_air_dates or {}),
             subscribe=subscribe,
-            test_mode=test_mode,
+            resource_list_mode=resource_list_mode,
             result_limit=result_limit,
         )
         prefix = format_search_log_prefix(query, provider.key)
         started = time.monotonic()
-        logger.debug(
-            f"{prefix} 搜索开始："
-            f"模式={'测试' if test_mode else '正式'}"
-        )
         try:
             results = provider.search(query)
         except Exception as error:
@@ -672,7 +668,7 @@ class SearchHandler:
             mediainfo,
             media_type,
             season,
-            test_mode=True,
+            resource_list_mode=True,
             result_limit=self._TEST_RESULT_LIMIT,
         )
         return list(results)[:self._TEST_RESULT_LIMIT]
@@ -729,7 +725,7 @@ class SearchHandler:
                 target_episodes,
                 target_episode_air_dates,
                 subscribe,
-                test_mode=not apply_platform_rules,
+                resource_list_mode=not apply_platform_rules,
                 result_limit=result_limit,
             )
         except Exception as error:

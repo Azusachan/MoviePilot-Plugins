@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from app.log import logger
 
 from .client import Dian115Client, Dian115Error
-from .protocol import resource_path, share_path
+from .security import resource_path, share_path
 from ...utils.cache import (
     cached_resource_call,
     create_platform_ttl_cache,
@@ -98,69 +98,33 @@ class Dian115ResourceService:
             media_type: str = "",
             season: int = 0,
     ) -> Dict[str, Any]:
-        """解锁分享；提交前刷新价格，避免价格变化突破授权上限。"""
+        """解锁分享；调用方预算已确认后直接提交解锁请求。"""
         normalized_share_id = int(share_id or 0)
         if normalized_share_id <= 0:
             raise Dian115Error("Dian115 分享 ID 无效")
-        current_path = share_path(normalized_share_id)
         started = time.monotonic()
         logger.debug(
             f"Dian115 准备获取分享：share_id={normalized_share_id}，"
+            f"resource_id={int(resource_id or 0)}，"
             f"预算={max_unlock_points if max_unlock_points is not None else '未限制'}"
         )
-        if (
-                max_unlock_points is not None
-                and int(tmdb_id or 0) > 0
-                and str(media_type or "").strip().lower() in {"movie", "tv"}
-        ):
-            detail = self.resource_detail(
-                int(tmdb_id),
-                str(media_type).strip().lower(),
-                int(season or 0),
-                force_refresh=True,
-            )
-            current_share = next(
-                (
-                    item for item in (detail.get("shares") or [])
-                    if int((item or {}).get("id") or 0) == normalized_share_id
-                ),
-                None,
-            )
-            if not current_share:
-                raise Dian115Error("Dian115 分享已下架", code="share_not_found")
-            current_cost = max(0, int(current_share.get("unlock_cost") or 0))
-            already_accessible = bool(
-                current_share.get("is_unlocked")
-                or current_share.get("url")
-                or current_share.get("url_115")
-                or (
-                        current_share.get("share_code")
-                        and current_share.get("receive_code")
-                )
-            )
-            logger.debug(
-                f"Dian115 解锁前价格复核：share_id={normalized_share_id}，"
-                f"cost={current_cost}，already_accessible={already_accessible}"
-            )
-            if current_cost > int(max_unlock_points) and not already_accessible:
-                raise Dian115Error(
-                    "Dian115 当前解锁价格超过预算："
-                    f"需要 {current_cost}，预算 {int(max_unlock_points)}",
-                    code="unlock_budget_exceeded",
-                )
+        current_path = share_path(normalized_share_id)
         body = {"share_id": normalized_share_id}
-        if int(resource_id or 0) > 0:
+        if int(resource_id or 0):
             body["resource_id"] = int(resource_id)
-        payload = self._client.request_json(
-            "POST",
-            "/api/portal/unlock",
-            current_path,
-            headers={"content-type": "application/json"},
-            json=body,
-        )
+        with self._client._lock:
+            self._client._check_cooldown()
+            payload = self._client._unlock_gate.run(lambda: self._client._request_json(
+                "POST", "/api/portal/unlock", current_path, json=body
+            ))
         unlock = payload.get("unlock") or {}
+        already = bool(
+            payload.get("already") or payload.get("owner")
+            or unlock.get("already") or unlock.get("is_unlocked")
+        )
         try:
-            actual_points = max(0, int(unlock.get("cost_points") or 0))
+            # 已解锁响应仍可能携带历史扣费记录，本次读取不再计费。
+            actual_points = 0 if already else max(0, int(unlock.get("cost_points") or 0))
         except (TypeError, ValueError):
             actual_points = 0
         if max_unlock_points is not None and actual_points > int(max_unlock_points):
@@ -170,11 +134,6 @@ class Dian115ResourceService:
                 f"预算={int(max_unlock_points)}"
             )
         payload["actual_points"] = actual_points
-        already = bool(
-            unlock.get("already")
-            or unlock.get("is_unlocked")
-            or payload.get("already")
-        )
         logger.debug(
             f"Dian115 分享获取完成：share_id={normalized_share_id}，"
             f"actual_points={actual_points}，"

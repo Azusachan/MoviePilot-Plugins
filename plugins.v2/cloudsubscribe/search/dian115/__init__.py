@@ -1,9 +1,9 @@
 """Dian115 门户搜索客户端。"""
 
 from .client import Dian115Client, Dian115Error
-from .protocol import encode_resource_key, resource_path, share_path
 from .provider import create_dian115_provider
 from .resource import Dian115ResourceService
+from .security import encode_resource_key, resource_path, share_path
 from .service import Dian115SearchService
 
 __all__ = [

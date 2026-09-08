@@ -592,8 +592,8 @@ class SearchApi(OwnerDelegator):
             handler = self._build_test_search_handler(
                 source,
                 self._test_search_config(source, payload.get("config")),
-                confirmed_hdhive_unlock_points=(
-                    points if source == "hdhive" else 0
+                confirmed_unlock_points=(
+                    points if source in ("hdhive", "dian115") else 0
                 ),
             )
             try:
@@ -655,7 +655,7 @@ class SearchApi(OwnerDelegator):
             source: str,
             config: Dict[str, Any],
             deadline: Optional[float] = None,
-            confirmed_hdhive_unlock_points: int = 0,
+            confirmed_unlock_points: int = 0,
     ):
         """使用当前表单配置创建隔离搜索器，不修改已保存配置或运行中服务。"""
         from ...handlers.search import SearchHandler
@@ -829,9 +829,7 @@ class SearchApi(OwnerDelegator):
                 get_data_func=self.get_data,
                 save_data_func=self.save_data,
             )
-        confirmed_hdhive_unlock_points = max(
-            0, int(confirmed_hdhive_unlock_points or 0)
-        )
+        confirmed_unlock_points = max(0, int(confirmed_unlock_points or 0))
         handler = SearchHandler(
             pansou_client=pansou_client,
             hdhive_client=hdhive_client,
@@ -858,16 +856,16 @@ class SearchApi(OwnerDelegator):
             hdhive_query_mode=hdhive_query_mode,
             # HDHive 测试使用独立只读路径；显式关闭自动解锁能力。
             hdhive_auto_unlock=False,
-            hdhive_max_unlock_points=confirmed_hdhive_unlock_points,
-            hdhive_max_points_per_sub=confirmed_hdhive_unlock_points,
+            hdhive_max_unlock_points=confirmed_unlock_points,
+            hdhive_max_points_per_sub=confirmed_unlock_points,
             dian115_email=str(config.get("dian115_email") or ""),
             dian115_password=str(config.get("dian115_password") or ""),
-            # 测试搜索不进入同步链；收费候选仅展示，不会消耗积分。
             dian115_auto_unlock=bool(
                 config.get("dian115_auto_unlock", False)
             ),
-            dian115_max_unlock_points=0,
-            dian115_max_points_per_sub=0,
+            # 显式解锁时按用户确认的价格放行单次解锁；预览路径保持 0 预算。
+            dian115_max_unlock_points=confirmed_unlock_points,
+            dian115_max_points_per_sub=confirmed_unlock_points,
             pansou_channels=config.get("pansou_channels") or [],
             pansou_plugins=config.get("pansou_plugins") or [],
             pansou_cloud_types=resource_type_order,
@@ -1340,6 +1338,10 @@ class SearchApi(OwnerDelegator):
                 "display_limit": self._SEARCH_TEST_DISPLAY_LIMIT,
                 "elapsed_seconds": round(time.monotonic() - test_started, 2),
                 "items": items,
+                "merged_by_type": {
+                    resource_type: [item for item in items if item.get("resource_type") == resource_type]
+                    for resource_type in resource_type_counts
+                },
                 "resource_types": [
                     {
                         "value": resource_type,
@@ -1509,15 +1511,15 @@ class SearchApi(OwnerDelegator):
             "hdhive": "HDHive",
             "dian115": "Dian115",
             "juying": "聚影",
-            "seedhub": "SeedHub",
             "pinglian": "盘链",
+            "seedhub": "SeedHub",
             "piratebay": "海盗湾",
             "uindex": "UIndex",
             "online_docs": "在线文档",
         }
         # 优先读取用户配置的优先级顺序，其余按标准顺序排列
         configured_order = getattr(handler, "_search_source_order", []) or []
-        default_pref = ["pansou", "hdhive", "dian115", "juying", "seedhub", "pinglian", "piratebay", "uindex"]
+        default_pref = ["pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "piratebay", "uindex"]
         merged_order = []
         for s in list(configured_order) + default_pref:
             s_clean = str(s).strip().lower()

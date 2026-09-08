@@ -2,7 +2,7 @@
 
 import datetime
 from typing import Any, Dict, List
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
@@ -10,10 +10,8 @@ from app.db.subscribe_oper import SubscribeOper
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
-from bs4 import BeautifulSoup
 
 from .media import tmdb_id_of
-from ..utils.http_client import requests
 
 DEFAULT_AUTO_SUBSCRIBE_USERNAME = "网盘订阅助手"
 
@@ -319,53 +317,6 @@ class UIConfig:
             except (TypeError, ValueError):
                 month = current_month
             config[key] = month if 1 <= month <= 12 else current_month
-
-    @staticmethod
-    def get_rsshub_instances() -> List[Dict[str, str]]:
-        """读取 RSSHub 公共实例公告页，仅保留可作为服务根地址的 URL。"""
-        fallback = ["https://rsshub.app"]
-        url = "https://docs.rsshub.app/zh/guide/instances"
-        try:
-            response = requests.get(url, timeout=10, impersonate="chrome")
-            try:
-                response.raise_for_status()
-                content = str(getattr(response, "text", "") or "")
-            finally:
-                response.close()
-            values = []
-            soup = BeautifulSoup(content, "lxml")
-            for row in soup.find_all("tr"):
-                cells = row.find_all(["th", "td"], recursive=False)
-                if len(cells) < 4:
-                    continue
-                address_anchor = cells[0].find("a", href=True)
-                status_badge = cells[-1].find("img", src=True)
-                if not address_anchor or not status_badge:
-                    continue
-                badge_url = urlsplit(str(status_badge.get("src") or "").strip())
-                if (
-                        badge_url.hostname != "img.shields.io"
-                        or not badge_url.path.endswith("website.svg")
-                ):
-                    continue
-                value = UIConfig._normalize_rsshub_instance_url(
-                    address_anchor.get("href")
-                )
-                status_target = UIConfig._normalize_rsshub_instance_url(
-                    parse_qs(badge_url.query).get("url", [""])[0]
-                )
-                if not value or not status_target:
-                    continue
-                if urlsplit(value).hostname != urlsplit(status_target).hostname:
-                    continue
-                if value not in values:
-                    values.append(value)
-            if values:
-                logger.debug(f"获取 RSSHub 公共实例成功：{len(values)} 个")
-                return [{"title": value, "value": value} for value in values]
-        except Exception as error:
-            logger.debug(f"获取 RSSHub 公共实例失败：{error}")
-        return [{"title": value, "value": value} for value in fallback]
 
     @staticmethod
     def _normalize_rsshub_instance_url(value: Any) -> str:

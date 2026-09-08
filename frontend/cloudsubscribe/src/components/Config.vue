@@ -195,6 +195,21 @@
                 {{ testResult.display_limit }}
                 个候选，不受正式搜索候选上限配置影响
               </div>
+              <v-tabs
+                v-if="testResourceTypes.length > 1"
+                v-model="selectedTestResourceType"
+                color="primary"
+                density="compact"
+                show-arrows
+                class="source-test-tabs source-test-resource-tabs">
+                <v-tab
+                  v-for="resourceType in testResourceTypes"
+                  :key="resourceType.value"
+                  :value="resourceType.value">
+                  {{ resourceType.title }}
+                  <v-badge inline :content="resourceType.count" color="primary" class="ml-2" />
+                </v-tab>
+              </v-tabs>
               <div class="source-test-result-scroll">
                 <v-list v-if="filteredTestItems.length" density="compact" class="source-test-result-list">
                   <v-list-item
@@ -568,6 +583,7 @@ const qrVisible = ref(false),
   tmdbCandidates = ref([]),
   selectedTmdbId = ref(0),
   testResult = ref({}),
+  selectedTestResourceType = ref(""),
   sourceTestVisible = ref(false),
   testSubmitted = ref(false),
   testError = ref(""),
@@ -609,9 +625,62 @@ const options = reactive({
   rsshubLoading: false,
 })
 const sections = computed(() => createConfigSections(options, config))
+const testResourceTypes = computed(() => {
+  const declared = Array.isArray(testResult.value?.resource_types)
+    ? testResult.value.resource_types
+    : [];
+  if (declared.length) return declared;
+  const items = Array.isArray(testResult.value?.items) ? testResult.value.items : [];
+  const counts = new Map();
+  items.forEach((item) => {
+    const value = String(item?.resource_type || "unknown").toLowerCase();
+    const title = item?.resource_type_name || value;
+    const current = counts.get(value) || {value, title, count: 0};
+    current.count += 1;
+    counts.set(value, current);
+  });
+  return [...counts.values()];
+});
+watch(testResourceTypes, (types) => {
+  if (!types.some((item) => item.value === selectedTestResourceType.value)) {
+    selectedTestResourceType.value = types[0]?.value || "";
+  }
+}, {immediate: true});
 const filteredTestItems = computed(() => {
   const items = Array.isArray(testResult.value?.items) ? testResult.value.items : []
-  return items;
+  let allItems = items;
+  const merged = testResult.value?.merged_by_type;
+  if (!allItems.length && merged && typeof merged === "object") {
+    const resourceTypeNames = {
+      "115": "115网盘",
+      "123": "123云盘",
+      quark: "夸克网盘",
+      aliyun: "阿里云盘",
+      alipan: "阿里云盘",
+      guangya: "光鸭云盘",
+      tianyi: "天翼云盘",
+      magnet: "磁力链接",
+      ed2k: "电驴链接",
+    };
+    allItems = Object.entries(merged).flatMap(([resourceType, rows]) => {
+      if (!Array.isArray(rows)) return [];
+      return rows.map((row) => {
+        const value = row && typeof row === "object" ? row : {};
+        const title = String(value.title || value.note || "未命名资源");
+        return {
+          ...value,
+          title,
+          url: value.url || value.share_url || "",
+          resource_type: value.resource_type || resourceType,
+          resource_type_name: value.resource_type_name || resourceTypeNames[resourceType] || resourceType,
+          size: value.size || value.size_human || 0,
+          tags: Array.isArray(value.tags) ? value.tags : [],
+        };
+      });
+    });
+  }
+  if (!selectedTestResourceType.value) return allItems;
+  return allItems.filter((item) => String(item?.resource_type || "unknown").toLowerCase() === selectedTestResourceType.value);
 })
 const sourceNames = {
   hdhive: "HDHive",
@@ -740,9 +809,6 @@ function applyOptions(data) {
   }
   if ("pansou" in data) {
     options.pansou = data.pansou && typeof data.pansou === "object" ? data.pansou : {}
-  }
-  if ("rsshub_instances" in data) {
-    options.rsshubInstances = Array.isArray(data.rsshub_instances) ? data.rsshub_instances : [];
   }
   const configuredSources = Array.isArray(config.search_source_order)
     ? config.search_source_order.filter(Boolean)
@@ -1381,6 +1447,7 @@ function openSourceTest(source) {
   tmdbSearched.value = false
   selectedTmdbId.value = 0
   testResult.value = {}
+  selectedTestResourceType.value = "";
   testSubmitted.value = false
   testError.value = ""
   testElapsed.value = null
@@ -1399,6 +1466,7 @@ async function searchTmdbCandidates() {
   tmdbCandidates.value = []
   selectedTmdbId.value = 0
   testResult.value = {}
+  selectedTestResourceType.value = "";
   testSubmitted.value = false
   testError.value = ""
   try {
@@ -1797,6 +1865,7 @@ watch(
 .source-test-notice {
   font-size: 0.81rem;
   line-height: 1.4;
+  margin-bottom: 2px !important;
 }
 
 .source-test-result-scroll {
@@ -1808,7 +1877,24 @@ watch(
 
 .source-test-tabs {
   flex: 0 0 auto;
+  min-height: 38px;
+  height: 38px;
+  margin-top: 0;
+  margin-bottom: 4px;
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.source-test-resource-tabs :deep(.v-slide-group__content) {
+  min-height: 38px;
+  height: 38px;
+  align-items: flex-end;
+}
+
+.source-test-resource-tabs :deep(.v-tab) {
+  height: 38px;
+  min-height: 38px;
+  min-width: 0;
+  padding-inline: 12px;
 }
 
 .source-test-tabs :deep(.v-btn__content) {

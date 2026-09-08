@@ -243,7 +243,7 @@ class HDHiveSearchService(OwnerDelegator):
         target_episodes = list(query.target_episodes)
         target_episode_air_dates = dict(query.target_episode_air_dates)
         subscribe = query.subscribe
-        test_mode = query.test_mode
+        resource_list_mode = query.resource_list_mode
         result_limit = query.result_limit
         tmdb_id = mediainfo.tmdb_id or tmdb_id_of(subscribe)
         search_prefix = (
@@ -264,7 +264,7 @@ class HDHiveSearchService(OwnerDelegator):
                 target_episodes=target_episodes,
                 target_episode_air_dates=target_episode_air_dates,
                 subscribe=subscribe,
-                test_mode=test_mode,
+                resource_list_mode=resource_list_mode,
                 result_limit=result_limit,
             )
         else:
@@ -273,7 +273,7 @@ class HDHiveSearchService(OwnerDelegator):
                 hdhive_media_type,
                 tmdb_id=tmdb_id,
                 season=season,
-                test_mode=test_mode,
+                resource_list_mode=resource_list_mode,
                 result_limit=result_limit,
             )
         if results is not None:
@@ -293,7 +293,7 @@ class HDHiveSearchService(OwnerDelegator):
             target_episodes: Optional[List[int]] = None,
             target_episode_air_dates: Optional[Dict[int, str]] = None,
             subscribe: Any = None,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> Optional[List[Dict]]:
         """
@@ -312,7 +312,7 @@ class HDHiveSearchService(OwnerDelegator):
         try:
             started = time.monotonic()
             resources = self._get_hdhive_web_resources()
-            if test_mode:
+            if resource_list_mode:
                 results = resources.search_test_resources(
                     tmdb_id=int(tmdb_id),
                     media_type=hdhive_media_type,
@@ -401,7 +401,7 @@ class HDHiveSearchService(OwnerDelegator):
     def _search_openapi(
             self, mediainfo: MediaInfo, hdhive_media_type: str,
             tmdb_id: Optional[int] = None, season: Optional[int] = None,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> Optional[List[Dict]]:
         """
@@ -445,7 +445,7 @@ class HDHiveSearchService(OwnerDelegator):
                 )
                 return []
 
-            if test_mode:
+            if resource_list_mode:
                 raw_candidates = []
                 for resource in data.get("data", []):
                     resource_type = self._openapi_resource_type(resource)

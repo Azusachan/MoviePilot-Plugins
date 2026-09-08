@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.log import logger
 
-from ...core.search import SearchQuery, format_search_log_prefix
+from .client import PinglianClient, PinglianError
 from ..magnet import clear_cache, media_titles
 from ..matching import extract_year, title_matches, unique_texts
 from ..types import (
@@ -15,7 +15,7 @@ from ..types import (
     normalize_resource_type,
     resource_type_from_url,
 )
-from .client import PinglianClient, PinglianError
+from ...core.search import SearchQuery, format_search_log_prefix
 
 
 class PinglianSearchService:
@@ -87,7 +87,7 @@ class PinglianSearchService:
             titles: List[str],
             year: Any,
             limit: int,
-            test_mode: bool,
+            resource_list_mode: bool,
             log_prefix: str,
     ) -> List[Dict[str, Any]]:
         titles = unique_texts(titles)
@@ -95,7 +95,7 @@ class PinglianSearchService:
             return []
         allowed = (
             list(RESOURCE_TYPE_ORDER)
-            if test_mode else list(dict.fromkeys(
+            if resource_list_mode else list(dict.fromkeys(
                 normalize_resource_type(value) for value in self._resource_types
                 if normalize_resource_type(value) in SUPPORTED_RESOURCE_TYPES
             ))
@@ -182,7 +182,7 @@ class PinglianSearchService:
                 return 0
 
         candidates.sort(key=lambda item: (item[0], -user_tier(item)))
-        if test_mode:
+        if resource_list_mode:
             candidates = self._round_robin(candidates)
         results = []
         seen = set()
@@ -209,7 +209,7 @@ class PinglianSearchService:
                     logger.debug(f"{prefix} 跳过类型不匹配的直链")
                     continue
                 direct_count += 1
-            elif test_mode:
+            elif resource_list_mode:
                 results.append({
                     "title": str(row.get("title") or "盘链资源").strip(),
                     "description": str(row.get("source") or "").strip(),
@@ -263,9 +263,9 @@ class PinglianSearchService:
             year=getattr(mediainfo, "year", None),
             limit=(
                 query.result_limit or self._result_limit
-                if query.test_mode else self._result_limit
+                if query.resource_list_mode else self._result_limit
             ),
-            test_mode=query.test_mode,
+            resource_list_mode=query.resource_list_mode,
             log_prefix=format_search_log_prefix(query, "pinglian"),
         )
 

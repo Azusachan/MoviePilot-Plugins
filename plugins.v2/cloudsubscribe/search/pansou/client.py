@@ -231,6 +231,7 @@ class PanSouClient:
             filter_config: Optional[Dict[str, List[str]]] = None,
             refresh: bool = False,
             concurrency: Optional[int] = None,
+            response_mode: str = "results",
     ) -> Dict[str, Any]:
         """
         搜索网盘资源
@@ -289,7 +290,7 @@ class PanSouClient:
             payload = {
                 "kw": keyword,
                 "refresh": bool(refresh),
-                "res": "results",
+                "res": "merge" if str(response_mode).strip().lower() == "merge" else "results",
                 "src": "all",
             }
             if effective_concurrency:
@@ -367,9 +368,39 @@ class PanSouClient:
             # 获取 data 字段
             data = resp_data.get("data", {})
             total = data.get("total", 0)
+            merged_by_type = data.get("merged_by_type")
             results_list = data.get("results", [])
             if not isinstance(results_list, list):
                 results_list = []
+            if str(response_mode).strip().lower() == "merge" and isinstance(merged_by_type, dict):
+                # merge 响应按网盘分类轮询，避免磁力等大分类占满总上限。
+                typed_rows = {
+                    resource_type: [item for item in values if isinstance(item, dict)]
+                    for resource_type, values in merged_by_type.items()
+                    if isinstance(values, list)
+                }
+                results_list = []
+                while typed_rows and len(results_list) < self.MAX_RAW_RESULTS:
+                    for resource_type in list(typed_rows):
+                        values = typed_rows[resource_type]
+                        if not values:
+                            typed_rows.pop(resource_type, None)
+                            continue
+                        item = values.pop(0)
+                        results_list.append({
+                            "title": str(item.get("note") or "").strip(),
+                            "datetime": item.get("datetime") or "",
+                            "source": item.get("source") or "",
+                            "links": [{
+                                "url": item.get("url") or "",
+                                "password": item.get("password") or "",
+                                "work_title": item.get("note") or "",
+                                "description": item.get("note") or "",
+                                "type": resource_type,
+                            }],
+                        })
+                        if len(results_list) >= self.MAX_RAW_RESULTS:
+                            break
             raw_count = len(results_list)
             results_list = results_list[:self.MAX_RAW_RESULTS]
             processed_count = len(results_list)
@@ -381,6 +412,7 @@ class PanSouClient:
                 "processed_count": processed_count,
                 "elapsed_ms": int(elapsed * 1000),
                 "results": results_list,
+                "merged_by_type": merged_by_type if isinstance(merged_by_type, dict) else {},
             }
 
         except requests.exceptions.Timeout:

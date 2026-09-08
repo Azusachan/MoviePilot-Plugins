@@ -20,10 +20,10 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       {value: "hdhive", title: "HDHive", icon: "mdi-hexagon-multiple-outline"},
       {value: "dian115", title: "Dian115", icon: "mdi-cloud-search"},
       {value: "juying", title: "聚影", icon: "mdi-movie-search-outline"},
+      {value: "pinglian", title: "盘链", icon: "mdi-link-variant"},
       {value: "seedhub", title: "SeedHub", icon: "mdi-seed-outline"},
       {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},
       {value: "uindex", title: "UIndex", icon: "mdi-magnet"},
-      {value: "pinglian", title: "盘链", icon: "mdi-link-variant"},
       {value: "online_docs", title: "在线文档", icon: "mdi-file-document-outline"},
     ],
     groups: [

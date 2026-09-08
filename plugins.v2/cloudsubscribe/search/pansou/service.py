@@ -9,7 +9,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ..magnet import clear_cache, normalize_magnets
-from ..types import resource_type_name
+from ..types import PANSOU_RESOURCE_TYPES, resource_type_name
 from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 
 
@@ -157,8 +157,6 @@ class PanSouSearchService(OwnerDelegator):
                 group = groups.setdefault(
                     resource_type_name(resource_type, resource_type), []
                 )
-                if len(group) >= limit:
-                    continue
                 candidate = {
                     "url": link.get("url") or "",
                     "title": title,
@@ -226,23 +224,33 @@ class PanSouSearchService(OwnerDelegator):
         titles = self._media_titles(mediainfo)
         limit = (
             max(1, int(query.result_limit or self._pansou_result_limit))
-            if query.test_mode else self._pansou_result_limit
+            if query.resource_list_mode else self._pansou_result_limit
         )
         allowed_types = (
-            [] if query.test_mode else
+            [
+                "aliyun" if value == "alipan" else value
+                for value in PANSOU_RESOURCE_TYPES
+            ] if query.resource_list_mode else
             [
                 "aliyun" if value == "alipan" else value
                 for value in self._resource_type_order_config
             ]
         )
+        if not query.resource_list_mode and query.subscribe is not None:
+            target_drive = str(getattr(self, "_cloud_drive_key", "") or "").strip().lower()
+            if target_drive:
+                allowed_types = [
+                    "aliyun" if target_drive == "alipan" else target_drive
+                ]
         response = self._pansou_client.request_search(
             keyword=keyword,
             cloud_types=allowed_types,
-            channels=[] if query.test_mode else self._pansou_channels,
-            plugins=[] if query.test_mode else self._pansou_plugins,
-            filter_config={} if query.test_mode else self._pansou_filter,
+            channels=[] if query.resource_list_mode else self._pansou_channels,
+            plugins=[] if query.resource_list_mode else self._pansou_plugins,
+            filter_config={} if query.resource_list_mode else self._pansou_filter,
             refresh=self._pansou_refresh,
             concurrency=self._pansou_concurrency,
+            response_mode="merge" if query.resource_list_mode else "results",
         )
         raw_items = (response or {}).get("results") or []
         # 如果带年份搜索结果为空，尝试以纯标题降级检索
@@ -252,11 +260,12 @@ class PanSouSearchService(OwnerDelegator):
             fallback_res = self._pansou_client.request_search(
                 keyword=pure_title,
                 cloud_types=allowed_types,
-                channels=[] if query.test_mode else self._pansou_channels,
-                plugins=[] if query.test_mode else self._pansou_plugins,
-                filter_config={} if query.test_mode else self._pansou_filter,
+                channels=[] if query.resource_list_mode else self._pansou_channels,
+                plugins=[] if query.resource_list_mode else self._pansou_plugins,
+                filter_config={} if query.resource_list_mode else self._pansou_filter,
                 refresh=self._pansou_refresh,
                 concurrency=self._pansou_concurrency,
+                response_mode="merge" if query.resource_list_mode else "results",
             )
             if fallback_res and fallback_res.get("results"):
                 response = fallback_res
@@ -268,22 +277,20 @@ class PanSouSearchService(OwnerDelegator):
             return []
         groups = self._normalize_results(
             response.get("results"), keyword, titles,
-            None if query.test_mode else getattr(mediainfo, "year", None),
+            None if query.resource_list_mode else getattr(mediainfo, "year", None),
             allowed_types, limit,
         )
-        candidates = (
-            [item for group in groups.values() for item in group]
-            if query.test_mode else
-            [
-                item for group in groups.values() for item in group
-                if self._resource_type(item) in self._resource_type_order_config
-            ]
-        )
+        grouped = [
+            group for resource_type, group in groups.items()
+            if query.resource_list_mode or self._resource_type(group[0]) in self._resource_type_order_config
+            if group
+        ]
+        candidates = self._round_robin(grouped, limit)
         candidates = normalize_magnets(candidates, "pansou")
         usable = [
             resource for resource in candidates
             if (
-                       query.test_mode
+                       query.resource_list_mode
                        or resource.get("resource_type") != "magnet"
                        or resource.get("magnet_metadata")
                )
