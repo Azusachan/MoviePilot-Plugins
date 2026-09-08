@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "plugins.v2/cloudsubscribe/handlers/notification/media_server.py"
+MODULE_PATH = ROOT / "plugins.v2/cloudsubscribefork/handlers/notification/media_server.py"
 
 
 def install_stub(name, **members):
@@ -40,7 +40,7 @@ install_stub(
 )
 install_stub("app.utils.http", RequestUtils=Mock)
 
-spec = importlib.util.spec_from_file_location("cloudsubscribe_media_server", MODULE_PATH)
+spec = importlib.util.spec_from_file_location("cloudsubscribefork_media_server", MODULE_PATH)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader
 spec.loader.exec_module(module)

@@ -77,11 +77,11 @@ jobs:
           node-version: "22"
 
       - name: Verify fork backend
-        if: ${{ matrix.plugin.id == 'CloudSubscribe' }}
+        if: ${{ matrix.plugin.id == 'CloudSubscribeFork' }}
         run: |
           python3 -m pip install beautifulsoup4
           python3 -m unittest discover -s tests -v
-          python3 -m compileall -q plugins.v2/cloudsubscribe
+          python3 -m compileall -q plugins.v2/cloudsubscribefork
 
       - name: Build frontend
         if: ${{ matrix.plugin.has_frontend }}

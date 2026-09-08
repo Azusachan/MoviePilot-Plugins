@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parents[1]
-SEARCH = ROOT / "plugins.v2/cloudsubscribe/search"
+SEARCH = ROOT / "plugins.v2/cloudsubscribefork/search"
 spec = importlib.util.spec_from_file_location("mikan_matching_test", SEARCH / "matching.py")
 matching = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(matching)

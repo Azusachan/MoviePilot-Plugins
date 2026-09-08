@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "package.v2.json"
-PLUGIN = ROOT / "plugins.v2/cloudsubscribe/__init__.py"
+PLUGIN = ROOT / "plugins.v2/cloudsubscribefork/__init__.py"
 MARKER = ROOT / ".github/UPSTREAM_COMMIT"
 
 
@@ -51,10 +51,10 @@ def main() -> None:
     # MoviePilot compares dot-separated numeric components. A PEP 440 local
     # version such as +plex.<sha> would be treated as older than upstream.
     # Last component tracks fork features without changing the upstream marker.
-    version = f"{base}.{commit_count}.{int(commit[:8], 16)}.8"
+    version = f"{base}.{commit_count}.{int(commit[:8], 16)}.9"
 
     package = json.loads(PACKAGE.read_text(encoding="utf-8"))
-    info = package["CloudSubscribe"]
+    info = package["CloudSubscribeFork"]
     info["version"] = version
     history = info.setdefault("history", {})
     history[f"v{version}"] = (

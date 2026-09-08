@@ -17,8 +17,8 @@ https://github.com/odomu/MoviePilot-Plugins
 
 ### 订阅与网盘
 
-- [网盘订阅助手](docs/cloudsubscribe.md)：结合 MoviePilot 订阅功能，自动搜索网盘资源并同步缺失的电影和剧集；支持资源推荐、115
-  转存与离线下载、STRM、洗版、智能体、工作流和侧边栏页面。源码目录说明见[插件 README](plugins.v2/cloudsubscribe/README.md)。
+- [网盘订阅助手](docs/cloudsubscribefork.md)：结合 MoviePilot 订阅功能，自动搜索网盘资源并同步缺失的电影和剧集；支持资源推荐、115
+  转存与离线下载、STRM、洗版、智能体、工作流和侧边栏页面。源码目录说明见[插件 README](plugins.v2/cloudsubscribefork/README.md)。
 
 ## 仓库结构
 

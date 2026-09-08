@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-tree = ast.parse((ROOT / 'plugins.v2/cloudsubscribe/core/hook/events.py').read_text(encoding='utf-8'))
+tree = ast.parse((ROOT / 'plugins.v2/cloudsubscribefork/core/hook/events.py').read_text(encoding='utf-8'))
 handler = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'PluginEventHandler')
 handler.bases = []
 handler.body = [n for n in handler.body if isinstance(n, ast.FunctionDef)

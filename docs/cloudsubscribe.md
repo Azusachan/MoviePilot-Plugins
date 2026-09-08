@@ -41,7 +41,7 @@ https://github.com/odomu/MoviePilot-Plugins
 
 安装“网盘订阅助手”。Release 包已包含前端产物，运行环境无需安装 Node.js。插件版本、最低 MoviePilot 版本和更新记录以 [
 `package.v2.json`](../package.v2.json) 为准，Python 依赖见 [
-`requirements.txt`](../plugins.v2/cloudsubscribe/requirements.txt)。
+`requirements.txt`](../plugins.v2/cloudsubscribefork/requirements.txt)。
 
 ## 配置顺序
 
@@ -184,5 +184,5 @@ NFO 和图片刮削是独立开关，不依赖彼此。
 
 ## 源码与许可
 
-源码模块和 Release 目录结构见 [`plugins.v2/cloudsubscribe/README.md`](../plugins.v2/cloudsubscribe/README.md)
+源码模块和 Release 目录结构见 [`plugins.v2/cloudsubscribefork/README.md`](../plugins.v2/cloudsubscribefork/README.md)
 。本插件按 [GNU General Public License v3.0](../LICENSE) 许可。

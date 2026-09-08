@@ -1,6 +1,6 @@
-# CloudSubscribe Plex compatibility fork
+# CloudSubscribeFork Plex compatibility fork
 
-This fork tracks `odomu/MoviePilot-Plugins` and publishes CloudSubscribe builds
+This fork tracks `odomu/MoviePilot-Plugins` and publishes CloudSubscribeFork builds
 that use MoviePilot's generic media-server API when calculating existing TV
 episodes. This removes the upstream Emby-only gate while preserving the
 Emby-specific path and media-stream logic used elsewhere.
@@ -33,7 +33,7 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
 4. Runs backend tests, compilation, and a frontend build, publishing the
    `upstream-sync/validation` commit status and failure comments on the PR.
 5. After successful validation, merges the exact tested PR head using a merge
-   commit, then explicitly dispatches `plugins-release.yml` for CloudSubscribe.
+   commit, then explicitly dispatches `plugins-release.yml` for CloudSubscribeFork.
 
 No rebase, tree replacement, force push, or direct push to `main` is used.
 An existing unresolved sync PR is resumed rather than creating daily duplicates.
