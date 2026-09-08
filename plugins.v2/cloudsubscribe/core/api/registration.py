@@ -205,6 +205,28 @@ class MoviePilotRegistration(OwnerDelegator):
                 "summary": "确认后解锁测试资源",
             },
             {
+                "path": "/resource/recommend",
+                "endpoint": self.api_vue_resource_recommend,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取平台推荐榜单媒体列表",
+            },
+            {
+                "path": "/resource/detail",
+                "endpoint": self.api_vue_resource_detail,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "获取资源详情媒体身份",
+            },
+
+            {
+                "path": "/resource/search_resources",
+                "endpoint": self.api_vue_resource_search_resources,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "后台并发搜索指定媒体的网盘及磁力资源",
+            },
+            {
                 "path": "/config/save",
                 "endpoint": self.api_vue_save_config,
                 "methods": ["POST"],
@@ -440,14 +462,24 @@ class MoviePilotRegistration(OwnerDelegator):
     def get_sidebar_nav(self) -> List[Dict[str, Any]]:
         if not self._enabled or not self._show_sidebar_nav:
             return []
-        return [{
-            "nav_key": "main",
-            "title": "网盘订阅",
-            "icon": "mdi-cloud-sync-outline",
-            "section": "subscribe",
-            "permission": "subscribe",
-            "order": 30,
-        }]
+        return [
+            {
+                "nav_key": "main",
+                "title": "网盘订阅",
+                "icon": "mdi-cloud-sync-outline",
+                "section": "subscribe",
+                "permission": "subscribe",
+                "order": 30,
+            },
+            {
+                "nav_key": "resource",
+                "title": "网盘资源",
+                "icon": "mdi-cloud-search-outline",
+                "section": "discovery",
+                "permission": "discovery",
+                "order": 31,
+            },
+        ]
 
     def get_actions(self) -> List[Dict[str, Any]]:
         return [

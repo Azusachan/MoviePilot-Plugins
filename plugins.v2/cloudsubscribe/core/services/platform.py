@@ -823,6 +823,7 @@ class PlatformIntegrationService(OwnerDelegator):
             selection_id: str = "",
             tmdb_id: Optional[int] = None,
             selection_scope: str = "",
+            detect_multiple: bool = True,
     ) -> Dict[str, Any]:
         """提交链接；无有效订阅时先完成 TMDB 快速识别与选择。"""
         try:
@@ -892,18 +893,62 @@ class PlatformIntegrationService(OwnerDelegator):
         if not links:
             return {"success": False, "message": "请至少提供一个有效资源链接"}
 
+        # 一个分享可能包含多个媒体。无显式标题时按文件名分组，分别走现有
+        # TMDB/订阅匹配和整理流程，避免把整包错误归到出现次数最多的媒体。
+        detected = (
+            self._preview_link_media_candidates(links)
+            if selected_candidate is None and detect_multiple else []
+        )
+        title_key = self._normalize_agent_title(title)
+        detected_keys = {
+            self._normalize_agent_title(item.get("title")) for item in detected
+        }
+        if (
+                selected_candidate is None
+                and len(detected) > 1
+                and (not title_key or title_key not in detected_keys)
+        ):
+            results = []
+            for item in detected:
+                item_result = self.submit_platform_links(
+                    subscribe_id=subscribe_id,
+                    resource_links=links,
+                    wait=wait,
+                    title=str(item.get("title") or "").strip(),
+                    media_type=str(item.get("media_type") or "").strip(),
+                    seasons=list(item.get("seasons") or []),
+                    selection_scope=selection_scope,
+                    detect_multiple=False,
+                )
+                results.append(item_result)
+            success = all(bool(item.get("success")) for item in results)
+            messages = [str(item.get("message") or "") for item in results]
+            return {
+                "success": success,
+                "message": "；".join(value for value in messages if value)
+                           or ("多媒体资源已提交" if success else "部分媒体提交失败"),
+                "data": {
+                    "media": [
+                        dict((item.get("data") or {}).get("media") or {})
+                        for item in results
+                    ],
+                    "results": results,
+                },
+            }
+
         if selected_candidate is None:
-            recognized_title = str(title or "").strip() or self._link_media_title(links)
-            preview = {}
-            if not recognized_title:
-                preview = self._preview_link_media(links)
-                recognized_title = str(preview.get("title") or "").strip()
+            preview = self._preview_link_media(links) if not str(title or "").strip() else {}
+            recognized_title = str(title or "").strip() or str(preview.get("title") or "").strip()
+            if not str(title or "").strip() and recognized_title:
                 if preview.get("year") and str(preview["year"]) not in recognized_title:
                     recognized_title = f"{recognized_title} ({preview['year']})"
                 if not media_type:
                     media_type = str(preview.get("media_type") or "")
                 if season is None:
                     season = preview.get("season")
+            else:
+                recognized_title = recognized_title or self._link_media_title(links)
+
             if not recognized_title:
                 return {
                     "success": False,
@@ -1120,8 +1165,13 @@ class PlatformIntegrationService(OwnerDelegator):
 
     def _preview_link_media(self, links: List[str]) -> Dict[str, Any]:
         """从已配置网盘的分享文件名推断媒体名称和季集范围。"""
+        candidates = self._preview_link_media_candidates(links)
+        return candidates[0] if candidates else {}
+
+    def _preview_link_media_candidates(self, links: List[str]) -> List[Dict[str, Any]]:
+        """从分享文件名识别全部媒体，按文件出现次数降序返回。"""
         if not self._sync_handler:
-            return {}
+            return []
         for link in links:
             if resource_type_from_url(link) not in PREVIEW_PROVIDER_KEYS:
                 continue
@@ -1135,23 +1185,30 @@ class PlatformIntegrationService(OwnerDelegator):
                 f"分享内容预览：类型={resource_type_name(resource_type, '未知')}，"
                 f"文件数={len(files)}"
             )
-            inferred = self._infer_link_media(files)
+            inferred = self._infer_link_media_candidates(files)
             if inferred:
-                logger.info(
-                    f"分享内容识别完成：标题={inferred.get('title')}，"
-                    f"类型={inferred.get('media_type') or '待 TMDB 判断'}，"
-                    f"季={','.join(str(value) for value in inferred.get('seasons') or []) or '未指定'}"
-                )
+                for item in inferred:
+                    logger.info(
+                        f"分享内容识别完成：标题={item.get('title')}，"
+                        f"类型={item.get('media_type') or '待 TMDB 判断'}，"
+                        f"季={','.join(str(value) for value in item.get('seasons') or []) or '未指定'}"
+                    )
                 return inferred
             logger.warning(
                 f"分享内容未识别到媒体文件名："
                 f"类型={resource_type_name(resource_type, '未知')}"
             )
-        return {}
+        return []
 
     @staticmethod
     def _infer_link_media(files: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """聚合分享中的视频文件名，选择出现频率最高的媒体元数据。"""
+        """兼容旧调用：返回分享中出现频率最高的媒体。"""
+        candidates = PlatformIntegrationService._infer_link_media_candidates(files)
+        return candidates[0] if candidates else {}
+
+    @staticmethod
+    def _infer_link_media_candidates(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """聚合分享中的视频文件名，保留全部不同媒体元数据。"""
         scores: Counter = Counter()
         candidates: Dict[str, Dict[str, Any]] = {}
         media_extensions = {
@@ -1208,12 +1265,12 @@ class PlatformIntegrationService(OwnerDelegator):
                         season_context
                     )
                 )
-        if not scores:
-            return {}
-        selected_key = scores.most_common(1)[0][0]
-        selected = dict(candidates[selected_key])
-        selected["seasons"] = sorted(selected.get("seasons") or [])
-        return selected
+        result = []
+        for selected_key, _score in scores.most_common():
+            selected = dict(candidates[selected_key])
+            selected["seasons"] = sorted(selected.get("seasons") or [])
+            result.append(selected)
+        return result
 
     @staticmethod
     def _link_media_payload(

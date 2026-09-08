@@ -73,9 +73,9 @@
             :disabled="submitting || loadingTmdbSeasons || !availableSeasons.length"
             label="季"
             placeholder="留空默认全部季"
-              variant="outlined"
-              density="compact"
-              hide-details="auto"
+            variant="outlined"
+            density="compact"
+            hide-details="auto"
             class="mb-3"
             @update:model-value="updateSeasons" />
 
@@ -83,11 +83,13 @@
             :model-value="resourceLinks"
             :label="selectedCloudResource ? '网盘路径' : '资源链接'"
             placeholder="每行一个115分享、ED2K或Magnet链接"
-            :hint="selectedCloudResource && !selectedCloudResourceAllowed
-              ? '当前媒体类型未启用跨盘转存，请重新选择目标网盘路径。'
-              : selectedCloudResource
-              ? '目标盘路径直接整理；其他网盘路径通过跨盘转存后整理。'
-              : '支持单个或多个资源包，单次最多50条；也可从右侧选择网盘路径。'"
+            :hint="
+              selectedCloudResource && !selectedCloudResourceAllowed
+                ? '当前媒体类型未启用跨盘转存，请重新选择目标网盘路径。'
+                : selectedCloudResource
+                  ? '目标盘路径直接整理；其他网盘路径通过跨盘转存后整理。'
+                  : '支持单个或多个资源包，单次最多50条；也可从右侧选择网盘路径。'
+            "
             persistent-hint
             auto-grow
             rows="5"
@@ -357,14 +359,14 @@ const targetCandidates = computed(() => {
   const keyword = normalizeSearchText(targetSearch.value);
   const subscriptionItems = subscribes.value
     .filter((item) => !keyword || normalizeSearchText(`${item?.title || ""} ${item?.value || ""}`).includes(keyword))
-    .map((item) => ({...item, target_kind: "subscribe", target_key: `subscribe:${item.value}`}));
+    .map((item) => ({...item, target_kind: "subscribe", target_key: `subscribe:${item.value}`}))
   const tmdbItems = tmdbCandidates.value.map((item) => ({
     ...item,
     target_kind: "tmdb",
     target_key: `tmdb:${item.media_type}:${item.tmdb_id}`,
-  }));
+  }))
   return [...subscriptionItems, ...tmdbItems];
-});
+})
 
 const targetMediaType = computed(() => String(selectedTarget.value?.media_type || ""));
 const manualMediaType = targetMediaType;
@@ -372,16 +374,14 @@ const manualMediaType = targetMediaType;
 const selectableCloudDrives = computed(() => {
   const mediaType = manualMediaType.value;
   if (!mediaType) return cloudDrives.value;
-  return cloudDrives.value.filter(
-    (item) => item.mode !== "cross" || crossTransferMediaTypes.value.includes(mediaType),
-  )
+  return cloudDrives.value.filter((item) => item.mode !== "cross" || crossTransferMediaTypes.value.includes(mediaType));
 })
 
 const selectedCloudResourceAllowed = computed(
   () =>
     !selectedCloudResource.value ||
     selectableCloudDrives.value.some((item) => item.value === selectedCloudResource.value.provider),
-);
+)
 
 const selectedMediaKeys = computed(() => new Set(selectedMediaItems.value.map(mediaItemKey)))
 
@@ -456,9 +456,7 @@ function candidateTitle(item) {
 }
 
 function targetTitle(item) {
-  return item?.target_kind === "subscribe"
-    ? String(item.title || "指定订阅")
-    : `TMDB · ${candidateTitle(item)}`;
+  return item?.target_kind === "subscribe" ? String(item.title || "指定订阅") : `TMDB · ${candidateTitle(item)}`;
 }
 
 function findMatchingSubscribe(media, season = null) {
@@ -466,7 +464,7 @@ function findMatchingSubscribe(media, season = null) {
     if (String(item?.media_type || "") !== String(media?.media_type || "")) return false;
     if (Number(item?.tmdb_id || 0) !== Number(media?.tmdb_id || 0)) return false;
     return season === null || Number(item?.season || 0) === Number(season);
-  });
+  })
   return candidates.length === 1 ? candidates[0] : null;
 }
 
@@ -478,7 +476,7 @@ function applyRecognizedMedia(media, seasonValues = []) {
       ...matched,
       target_kind: "subscribe",
       target_key: `subscribe:${matched.value}`,
-    };
+    }
     subscribeId.value = matched.value;
     selectedMedia.value = matched;
     parsedSeasons.value = parsed;
@@ -488,7 +486,7 @@ function applyRecognizedMedia(media, seasonValues = []) {
     ...media,
     target_kind: "tmdb",
     target_key: `tmdb:${media.media_type}:${media.tmdb_id}`,
-  };
+  }
   selectedTarget.value = target;
   subscribeId.value = null;
   selectedMedia.value = target;
@@ -555,7 +553,7 @@ function scheduleResourceTargetResolve(text) {
   resourceResolveTimer = window.setTimeout(() => {
     resourceResolveTimer = null;
     void resolveResourceTarget(text, revision);
-  }, 450);
+  }, 450)
 }
 
 async function resolveResourceTarget(text, revision) {
@@ -564,16 +562,14 @@ async function resolveResourceTarget(text, revision) {
       await props.api.post(`plugin/${props.pluginId}/sync/manual/resolve`, {
         resource_links: text.split(/\r?\n/),
       }),
-    );
+    )
     if (revision !== resourceResolveRevision) return;
     if (result.success === false) throw new Error(result.message || "资源识别失败");
     const data = result.data || {};
     targetSearch.value = String(data.title || targetSearch.value).trim();
     parsedSeasons.value = normalizeSeasons(data.seasons || []);
     const matchedId = Number(data.subscribe_id || 0);
-    const matched = matchedId > 0
-      ? subscribes.value.find((item) => Number(item.value) === matchedId)
-      : null;
+    const matched = matchedId > 0 ? subscribes.value.find((item) => Number(item.value) === matchedId) : null;
     tmdbCandidates.value = Array.isArray(data.candidates) ? data.candidates : [];
     if (matched) {
       selectedTarget.value = {
@@ -581,7 +577,7 @@ async function resolveResourceTarget(text, revision) {
         seasons: normalizeSeasons(data.available_seasons || []),
         target_kind: "subscribe",
         target_key: `subscribe:${matched.value}`,
-      };
+      }
     } else if (tmdbCandidates.value.length === 1) {
       applyRecognizedMedia(tmdbCandidates.value[0], parsedSeasons.value);
     } else {
@@ -597,7 +593,7 @@ function parseCloudPathMedia(path) {
   const segments = String(path || "")
     .split("/")
     .map((value) => value.trim())
-    .filter(Boolean);
+    .filter(Boolean)
   const directoryName = segments[segments.length - 1] || "";
   const marker = /\{\s*tmdb\s*id\s*[-_:]?\s*(\d+)\s*\}/i.exec(directoryName);
   if (!marker) return null;
@@ -605,7 +601,7 @@ function parseCloudPathMedia(path) {
     .slice(0, marker.index)
     .replace(/^\s*[A-Za-z]\s+(?=\p{Script=Han})/u, "")
     .replace(/[._\-\s]+$/g, "")
-    .trim();
+    .trim()
   if (!title) return null;
   const seasonMatch = /(?:^|[\s._()[\]-])S(?:eason)?\s*0*(\d{1,3})(?=$|[\s._()[\]E{-])/i.exec(directoryName);
   const seasonNumber = seasonMatch ? Math.max(1, Number(seasonMatch[1])) : null;
@@ -614,7 +610,7 @@ function parseCloudPathMedia(path) {
     title,
     season: seasonNumber,
     preferTv: /(?:更新|连载|\.更\s*\d+)/.test(directoryName),
-  };
+  }
 }
 
 async function requestTmdbCandidates(title, tmdbId = 0, mediaType = "") {
@@ -624,7 +620,7 @@ async function requestTmdbCandidates(title, tmdbId = 0, mediaType = "") {
       tmdb_id: Number(tmdbId || 0) || null,
       media_type: mediaType || null,
     }),
-  );
+  )
   if (result.success === false) throw new Error(result.message || "TMDB 搜索失败");
   return Array.isArray(result.data?.items) ? result.data.items : [];
 }
@@ -638,7 +634,7 @@ async function loadTmdbSeasons(target) {
     availableSeasons.value = normalizeSeasons(values);
     const parsed = normalizeSeasons(parsedSeasons.value);
     seasons.value = parsed.filter((season) => availableSeasons.value.includes(season));
-  };
+  }
   if (Array.isArray(target.seasons) && target.seasons.length) {
     applySeasons(target.seasons);
     return;
@@ -653,7 +649,7 @@ async function loadTmdbSeasons(target) {
         year: target.year,
         media_type: "tv",
       }),
-    );
+    )
     if (revision !== tmdbSeasonRevision) return;
     if (result.success === false) throw new Error(result.message || "TMDB 季列表查询失败");
     applySeasons(result.data?.seasons || result.data?.items?.[0]?.seasons || []);
@@ -683,7 +679,7 @@ async function resolveCloudPathMedia(path, revision) {
         tmdb_id: hint.tmdbId,
         media_type: hint.preferTv ? "tv" : null,
       }),
-    );
+    )
     if (revision !== cloudMediaResolveRevision) return;
     if (result.success === false) throw new Error(result.message || "网盘路径媒体识别失败");
     const data = result.data || {};
@@ -691,23 +687,19 @@ async function resolveCloudPathMedia(path, revision) {
     parsedSeasons.value = normalizeSeasons(data.seasons || []);
     tmdbCandidates.value = Array.isArray(data.candidates) ? data.candidates : [];
     const matchedId = Number(data.subscribe_id || 0);
-    const matchedSubscribe = matchedId > 0
-      ? subscribes.value.find((item) => Number(item.value) === matchedId)
-      : null;
+    const matchedSubscribe = matchedId > 0 ? subscribes.value.find((item) => Number(item.value) === matchedId) : null;
     if (matchedSubscribe) {
       selectedTarget.value = {
         ...matchedSubscribe,
         seasons: normalizeSeasons(data.available_seasons || []),
         target_kind: "subscribe",
         target_key: `subscribe:${matchedSubscribe.value}`,
-      };
+      }
       return;
     }
-    const exactMatches = tmdbCandidates.value.filter(
-      (item) => Number(item?.tmdb_id || 0) === hint.tmdbId,
-    );
+    const exactMatches = tmdbCandidates.value.filter((item) => Number(item?.tmdb_id || 0) === hint.tmdbId);
     const matchedMedia =
-      (hint.preferTv && exactMatches.find((item) => item.media_type === "tv")) || exactMatches[0] || null;
+      (hint.preferTv && exactMatches.find((item) => item.media_type === "tv")) || exactMatches[0] || null
     if (!matchedMedia) {
       throw new Error(`已识别 TMDB ID ${hint.tmdbId}，但未查询到对应媒体，请手动选择`);
     }
@@ -725,7 +717,7 @@ function selectCloudPath(path, provider) {
   selectedCloudResource.value = {
     provider: String(provider || targetCloudDrive.value || "").trim(),
     path: String(path || "/").trim() || "/",
-  };
+  }
   resourceLinks.value = cloudResourceLabel(selectedCloudResource.value);
   cloudDirectoryVisible.value = false;
   cloudMediaResolveRevision += 1;
@@ -766,7 +758,7 @@ function matchInitialSubscribe() {
       ...matched,
       target_kind: "subscribe",
       target_key: `subscribe:${matched.value}`,
-    };
+    }
     selectedMedia.value = matched;
   } else {
     const media = {
@@ -777,7 +769,7 @@ function matchInitialSubscribe() {
       ...media,
       target_kind: "tmdb",
       target_key: `tmdb:${media.media_type}:${media.tmdb_id}`,
-    };
+    }
     selectedMedia.value = selectedTarget.value;
     seasons.value = media.season ? [Number(media.season)] : [];
     parsedSeasons.value = [...seasons.value];
@@ -837,7 +829,7 @@ async function loadOptions() {
     enableCloudUpgrade.value = Boolean(data.enable_cloud_upgrade);
     crossTransferMediaTypes.value = Array.isArray(data.cross_transfer_media_types)
       ? data.cross_transfer_media_types.map((value) => String(value))
-      : [];
+      : []
   } catch (e) {
     error.value = e.message || "加载订阅失败"
   } finally {
@@ -962,13 +954,10 @@ async function submit() {
       const target = selectedTarget.value;
       const selectedSeasons = normalizeSeasons(seasons.value);
       const isSingleSubscriptionSeason = Boolean(
-        target?.target_kind === "subscribe" && (
-          target.media_type !== "tv" || (
-            selectedSeasons.length === 1
-            && Number(target.season || 0) === selectedSeasons[0]
-          )
-        ),
-      );
+        target?.target_kind === "subscribe" &&
+        (target.media_type !== "tv" ||
+          (selectedSeasons.length === 1 && Number(target.season || 0) === selectedSeasons[0])),
+      )
       const media = target
         ? {
           ...target,
@@ -1019,7 +1008,7 @@ watch(selectedTarget, (value) => {
   subscribeId.value = value.target_kind === "subscribe" ? value.value : null;
   selectedMedia.value = value;
   void loadTmdbSeasons(value);
-});
+})
 
 watch(mediaServer, () => {
   mediaContents.value = []

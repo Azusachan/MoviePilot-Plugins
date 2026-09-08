@@ -141,7 +141,7 @@ function directoryNode(source = {}, fallbackPath = "/") {
     expanded: fallbackPath === "/",
     loaded: false,
     loading: false,
-  };
+  }
 }
 
 const treeRoot = ref(directoryNode({}, "/"));
@@ -161,7 +161,10 @@ function unwrap(raw) {
 }
 
 function normalizePath(path) {
-  const parts = String(path || "/").replace(/\\/g, "/").split("/").filter(Boolean);
+  const parts = String(path || "/")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
   return parts.length ? `/${parts.join("/")}` : "/";
 }
 
@@ -208,11 +211,13 @@ async function loadTreeNode(node, force = false) {
     const data = response.data?.data || response.data || response;
     const previous = new Map(node.children.map((item) => [item.path, item]));
     node.children = (Array.isArray(data.directories) ? data.directories : [])
-      .sort((left, right) => String(left.name || "").localeCompare(String(right.name || ""), undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }))
-      .map((item) => previous.get(item.path) || directoryNode(item, item.path));
+      .sort((left, right) =>
+        String(left.name || "").localeCompare(String(right.name || ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      )
+      .map((item) => previous.get(item.path) || directoryNode(item, item.path))
     node.loaded = true;
   } catch (error) {
     errorMessage.value = error.message || String(error);
@@ -283,7 +288,7 @@ async function createDirectory() {
         name: folderName,
         provider: selectedProvider.value || props.provider || "",
       }),
-    );
+    )
     if (response.success === false) throw new Error(response.message || "创建文件夹失败");
     createDirectoryVisible.value = false;
     newDirectoryName.value = "";
@@ -296,20 +301,14 @@ async function createDirectory() {
 }
 
 function selectDirectory() {
-  emit(
-    "select",
-    currentPath.value || "/",
-    selectedProvider.value || props.provider || "",
-  );
+  emit("select", currentPath.value || "/", selectedProvider.value || props.provider || "");
 }
 
 watch(
   () => props.modelValue,
   (value) => {
     if (value) {
-      selectedProvider.value = String(
-        props.provider || providerItems.value[0]?.value || "",
-      ).trim();
+      selectedProvider.value = String(props.provider || providerItems.value[0]?.value || "").trim();
       currentPath.value = String(props.initialPath || "/").trim() || "/";
       treeRoot.value = directoryNode({}, "/");
       loadDirectories(currentPath.value);

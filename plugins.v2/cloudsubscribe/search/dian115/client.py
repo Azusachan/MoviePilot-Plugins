@@ -1,13 +1,9 @@
 """Dian115 门户登录、浏览器会话与受控请求客户端。"""
 
-import asyncio
 import base64
 import os
 import threading
 import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import unquote, urljoin, urlparse, urlsplit
 
@@ -38,14 +34,39 @@ class Dian115Client:
     """维护登录 Cookie、浏览器证明和全接口统一限速。"""
 
     BASE_URL = "https://m.dian115.com"
-    _IMPERSONATE = "chrome"
+    _IMPERSONATE = "chrome124"
+    _USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    _SEC_CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+    _SEC_CH_UA_FULL_VERSION = '"124.0.6367.207"'
+    _SEC_CH_UA_FULL_VERSION_LIST = (
+        '"Chromium";v="124.0.6367.207", '
+        '"Google Chrome";v="124.0.6367.207", '
+        '"Not-A.Brand";v="99.0.0.0"'
+    )
     _PROOF_MARGIN_SECONDS = 15
-    _BROWSER_LOGIN_TIMEOUT_SECONDS = 90
     _RISK_COOLDOWN_SECONDS = 60
     _SERVER_ERROR_COOLDOWN_SECONDS = 5
     _PORTAL_COOKIES = ("__Host-portal_token", "__Host-portal_browser")
     _SESSION_DATA_KEY = "dian115_auth_session"
+    _PROOF_RETRY_CODES = ("browser_proof_required", "browser_proof_invalid")
+    _AUTH_RETRY_CODES = (
+        "unauthorized", "auth_required", "invalid_token", "token_revoked", "no_token",
+    )
     _LOGIN_LOCK = threading.RLock()
+
+    @staticmethod
+    def _normalize_request_interval(value: float) -> float:
+        """将配置值归一化为与 RequestGate 初始化完全一致的范围。"""
+        return max(0.2, min(float(value or 1.0), 10.0))
+
+    @staticmethod
+    def _normalize_unlocks_per_minute(value: int) -> int:
+        """将解锁频率归一化为与 AccountActionGate 初始化一致的范围。"""
+        return max(1, min(int(value or 6), 10))
 
     def __init__(
             self,
@@ -64,20 +85,28 @@ class Dian115Client:
         self._password = str(password or "").strip()
         self._proxies = normalize_proxies(proxy)
         self._timeout = max(5, min(int(timeout or 30), 120))
-        self._visitor_id = str(uuid.uuid4())
         self._session = requests.Session(impersonate=self._IMPERSONATE)
+        self._session.headers.update({
+            "user-agent": self._USER_AGENT,
+            "sec-ch-ua": self._SEC_CH_UA,
+            "sec-ch-ua-full-version": self._SEC_CH_UA_FULL_VERSION,
+            "sec-ch-ua-full-version-list": self._SEC_CH_UA_FULL_VERSION_LIST,
+        })
         self._proof: Optional[tuple[str, float]] = None
         self._browser_private_key = ec.generate_private_key(ec.SECP256R1())
         self._browser_session_expires_at = 0.0
         self._server_time_offset_ms = 0
         self._authenticated = False
+        self._saved_token = ""
+        self._turnstile = None
+        self._turnstile_policy = None
         self._get_data_func = get_data_func
         self._save_data_func = save_data_func
         self._lock = threading.RLock()
         self._request_gate = RequestGate.shared(
             "Dian115",
             f"{self.base_url}|{self._email.casefold()}|{self._proxies}",
-            request_interval=request_interval,
+            request_interval=self._normalize_request_interval(request_interval),
             minimum_interval=0.2,
             risk_cooldown_seconds=self._RISK_COOLDOWN_SECONDS,
             server_error_cooldown_seconds=self._SERVER_ERROR_COOLDOWN_SECONDS,
@@ -86,7 +115,7 @@ class Dian115Client:
         self._unlock_gate = AccountActionGate.shared(
             "Dian115 解锁接口",
             f"dian115:{self._email.casefold()}",
-            max_actions=unlocks_per_minute,
+            max_actions=self._normalize_unlocks_per_minute(unlocks_per_minute),
             maximum_actions=10,
         )
         self._restore_auth_cookie()
@@ -94,6 +123,10 @@ class Dian115Client:
     @property
     def is_configured(self) -> bool:
         return bool(self._email and self._password)
+
+    @property
+    def error_type(self):
+        return Dian115Error
 
     def matches_config(
             self, email: str, password: str, proxy: Any,
@@ -104,24 +137,35 @@ class Dian115Client:
                 and self._password == str(password or "").strip()
                 and self._proxies == normalize_proxies(proxy)
                 and self._request_gate.request_interval
-                == max(1.0, min(float(request_interval or 1.0), 10.0))
+                == self._normalize_request_interval(request_interval)
                 and self._unlock_gate.max_actions
-                == max(1, min(int(unlocks_per_minute or 6), 10))
+                == self._normalize_unlocks_per_minute(unlocks_per_minute)
         )
 
     def close(self) -> None:
         with self._lock:
-            self._session.close()
-            self._proof = None
-            self._browser_session_expires_at = 0.0
-            self._authenticated = False
+            try:
+                if self._turnstile is not None:
+                    self._turnstile.close()
+            finally:
+                self._turnstile = None
+                self._turnstile_policy = None
+                self._session.close()
+                self._proof = None
+                self._browser_session_expires_at = 0.0
+                self._authenticated = False
 
     def _clear_portal_cookies(self) -> None:
         for name in self._PORTAL_COOKIES:
             self._session.cookies.delete(name)
+        self._proof = None
         self._browser_session_expires_at = 0.0
         self._server_time_offset_ms = 0
+        self._authenticated = False
         self._save_auth_cookie("")
+
+    def _cookie(self, name: str) -> str:
+        return str(self._session.cookies.get_dict().get(name) or "")
 
     def _restore_auth_cookie(self) -> None:
         if not self._get_data_func:
@@ -130,61 +174,44 @@ class Dian115Client:
             data = self._get_data_func(self._SESSION_DATA_KEY) or {}
             if (
                     not isinstance(data, dict)
-                    or str(data.get("email") or "").strip().lower()
-                    != self._email.lower()
+                    or str(data.get("email") or "").casefold() != self._email.casefold()
+                    or data.get("base_url", self.BASE_URL) != self.base_url
             ):
                 return
-            token = str(data.get("token") or "").strip()
-            if not token:
-                return
-            self._session.cookies.set(
-                "__Host-portal_token",
-                token,
-                domain="m.dian115.com",
-                path="/",
-            )
-            self._authenticated = True
-            logger.debug("Dian115 已恢复持久化登录状态")
+            token = str(data.get("token") or "")
+            if token:
+                self._session.cookies.delete("__Host-portal_token")
+                self._session.cookies.set("__Host-portal_token", token, secure=True)
+                self._saved_token = token
+                self._authenticated = True
         except Exception as error:
-            logger.debug(f"Dian115 恢复持久化登录状态失败：{error}")
+            logger.debug(f"Dian115 恢复登录状态失败：{error}")
 
     def _save_auth_cookie(self, token: str = "") -> None:
-        if not self._save_data_func:
+        value = str(token or "")
+        if not self._save_data_func or value == self._saved_token:
             return
         try:
-            value = str(token or "").strip()
             self._save_data_func(
                 self._SESSION_DATA_KEY,
                 {
                     "email": self._email,
+                    "base_url": self.base_url,
                     "token": value,
                     "updated_at": int(time.time()),
                 } if value else {},
             )
+            self._saved_token = value
         except Exception as error:
             logger.debug(f"Dian115 持久化登录状态失败：{error}")
 
     def _headers(self, current_path: str) -> Dict[str, str]:
-        """补齐站点 browser-challenge 校验所需的 UA Client Hints。"""
         path = current_path if str(current_path).startswith("/") else "/"
-        return {
+        headers = {
             "accept": "application/json, text/plain, */*",
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "cache-control": "no-cache",
-            "pragma": "no-cache",
-            "priority": "u=1, i",
-            "sec-ch-ua": (
-                '"Not=A?Brand";v="99", "Google Chrome";v="151", '
-                '"Chromium";v="151"'
-            ),
             "sec-ch-ua-arch": '"x86"',
             "sec-ch-ua-bitness": '"64"',
-            "sec-ch-ua-full-version": '"151.0.7922.72"',
-            "sec-ch-ua-full-version-list": (
-                '"Not=A?Brand";v="99.0.0.0", '
-                '"Google Chrome";v="151.0.7922.72", '
-                '"Chromium";v="151.0.7922.72"'
-            ),
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-model": '""',
             "sec-ch-ua-platform": '"Windows"',
@@ -192,11 +219,17 @@ class Dian115Client:
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
-            "x-portal-current-path": path,
-            "x-portal-visitor-id": self._visitor_id,
             "x-requested-with": "XMLHttpRequest",
-            "referer": urljoin(f"{self.BASE_URL}/", path.lstrip("/")),
+            "referer": urljoin(f"{self.base_url}/", path.lstrip("/")),
         }
+        # curl_cffi 恢复的 __Host- Cookie 没有域名，显式携带这两个站点凭证。
+        cookies = [
+            f"{name}={self._cookie(name)}"
+            for name in self._PORTAL_COOKIES if self._cookie(name)
+        ]
+        if cookies:
+            headers["Cookie"] = "; ".join(cookies)
+        return headers
 
     @staticmethod
     def _is_challenge_response(response) -> bool:
@@ -206,49 +239,50 @@ class Dian115Client:
         ).strip().lower()
         return cf_mitigated == "challenge" or "text/html" in content_type
 
-    def _raw_request(self, method: str, path: str, **kwargs):
-        cooldown_remaining = self._request_gate.cooldown_remaining
-        if cooldown_remaining > 0:
+    def _check_cooldown(self) -> None:
+        remaining = self._request_gate.cooldown_remaining
+        if remaining > 0:
             status = self._request_gate.cooldown_status
             raise Dian115Error(
-                f"Dian115 处于风控冷却期，跳过请求"
-                f"（剩余 {int(cooldown_remaining + 0.999)} 秒）",
-                code=("rate_limited" if status in {0, 403, 429}
-                      else "server_cooldown"),
+                f"Dian115 处于风控冷却期，跳过请求（剩余 {int(remaining + 0.999)} 秒）",
+                code="rate_limited" if status in {0, 403, 429} else "server_cooldown",
                 status_code=status,
             )
-        try:
-            def request():
-                return gated_idempotent_request(
-                    self._request_gate,
-                    self._session.request,
-                    method,
-                    urljoin(f"{self.base_url}/", path.lstrip("/")),
-                    proxies=self._proxies,
-                    timeout=self._timeout,
-                    **kwargs,
-                )
 
-            if (
-                    str(method or "").strip().upper() == "POST"
-                    and path == "/api/portal/unlock"
-            ):
-                return self._unlock_gate.run(request)
-            return request()
+    def _raw_request(self, method: str, path: str, **kwargs):
+        self._check_cooldown()
+        try:
+            response = gated_idempotent_request(
+                self._request_gate,
+                self._session.request,
+                method,
+                urljoin(f"{self.base_url}/", path.lstrip("/")),
+                proxies=self._proxies,
+                timeout=self._timeout,
+                **kwargs,
+            )
+            self._save_auth_cookie(self._cookie("__Host-portal_token"))
+            return response
         except requests.exceptions.RequestException as error:
             raise Dian115Error(f"Dian115 请求失败：{error}") from error
 
-    @staticmethod
-    def _payload(response) -> Dict[str, Any]:
+    @classmethod
+    def _payload(cls, response) -> Dict[str, Any]:
         try:
             payload = response.json()
         except ValueError as error:
+            code = "invalid_response"
+            if response.status_code == 429:
+                code = "rate_limited"
+            elif cls._is_challenge_response(response):
+                code = "cloudflare_challenge"
             raise Dian115Error(
                 f"Dian115 返回非 JSON 响应，HTTP {response.status_code}",
+                code=code,
                 status_code=response.status_code,
             ) from error
         if not isinstance(payload, dict):
-            raise Dian115Error("Dian115 返回结构异常")
+            raise Dian115Error("Dian115 返回结构异常", code="schema_changed")
         return payload
 
     @classmethod
@@ -264,21 +298,19 @@ class Dian115Client:
     def _base64url(value: bytes) -> str:
         return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
-    def _browser_proof(self, current_path: str, refresh: bool = False) -> str:
-        now = time.time()
+    def _browser_proof(self, current_path: str) -> str:
         cached = self._proof
-        if not refresh and cached and cached[1] > now + self._PROOF_MARGIN_SECONDS:
+        if cached and cached[1] > time.time() + self._PROOF_MARGIN_SECONDS:
             return cached[0]
-        headers = self._headers(current_path)
         response = self._raw_request(
-            "GET", "/api/portal/auth/browser-challenge", headers=headers
+            "GET", "/api/portal/auth/browser-challenge",
+            headers=self._headers(current_path),
         )
         payload = self._payload(response)
         proof = str(payload.get("proof") or "")
         if response.status_code != 200 or payload.get("code") != "ok" or not proof:
             self._raise_response_error(response, payload)
-        ttl = max(30, int(payload.get("ttl") or 600))
-        self._proof = (proof, now + ttl)
+        self._proof = (proof, time.time() + max(30, int(payload.get("ttl") or 600)))
         return proof
 
     def _public_jwk(self) -> Dict[str, str]:
@@ -291,13 +323,11 @@ class Dian115Client:
         }
 
     def _ensure_browser_session(
-            self, current_path: str, proof: str, refresh: bool = False
+            self, current_path: str, proof: str
     ) -> None:
-        now = time.time()
         if (
-                not refresh
-                and self._browser_session_expires_at
-                > now + self._PROOF_MARGIN_SECONDS
+                self._browser_session_expires_at
+                > time.time() + self._PROOF_MARGIN_SECONDS
         ):
             return
         headers = self._headers(current_path)
@@ -306,34 +336,22 @@ class Dian115Client:
             "x-portal-browser-proof": proof,
         })
         response = self._raw_request(
-            "POST",
-            "/api/portal/auth/browser-session",
-            headers=headers,
-            json={"public_jwk": self._public_jwk()},
+            "POST", "/api/portal/auth/browser-session",
+            headers=headers, json={"public_jwk": self._public_jwk()},
         )
         payload = self._payload(response)
         if response.status_code != 200 or payload.get("code") not in {"ok", None}:
             self._raise_response_error(response, payload)
-        if payload.get("enabled") is False:
-            self._browser_session_expires_at = now + 1800
-            return
-        server_time_ms = payload.get("server_time_ms")
+        if payload.get("enabled") is not False and not self._cookie("__Host-portal_browser"):
+            raise Dian115Error(
+                "Dian115 浏览器会话未返回 Cookie", code="browser_session_missing"
+            )
+        now = time.time()
         try:
-            self._server_time_offset_ms = int(server_time_ms) - round(now * 1000)
-        except (TypeError, ValueError):
+            self._server_time_offset_ms = int(payload["server_time_ms"]) - round(now * 1000)
+        except (KeyError, TypeError, ValueError):
             self._server_time_offset_ms = 0
-        ttl = max(60, int(payload.get("ttl") or 1800))
-        expires_at = str(payload.get("expires_at") or "").strip()
-        if expires_at:
-            try:
-                expiry = datetime.fromisoformat(
-                    expires_at.replace("Z", "+00:00")
-                ).timestamp()
-            except ValueError:
-                expiry = now + ttl
-        else:
-            expiry = now + ttl
-        self._browser_session_expires_at = max(now + 60, expiry)
+        self._browser_session_expires_at = now + max(60, int(payload.get("ttl") or 1800))
 
     def _browser_signature(self, method: str, api_path: str) -> Dict[str, str]:
         timestamp = str(round(time.time() * 1000 + self._server_time_offset_ms))
@@ -362,16 +380,11 @@ class Dian115Client:
             method: str,
             api_path: str,
             current_path: str,
-            refresh_proof: bool = False,
     ) -> Dict[str, str]:
+        proof = self._browser_proof(current_path)
+        self._ensure_browser_session(current_path, proof)
         headers = self._headers(current_path)
-        proof = self._browser_proof(
-            current_path, refresh=refresh_proof
-        )
         headers["x-portal-browser-proof"] = proof
-        self._ensure_browser_session(
-            current_path, proof, refresh=refresh_proof
-        )
         headers.update(self._browser_signature(method, api_path))
         return headers
 
@@ -396,229 +409,85 @@ class Dian115Client:
             result["password"] = unquote(parsed.password)
         return result
 
-    def _login_with_browser(self) -> None:
-        executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="Dian115-BrowserLogin"
-        )
-        try:
-            executor.submit(
-                asyncio.run, self._login_with_browser_async()
-            ).result()
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-    async def _login_with_browser_async(self) -> None:
-        try:
-            from app.core.config import settings
-            from cloakbrowser import launch_context_async
-        except ImportError as error:
-            raise Dian115Error(
-                "Dian115 登录需要CloakBrowser，请先准备浏览器仿真环境",
-                code="browser_unavailable",
-            ) from error
-
-        context = None
-        page = None
-        timeout_ms = self._BROWSER_LOGIN_TIMEOUT_SECONDS * 1000
-        try:
-            browser_options = {
-                "headless": True,
-                "proxy": self._browser_proxy(),
-                "humanize": getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
-                # Dian115 Turnstile 在 default 预设下会提交后停留登录页。
-                "human_preset": "careful",
-            }
-            context = await launch_context_async(**browser_options)
-            page = await context.new_page()
-            # 浏览器导航无法直接套同步 requests 门控，先占用同一账号请求槽。
-            self._request_gate.run(lambda: None)
-            await page.goto(
-                f"{self.BASE_URL}/login",
-                wait_until="domcontentloaded",
-                timeout=timeout_ms,
-            )
-            await page.wait_for_selector("input[type='email']", timeout=30000)
-            await page.fill("input[type='email']", self._email)
-            await page.fill("input[type='password']", self._password)
-            await page.wait_for_selector(
-                "input[name='cf-turnstile-response']",
-                state="attached",
-                timeout=30000,
-            )
-            widget_rect = await page.evaluate(
-                """() => {
-                    const input = document.querySelector(
-                        'input[name="cf-turnstile-response"]'
-                    );
-                    const rect = input?.parentElement?.getBoundingClientRect();
-                    return rect && {
-                        x: rect.x, y: rect.y,
-                        width: rect.width, height: rect.height
-                    };
-                }"""
-            )
-            if widget_rect and widget_rect.get("width", 0):
-                await page.mouse.click(
-                    widget_rect["x"] + widget_rect["width"] / 2,
-                    widget_rect["y"] + widget_rect["height"] / 2,
-                )
-            try:
-                await page.wait_for_function(
-                    """() => Boolean(
-                        document.querySelector(
-                            'input[name="cf-turnstile-response"]'
-                        )?.value
-                    )""",
-                    timeout=60000,
-                )
-            except Exception as error:
-                raise Dian115Error(
-                    "Dian115 Turnstile 人机验证未通过，"
-                    "请检查 CloakBrowser 网络和指纹",
-                    code="turnstile_failed",
-                ) from error
-            await page.click("button[type='submit']")
-            deadline = time.monotonic() + 30
-            while "/login" in str(page.url or ""):
-                if time.monotonic() >= deadline:
-                    raise Dian115Error(
-                        "Dian115 浏览器登录后未离开登录页",
-                        code="browser_login_failed",
-                    )
-                await page.wait_for_timeout(250)
-            token_cookie = next(
-                (
-                    cookie for cookie in await context.cookies()
-                    if cookie.get("name") == "__Host-portal_token"
-                       and cookie.get("value")
-                ),
-                None,
-            )
-            if not token_cookie:
-                raise Dian115Error(
-                    "Dian115 浏览器登录未返回认证 Cookie",
-                    code="browser_login_failed",
-                )
-            self._session.cookies.set(
-                token_cookie["name"],
-                token_cookie["value"],
-                domain="m.dian115.com",
-                path="/",
-            )
-            self._save_auth_cookie(token_cookie["value"])
-            self._authenticated = True
-            logger.debug("Dian115 CloakBrowser 登录成功，已更新认证 Cookie")
-        except Dian115Error:
-            raise
-        except Exception as error:
-            raise Dian115Error(
-                f"Dian115 浏览器登录失败：{error}",
-                code="browser_login_failed",
-            ) from error
-        finally:
-            if page:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-            if context:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
-
     def _login(self, allow_browser_login: bool = True) -> None:
+        if self._authenticated:
+            return
         if not self.is_configured:
             raise Dian115Error("Dian115 未配置邮箱或密码")
         with self._LOGIN_LOCK:
             self._restore_auth_cookie()
             if self._authenticated:
                 return
-            api_path = "/api/portal/auth/login"
-            try:
-                headers = self._authorized_headers(
-                    "POST", api_path, "/login", refresh_proof=True
+            payload = self._request_json(
+                "POST", "/api/portal/auth/login", "/login",
+                require_login=False, allow_browser_login=allow_browser_login,
+                json={"email": self._email, "password": self._password},
+            )
+            if not payload.get("user") or not self._cookie("__Host-portal_token"):
+                raise Dian115Error(
+                    "Dian115 登录响应缺少用户信息或认证 Cookie",
+                    code="login_failed",
                 )
-                headers["content-type"] = "application/json"
-                response = self._raw_request(
-                    "POST",
-                    api_path,
-                    headers=headers,
-                    json={"email": self._email, "password": self._password},
-                )
-                payload = self._payload(response)
-                if response.status_code != 200 or payload.get("code") != "ok":
-                    self._raise_response_error(response, payload)
-                if not payload.get("user"):
-                    raise Dian115Error("Dian115 登录成功响应缺少用户信息")
-                self._save_auth_cookie(
-                    self._session.cookies.get_dict().get("__Host-portal_token", "")
-                )
-                self._authenticated = True
-                logger.debug("Dian115 HTTP 登录成功")
-            except Dian115Error as error:
-                is_cloudflare = (
-                    error.code == "turnstile_failed"
-                    or (error.status_code == 403 and not error.code)
-                )
-                if not is_cloudflare:
-                    raise
-                if not allow_browser_login:
-                    raise Dian115Error(
-                        "Dian115 HTTP 登录触发 Cloudflare，签到禁止使用浏览器回退",
-                        code="browser_login_forbidden",
-                        status_code=error.status_code,
-                    ) from error
-                logger.debug("Dian115 登录触发 Cloudflare，切换 CloakBrowser")
-                self._clear_portal_cookies()
-                self._login_with_browser()
+            self._authenticated = True
+            logger.debug("Dian115 接口登录成功，已保存登录状态")
 
     def _request_json(
             self,
             method: str,
             api_path: str,
             current_path: str,
-            retry_login: bool = True,
             allow_browser_login: bool = True,
+            require_login: bool = True,
             **kwargs,
     ) -> Dict[str, Any]:
         with self._lock:
-            if not self._authenticated:
-                self._login(allow_browser_login=allow_browser_login)
-            headers = self._authorized_headers(method, api_path, current_path)
             supplied_headers = dict(kwargs.pop("headers", {}) or {})
-            headers.update(supplied_headers)
-            response = self._raw_request(method, api_path, headers=headers, **kwargs)
-            payload = self._payload(response)
-            if (
-                    response.status_code == 200
-                    and payload.get("code") in {"ok", 0, "0", None}
-            ):
-                return payload
-            code = str(payload.get("code") or "")
-            if retry_login and (
-                    response.status_code in {401, 403}
-                    or code in {
-                        "unauthorized", "auth_required", "browser_proof_invalid"
-                    }
-            ):
-                logger.debug(
-                    f"Dian115 登录态或访问证明失效，刷新后重试：{api_path}"
+            retry_login = retry_proof = True
+            action = {
+                "/api/portal/auth/login": "portal_login",
+                "/api/portal/unlock": "portal_unlock",
+            }.get(api_path) if method.upper() == "POST" else None
+            while True:
+                self._check_cooldown()
+                if require_login:
+                    self._login(allow_browser_login=allow_browser_login)
+                request_kwargs = dict(kwargs)
+                if action:
+                    from .security import turnstile_token
+                    token = turnstile_token(self, action, allow_browser_login)
+                    body = dict(kwargs.get("json") or {})
+                    if token:
+                        body["turnstile_token"] = token
+                    else:
+                        body.pop("turnstile_token", None)
+                    request_kwargs["json"] = body
+                # token 生成可能等待人机验证，签名时间戳必须在它之后生成。
+                headers = self._authorized_headers(method, api_path, current_path)
+                headers.update(supplied_headers)
+                response = self._raw_request(
+                    method, api_path, headers=headers, **request_kwargs
                 )
-                self._clear_portal_cookies()
-                self._authenticated = False
-                self._proof = None
-                self._browser_session_expires_at = 0.0
-                self._login(allow_browser_login=allow_browser_login)
-                return self._request_json(
-                    method,
-                    api_path,
-                    current_path,
-                    retry_login=False,
-                    allow_browser_login=allow_browser_login,
-                    **kwargs,
-                )
-            self._raise_response_error(response, payload)
+                payload = self._payload(response)
+                if response.status_code == 200 and payload.get("code") in {"ok", 0, "0", None}:
+                    return payload
+                code = str(payload.get("code") or "")
+                if code in {"turnstile_failed", "turnstile_required"}:
+                    self._turnstile_policy = None
+                if retry_proof and code in self._PROOF_RETRY_CODES:
+                    retry_proof = False
+                    self._proof = None
+                    self._browser_session_expires_at = 0.0
+                    self._session.cookies.delete("__Host-portal_browser")
+                    logger.debug(f"Dian115 浏览器证明失效，重新握手：{api_path}")
+                    continue
+                if require_login and retry_login and code not in self._PROOF_RETRY_CODES and (
+                        response.status_code == 401 or code in self._AUTH_RETRY_CODES
+                ):
+                    retry_login = False
+                    self._clear_portal_cookies()
+                    logger.debug(f"Dian115 登录状态失效，重新登录：{api_path}")
+                    continue
+                self._raise_response_error(response, payload)
 
     def request_json(
             self,

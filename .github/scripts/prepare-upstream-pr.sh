@@ -25,13 +25,17 @@ else
     exit 0
   fi
   branch="codex/sync-upstream-$upstream_sha"
-  # A branch rooted in upstream exposes genuine conflicts in GitHub's PR UI.
-  # Recover a pushed branch when PR creation failed on an earlier attempt.
+  # Start from the fork, not raw upstream: GITHUB_TOKEN cannot push a branch
+  # whose workflow files differ from the fork without workflows permission.
+  # A visible target marker lets us open the PR before attempting the merge.
   if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
     git fetch origin "refs/heads/$branch"
     git switch -c "$branch" FETCH_HEAD
   else
-    git switch -c "$branch" "$upstream_sha"
+    git switch -c "$branch" "$base"
+    printf '%s\n' "$upstream_sha" > .github/UPSTREAM_TARGET
+    git add .github/UPSTREAM_TARGET
+    git commit -m "sync: propose upstream ${upstream_sha:0:12}"
     git push origin "HEAD:refs/heads/$branch"
   fi
   pr="$(gh pr create --base main --head "$branch" \
@@ -49,10 +53,23 @@ echo 'changed=true' >> "$GITHUB_OUTPUT"
 gh api "repos/$GH_REPO/statuses/$(git rev-parse HEAD)" \
   -f state=pending -f context=upstream-sync/validation \
   -f target_url="$RUN_URL" -f description='Checking merge conflicts and fork compatibility'
-if ! git merge --no-ff --no-edit "$base"; then
-  # No conflict-marker commit: the published PR remains genuinely conflicting.
-  git diff --name-only --diff-filter=U
-  git merge --abort
+published="$(git rev-parse HEAD)"
+for target in "$base" "$upstream_sha"; do
+  if ! git merge --no-ff --no-edit "$target"; then
+    conflicts="$(git diff --name-only --diff-filter=U)"
+    git merge --abort
+    gh pr comment "$pr" --body "Upstream merge blocked by conflicts in:
+
+$conflicts
+
+Resolve by merging upstream commit $upstream_sha and current main into this PR branch, then rerun. No conflict-marker commit or automatic resolution was pushed. Run: $RUN_URL"
+    exit 1
+  fi
+done
+# Workflow changes need a separately authorized human/App push. Keep the PR
+# visible and fail instead of silently dropping upstream workflow edits.
+if ! git diff --quiet "$published" HEAD -- .github/workflows; then
+  gh pr comment "$pr" --body "The merge changes GitHub workflow files. GITHUB_TOKEN lacks workflows permission; push the reviewed merge with an authorized account, then rerun. Run: $RUN_URL"
   exit 1
 fi
 git push origin "HEAD:refs/heads/$branch"

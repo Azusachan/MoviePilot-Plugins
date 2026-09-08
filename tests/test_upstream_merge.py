@@ -20,11 +20,16 @@ class UpstreamMergeTests(unittest.TestCase):
     def test_conflict_leaves_upstream_pr_branch_and_main_untouched(self):
         self.exercise('conflict')
 
+    def test_workflow_permission_failure_leaves_visible_pr(self):
+        self.exercise('workflow')
+
     def exercise(self, mode):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             repo = root / 'work'
             repo.mkdir()
+            (repo / '.github').mkdir()
+            (repo / '.github/fixture').write_text('fixture\n')
             def git(*args, cwd=repo):
                 return subprocess.check_output(['git', *args], cwd=cwd, text=True,
                                                stderr=subprocess.PIPE).strip()
@@ -47,6 +52,9 @@ class UpstreamMergeTests(unittest.TestCase):
             git('switch', '-c', 'upstream-work', base)
             if mode != 'unchanged':
                 (repo / ('shared' if mode == 'conflict' else 'upstream')).write_text('upstream\n')
+                if mode == 'workflow':
+                    (repo / '.github/workflows').mkdir(parents=True, exist_ok=True)
+                    (repo / '.github/workflows/new.yml').write_text('name: upstream\n')
                 git('add', '.')
                 git('commit', '-m', 'upstream')
             upstream = git('rev-parse', 'HEAD')
@@ -64,8 +72,8 @@ class UpstreamMergeTests(unittest.TestCase):
                        GITHUB_OUTPUT=str(root / 'output'), GITHUB_ENV=str(root / 'env'),
                        GH_REPO='example/fork', RUN_URL='https://example.invalid/run',
                        TEST_GH_LOG=str(root / 'gh.log'), GIT_TERMINAL_PROMPT='0')
-            result = subprocess.run(['bash', str(SCRIPT)], cwd=repo, env=env,
-                                    text=True, capture_output=True)
+            result = subprocess.run(['bash'], input=SCRIPT.read_text(encoding='utf-8'),
+                                    cwd=repo, env=env, text=True, capture_output=True)
             self.assertEqual(git('rev-parse', 'refs/heads/main', cwd=root / 'origin.git'), fork)
             if mode == 'unchanged':
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -75,10 +83,14 @@ class UpstreamMergeTests(unittest.TestCase):
             branch = 'codex/sync-upstream-' + upstream
             published = git('rev-parse', 'refs/heads/' + branch, cwd=root / 'origin.git')
             self.assertIn('pr create', (root / 'gh.log').read_text())
-            if mode == 'conflict':
+            if mode in {'conflict', 'workflow'}:
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(published, upstream)
+                self.assertEqual(git('merge-base', published, fork), fork)
+                self.assertNotEqual(published, upstream)
+                self.assertIn('pr comment', (root / 'gh.log').read_text())
                 self.assertFalse((repo / '.git/MERGE_HEAD').exists())
+                if mode == 'workflow':
+                    self.assertIn('workflows permission', (root / 'gh.log').read_text())
             else:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(git('merge-base', published, fork), fork)

@@ -18,13 +18,13 @@ class PanSouSearchService(OwnerDelegator):
         if query.media_type == MediaType.MOVIE:
             return self._search_pansou_movie(
                 query.mediainfo,
-                test_mode=query.test_mode,
+                resource_list_mode=query.resource_list_mode,
                 result_limit=query.result_limit,
             )
         return self._search_pansou_tv(
             query.mediainfo,
             query.season,
-            test_mode=query.test_mode,
+            resource_list_mode=query.resource_list_mode,
             result_limit=query.result_limit,
         )
 
@@ -44,7 +44,7 @@ class PanSouSearchService(OwnerDelegator):
             mediainfo: MediaInfo,
             media_type: MediaType,
             season: Optional[int] = None,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> List[Dict]:
         """
@@ -63,7 +63,7 @@ class PanSouSearchService(OwnerDelegator):
             titles.append(title_en)
         effective_limit = (
             max(1, int(result_limit or self._pansou_result_limit))
-            if test_mode else self._pansou_result_limit
+            if resource_list_mode else self._pansou_result_limit
         )
         search_results = self._pansou_client.request_search(
             keyword=keyword,
@@ -71,12 +71,12 @@ class PanSouSearchService(OwnerDelegator):
                 "aliyun" if value == "alipan" else value
                 for value in self._resource_type_order_config
             ],
-            channels=[] if test_mode else self._pansou_channels,
-            plugins=[] if test_mode else self._pansou_plugins,
+            channels=[] if resource_list_mode else self._pansou_channels,
+            plugins=[] if resource_list_mode else self._pansou_plugins,
             limit=effective_limit,
             expected_titles=titles,
             expected_year=getattr(mediainfo, "year", None),
-            filter_config={} if test_mode else self._pansou_filter,
+            filter_config={} if resource_list_mode else self._pansou_filter,
             refresh=self._pansou_refresh,
             concurrency=self._pansou_concurrency,
         )
@@ -99,7 +99,7 @@ class PanSouSearchService(OwnerDelegator):
 
         results = search_results.get("results", {})
         groups = [group for group in results.values() if isinstance(group, list)]
-        if test_mode:
+        if resource_list_mode:
             candidates = []
             offsets = [0] * len(groups)
             while groups and len(candidates) < effective_limit:
@@ -126,7 +126,7 @@ class PanSouSearchService(OwnerDelegator):
         usable = [
             resource
             for resource in candidates
-            if test_mode
+            if resource_list_mode
                or resource.get("resource_type") != "magnet"
                or resource.get("magnet_metadata")
             if self._pansou_media_type_matches(resource, media_type)
@@ -158,7 +158,7 @@ class PanSouSearchService(OwnerDelegator):
     def _search_pansou_movie(
             self,
             mediainfo: MediaInfo,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> List[Dict]:
         """
@@ -173,7 +173,7 @@ class PanSouSearchService(OwnerDelegator):
 
         keyword = f"{mediainfo.title} {mediainfo.year or ''}".strip()
         results = self._pansou_search(
-            keyword, mediainfo, MediaType.MOVIE, test_mode=test_mode,
+            keyword, mediainfo, MediaType.MOVIE, resource_list_mode=resource_list_mode,
             result_limit=result_limit,
         )
         return results
@@ -182,7 +182,7 @@ class PanSouSearchService(OwnerDelegator):
             self,
             mediainfo: MediaInfo,
             season: int,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> List[Dict]:
         """
@@ -200,6 +200,6 @@ class PanSouSearchService(OwnerDelegator):
         keyword = str(mediainfo.title or "").strip()
         results = self._pansou_search(
             keyword, mediainfo, MediaType.TV, season_number,
-            test_mode=test_mode, result_limit=result_limit,
+            resource_list_mode=resource_list_mode, result_limit=result_limit,
         )
         return results

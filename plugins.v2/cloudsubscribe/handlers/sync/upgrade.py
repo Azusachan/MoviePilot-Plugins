@@ -164,7 +164,7 @@ class UpgradeService(OwnerDelegator):
 
             episodes_to_search = sorted(episodes_to_search)
 
-            # TMDB 播出日期过滤，并保留目标集播出日期供 HDHive 淘汰旧资源。
+            # TMDB 播出日期过滤，并保留目标集播出日期供资源筛选。
             target_episode_air_dates: Dict[int, str] = {}
             if mediainfo.tmdb_id:
                 preparation = getattr(
@@ -280,7 +280,6 @@ class UpgradeService(OwnerDelegator):
                     resource_title = resource.get("title", "")
                     pending_episodes = tuple(episodes_to_search)
 
-                    # HDHive 解锁
                     if (resource.get("need_unlock") or resource.get("need_access")) and not share_url:
                         resource_ref = resource.get("resource_ref")
                         if resource_ref:
@@ -311,7 +310,7 @@ class UpgradeService(OwnerDelegator):
                                 )
                                 if not preview_worthwhile:
                                     logger.info(
-                                        f"{upgrade_log_prefix} HDHive 预览中的目标集均不满足"
+                                        f"{upgrade_log_prefix} 预览中的目标集均不满足"
                                         f"{self._upgrade_mode}洗版条件，解锁前跳过：{resource_title}"
                                     )
                                     continue
@@ -336,6 +335,13 @@ class UpgradeService(OwnerDelegator):
                             f"{self._supported_resource_type(resource, share_url)}：{resource_title}"
                         )
                         continue
+
+                    if self._is_offline_url(share_url) or self._is_magnet_url(share_url):
+                        if self._is_offline_blacklisted(resource, share_url):
+                            logger.info(
+                                f"🚫 洗版离线任务命中黑名单（1天内失败或超时），跳过该资源：{resource_title}"
+                            )
+                            continue
 
                     if self._is_magnet_url(share_url):
                         provider_name = self._prepare_magnet_resource(

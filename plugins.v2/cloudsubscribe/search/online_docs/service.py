@@ -5,10 +5,10 @@ from typing import Any, Dict, Iterable, List
 
 from app.log import logger
 
-from ...core.search import SearchQuery, format_search_log_prefix
+from .client import OnlineDocumentClient, is_online_document_url
 from ..magnet import clear_cache
 from ..types import SUPPORTED_RESOURCE_TYPES, normalize_resource_type
-from .client import OnlineDocumentClient, is_online_document_url
+from ...core.search import SearchQuery, format_search_log_prefix
 
 
 class OnlineDocumentSearchService:
@@ -110,7 +110,7 @@ class OnlineDocumentSearchService:
             for item in matched_links:
                 allowed_types = document["resource_types"]
                 if (
-                        not query.test_mode
+                        not query.resource_list_mode
                         and allowed_types
                         and item.get("resource_type") not in allowed_types
                 ):

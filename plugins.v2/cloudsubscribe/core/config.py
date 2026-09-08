@@ -2,7 +2,7 @@
 
 import datetime
 from typing import Any, Dict, List
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
@@ -10,10 +10,8 @@ from app.db.subscribe_oper import SubscribeOper
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
-from bs4 import BeautifulSoup
 
 from .media import tmdb_id_of
-from ..utils.http_client import requests
 
 DEFAULT_AUTO_SUBSCRIBE_USERNAME = "网盘订阅助手"
 
@@ -24,6 +22,7 @@ class UIConfig:
     @staticmethod
     def get_default_config() -> Dict[str, Any]:
         current_year = datetime.datetime.now().year
+        current_month = datetime.datetime.now().month
         return {
             "enabled": False,
             "show_sidebar_nav": True,
@@ -49,13 +48,36 @@ class UIConfig:
             "auto_subscribe_proxy_username": "",
             "auto_subscribe_proxy_password": "",
             "auto_subscribe_douban_enabled": False,
-            "auto_subscribe_douban_ranks": ["movie-hot-gaia", "tv-hot"],
+            "auto_subscribe_douban_ranks": ["movie-showing", "movie-hot"],
             "auto_subscribe_douban_rsshub_base": "https://rsshub.app",
             "auto_subscribe_douban_rss_urls": [],
             "auto_subscribe_douban_proxy": False,
+            "auto_subscribe_douban_limit": 30,
             "auto_subscribe_douban_min_vote": 6,
             "auto_subscribe_douban_min_year": current_year,
+            "auto_subscribe_douban_min_month": current_month,
             "auto_subscribe_douban_media_type": "all",
+            "auto_subscribe_tmdb_enabled": False,
+            "auto_subscribe_tmdb_ranks": ["trending", "movies", "tvs"],
+            "auto_subscribe_tmdb_proxy": False,
+            "auto_subscribe_tmdb_limit": 20,
+            "auto_subscribe_tmdb_min_vote": 6,
+            "auto_subscribe_tmdb_min_year": current_year,
+            "auto_subscribe_tmdb_min_month": current_month,
+            "auto_subscribe_tmdb_media_type": "all",
+            "auto_subscribe_bangumi_enabled": False,
+            "auto_subscribe_bangumi_proxy": False,
+            "auto_subscribe_bangumi_limit": 50,
+            "auto_subscribe_bangumi_min_vote": 6,
+            "auto_subscribe_bangumi_min_year": current_year,
+            "auto_subscribe_bangumi_min_month": current_month,
+            "auto_subscribe_anilist_enabled": False,
+            "auto_subscribe_anilist_ranks": ["popular_this_season", "trending"],
+            "auto_subscribe_anilist_proxy": False,
+            "auto_subscribe_anilist_limit": 30,
+            "auto_subscribe_anilist_min_vote": 6,
+            "auto_subscribe_anilist_min_year": current_year,
+            "auto_subscribe_anilist_min_month": current_month,
             "auto_subscribe_maoyan_enabled": False,
             "auto_subscribe_maoyan_base_url": "https://piaofang.maoyan.com",
             "auto_subscribe_maoyan_movie_box": True,
@@ -66,6 +88,7 @@ class UIConfig:
             "auto_subscribe_maoyan_proxy": False,
             "auto_subscribe_maoyan_min_vote": 6,
             "auto_subscribe_maoyan_min_year": current_year,
+            "auto_subscribe_maoyan_min_month": current_month,
             "auto_subscribe_maoyan_media_type": "all",
             "auto_subscribe_netflix_enabled": False,
             "auto_subscribe_netflix_base_url": "https://www.netflix.com",
@@ -80,6 +103,7 @@ class UIConfig:
             "auto_subscribe_netflix_proxy": False,
             "auto_subscribe_netflix_min_vote": 6,
             "auto_subscribe_netflix_min_year": current_year,
+            "auto_subscribe_netflix_min_month": current_month,
             "auto_subscribe_netflix_rich_metadata": False,
             "auto_subscribe_netflix_max_workers": 4,
             "auto_subscribe_netflix_use_cache": True,
@@ -88,8 +112,10 @@ class UIConfig:
             "auto_subscribe_mikan_season": "当前",
             "auto_subscribe_mikan_resolve_bangumi_id": True,
             "auto_subscribe_mikan_proxy": False,
+            "auto_subscribe_mikan_limit": 100,
             "auto_subscribe_mikan_min_vote": 6,
             "auto_subscribe_mikan_min_year": current_year,
+            "auto_subscribe_mikan_min_month": current_month,
             "auto_subscribe_mikan_base_urls": [
                 "https://mikanani.me", "https://mikanime.tv"
             ],
@@ -139,11 +165,12 @@ class UIConfig:
             "timeout_slow_read": 300,
             "timeout_slow_write": 300,
             "pansou_url": "https://so.252035.xyz/",
-            "hdhive_base_url": "https://hdhive.com",
+            "hdhive_base_url": "https://re0.me",
             "dian115_base_url": "https://m.dian115.com",
             "juying_base_url": "https://www.jying.top",
             "seedhub_base_url": "https://www.seedhub.cc",
-            "butailing_base_url": "https://web5.mukaku.com/prod/api/v1/",
+            "piratebay_base_url": "https://apibay.org",
+            "uindex_base_url": "https://uindex.org",
             "pinglian_base_url": "https://pinglian.lol",
             "online_docs_urls": [],
             "online_docs_resource_types": ["115", "123", "quark", "alipan"],
@@ -168,9 +195,12 @@ class UIConfig:
             "mikan_result_limit": 80,
             "mikan_timeout": 30,
             "mikan_request_interval": 2,
-            "butailing_result_limit": 20,
-            "butailing_request_interval": 1.0,
-            "butailing_timeout": 30,
+            "piratebay_result_limit": 20,
+            "piratebay_request_interval": 1.0,
+            "piratebay_timeout": 20,
+            "uindex_result_limit": 20,
+            "uindex_request_interval": 1.0,
+            "uindex_timeout": 20,
             "juying_username": "",
             "juying_password": "",
             "juying_checkin_enabled": False,
@@ -264,10 +294,14 @@ class UIConfig:
         }
 
     @staticmethod
-    def normalize_auto_subscribe_years(config: Dict[str, Any]) -> None:
+    def normalize_auto_subscribe_dates(config: Dict[str, Any]) -> None:
         current_year = datetime.datetime.now().year
+        current_month = datetime.datetime.now().month
         for key in (
                 "auto_subscribe_douban_min_year",
+                "auto_subscribe_tmdb_min_year",
+                "auto_subscribe_bangumi_min_year",
+                "auto_subscribe_anilist_min_year",
                 "auto_subscribe_maoyan_min_year",
                 "auto_subscribe_netflix_min_year",
                 "auto_subscribe_mikan_year",
@@ -278,53 +312,15 @@ class UIConfig:
                     config[key] = current_year
             except (TypeError, ValueError):
                 config[key] = current_year
-
-    @staticmethod
-    def get_rsshub_instances() -> List[Dict[str, str]]:
-        """读取 RSSHub 公共实例公告页，仅保留可作为服务根地址的 URL。"""
-        fallback = ["https://rsshub.app"]
-        url = "https://docs.rsshub.app/zh/guide/instances"
-        try:
-            response = requests.get(url, timeout=10, impersonate="chrome")
+        for provider_id in (
+                "douban", "tmdb", "bangumi", "anilist", "maoyan", "netflix", "mikan"
+        ):
+            key = f"auto_subscribe_{provider_id}_min_month"
             try:
-                response.raise_for_status()
-                content = str(getattr(response, "text", "") or "")
-            finally:
-                response.close()
-            values = []
-            soup = BeautifulSoup(content, "lxml")
-            for row in soup.find_all("tr"):
-                cells = row.find_all(["th", "td"], recursive=False)
-                if len(cells) < 4:
-                    continue
-                address_anchor = cells[0].find("a", href=True)
-                status_badge = cells[-1].find("img", src=True)
-                if not address_anchor or not status_badge:
-                    continue
-                badge_url = urlsplit(str(status_badge.get("src") or "").strip())
-                if (
-                        badge_url.hostname != "img.shields.io"
-                        or not badge_url.path.endswith("website.svg")
-                ):
-                    continue
-                value = UIConfig._normalize_rsshub_instance_url(
-                    address_anchor.get("href")
-                )
-                status_target = UIConfig._normalize_rsshub_instance_url(
-                    parse_qs(badge_url.query).get("url", [""])[0]
-                )
-                if not value or not status_target:
-                    continue
-                if urlsplit(value).hostname != urlsplit(status_target).hostname:
-                    continue
-                if value not in values:
-                    values.append(value)
-            if values:
-                logger.debug(f"获取 RSSHub 公共实例成功：{len(values)} 个")
-                return [{"title": value, "value": value} for value in values]
-        except Exception as error:
-            logger.debug(f"获取 RSSHub 公共实例失败：{error}")
-        return [{"title": value, "value": value} for value in fallback]
+                month = int(config.get(key) or current_month)
+            except (TypeError, ValueError):
+                month = current_month
+            config[key] = month if 1 <= month <= 12 else current_month
 
     @staticmethod
     def _normalize_rsshub_instance_url(value: Any) -> str:

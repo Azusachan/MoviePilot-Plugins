@@ -14,13 +14,13 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       sources: [],
     },
     enableCloudUpgrade: false,
-  });
+  })
   const historyStats = reactive({
     total: 0,
     today: 0,
     success: 0,
     failed: 0,
-  });
+  })
   const historyQuery = reactive({
     page: 1,
     pageSize: 10,
@@ -29,7 +29,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
     sources: [],
     taskTypes: [],
     statuses: [],
-  });
+  })
   const stats = computed(() => [
     {
       title: "总转存",
@@ -55,7 +55,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       color: "error",
       icon: "mdi-alert-circle-outline",
     },
-  ]);
+  ])
 
   let pageRequestSequence = 0;
   let summaryRequestSequence = 0;
@@ -68,7 +68,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
     const query = new URLSearchParams({
       page: String(historyQuery.page),
       page_size: String(historyQuery.pageSize),
-    });
+    })
     if (historyQuery.keyword) query.set("keyword", historyQuery.keyword);
     for (const [key, values] of [
       ["resource_types", historyQuery.resourceTypes],
@@ -104,7 +104,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
           sources: Array.isArray(pageData.filter_options?.sources) ? pageData.filter_options.sources : [],
         },
         enableCloudUpgrade: Boolean(pageData.enable_cloud_upgrade),
-      });
+      })
       historyQuery.page = historyPage.page;
       historyQuery.pageSize = historyPage.pageSize;
       return true;
@@ -132,7 +132,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
         today: Math.max(0, Number(data.today || 0)),
         success: Math.max(0, Number(data.success || 0)),
         failed: Math.max(0, Number(data.failed || 0)),
-      });
+      })
       return true;
     } catch (error) {
       if (requestId === summaryRequestSequence && showError) {
@@ -151,10 +151,10 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       sources: normalizeQueryList(nextQuery.sources ?? historyQuery.sources),
       taskTypes: normalizeQueryList(nextQuery.taskTypes ?? historyQuery.taskTypes),
       statuses: normalizeQueryList(nextQuery.statuses ?? historyQuery.statuses),
-    };
+    }
     const unchanged = Object.entries(normalized).every(([key, value]) =>
       Array.isArray(value) ? JSON.stringify(value) === JSON.stringify(historyQuery[key]) : value === historyQuery[key],
-    );
+    )
     if (unchanged) return false;
     Object.assign(historyQuery, normalized);
     return loadPage();
@@ -164,7 +164,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
     const result = await api.post(`plugin/${pluginId}/history/clear`, {
       force: Boolean(force),
       clear_points_history: Boolean(clearPointsHistory),
-    });
+    })
     if (!result?.success) throw new Error(result?.message || "清空失败");
     await Promise.all([loadPage(false), loadSummary(false)]);
     return result.message || "历史已清空";
@@ -179,7 +179,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       season: record.season,
       episode: record.episode,
       delete_linked_files: Boolean(deleteLinkedFiles),
-    });
+    })
     if (!result?.success) throw new Error(result?.message || "删除失败");
     await Promise.all([loadPage(false), loadSummary(false)]);
     return result.message || "历史记录已删除";
@@ -194,11 +194,11 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       tmdb_id: record.tmdb_id,
       season: record.season,
       episode: record.episode,
-    }));
+    }))
     const result = await api.post(`plugin/${pluginId}/history/delete_batch`, {
       records: identities,
       delete_linked_files: Boolean(deleteLinkedFiles),
-    });
+    })
     if (!result?.success) throw new Error(result?.message || "批量删除失败");
     await Promise.all([loadPage(false), loadSummary(false)]);
     return result.message || "所选历史记录已删除";
@@ -212,7 +212,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       tmdb_id: record.tmdb_id,
       season: record.season,
       episode: record.episode,
-    });
+    })
     if (!result?.success) throw new Error(result?.message || "通知失败");
     return result.message || "通知已补发";
   }
@@ -231,5 +231,5 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
     deleteHistory,
     deleteHistoryBatch,
     notifyHistory,
-  };
+  }
 }

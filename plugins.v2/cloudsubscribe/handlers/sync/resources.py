@@ -383,9 +383,8 @@ class ResourceTransferService(OwnerDelegator):
             appended += 1
         return appended
 
-    @staticmethod
     def _resource_history_meta(
-            resource: Dict[str, Any], share_url: str
+            self, resource: Dict[str, Any], share_url: str
     ) -> Dict[str, Any]:
         source = str(resource.get("source") or "unknown").strip().lower()
         resource_type = normalize_resource_type(
@@ -405,6 +404,9 @@ class ResourceTransferService(OwnerDelegator):
             ):
                 candidate = str(value or "").strip()
                 if candidate.lower().startswith(("http://", "https://")):
+                    if source == "hdhive":
+                        parsed = urlsplit(candidate)
+                        candidate = f"{parsed.path or '/'}{f'?{parsed.query}' if parsed.query else ''}"
                     source_url = candidate
                     break
         result = {
@@ -668,6 +670,7 @@ class ResourceTransferService(OwnerDelegator):
                 ("cloud.189", "tianyi"), ("guangya", "guangya"),
                 ("123pan", "123"), ("123.cn", "123"),
                 ("123684.com", "123"), ("123865.com", "123"),
+                ("115cdn.com", "115"),
                 ("alipan.com", "alipan"), ("aliyundrive.com", "alipan"),
         ):
             if marker in normalized_url:
@@ -794,8 +797,13 @@ class ResourceTransferService(OwnerDelegator):
                 and self._cloud_drive.supports(CloudDriveCapability.LOCAL_UPLOAD)
                 and self._cloud_drive.supports(CloudDriveCapability.FILE_QUERY)
             )
+        is_manual_override = bool(
+            resource.get("source") == "manual"
+            or resource.get("is_cross")
+            or resource.get("_manual")
+        )
         if not self._cloud_drive.supports_resource_type(resource_type):
-            if not self._cross_transfer_enabled:
+            if not self._cross_transfer_enabled and not is_manual_override:
                 return False
             source = self._resource_provider_for_url(share_url)
             if not source or not source.supports(

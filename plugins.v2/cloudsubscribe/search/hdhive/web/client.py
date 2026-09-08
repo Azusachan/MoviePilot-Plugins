@@ -103,7 +103,7 @@ class _RiskCooldownState:
 class HDHiveClient:
     """维护网页登录 Cookie、安全会话和统一请求限速。"""
 
-    BASE_URL = "https://hdhive.com"
+    BASE_URL = "https://re0.me"
     _SESSION_FILE = (
             settings.PLUGIN_DATA_PATH
             / "CloudSubscribe"
@@ -587,7 +587,7 @@ class HDHiveClient:
                 self._session.cookies.set(
                     str(cookie.get("name") or ""),
                     str(cookie.get("value") or ""),
-                    domain=str(cookie.get("domain") or "hdhive.com"),
+                    domain=str(cookie.get("domain") or "re0.me"),
                     path=str(cookie.get("path") or "/"),
                     secure=bool(cookie.get("secure", True)),
                 )

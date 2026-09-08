@@ -21,10 +21,14 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
 
 `sync-upstream.yml` checks upstream daily and can also be run manually. It:
 
-1. Creates a `codex/sync-upstream-<full-SHA>` branch from upstream and opens a PR
+1. Creates a `codex/sync-upstream-<full-SHA>` branch from fork `main`, records
+   `.github/UPSTREAM_TARGET`, and opens a PR
    against fork `main` **before** attempting the merge.
-2. Merges fork `main` into that branch using `git merge --no-ff`. Conflicts are
-   never auto-resolved: the merge is aborted and the PR stays visibly conflicting.
+2. Merges current fork `main` and the upstream commit into that branch using
+   `git merge --no-ff`. Conflicts are never auto-resolved: the merge is aborted,
+   conflicting paths are commented on the PR, and its validation status fails.
+   The proposal branch need not show GitHub's native conflict banner: its failed
+   validation status is the gate. Never manually merge a failed proposal PR.
 3. Checks the fail-closed Plex/Mikan integration and derives a commit-based version.
 4. Runs backend tests, compilation, and a frontend build, publishing the
    `upstream-sync/validation` commit status and failure comments on the PR.
@@ -39,12 +43,22 @@ the sync workflow; blocked PRs are never silently discarded. A closed unmerged P
 may be proposed again if its upstream commit remains unmerged.
 
 GitHub Actions must be allowed to create PRs in repository Actions settings.
+Raw upstream branches can change workflow files relative to the fork and are
+rejected by `GITHUB_TOKEN` before PR creation. Starting from fork main avoids
+that failure. Actual upstream workflow changes stop with an explicit PR comment
+and require an authorized account to push the reviewed merge; they are not dropped.
 The workflow explicitly records validation status and dispatches release; it does
 not rely on `GITHUB_TOKEN` PR/push events automatically triggering other workflows.
 The release workflow builds assets after merging; failed releases remain visible
 as failed Actions runs and can be retried manually. Patch scripts remain
 compatibility assertions, not a mechanism to overwrite conflicts.
 # Mikan search
+
+Upstream 1.3.5 integration retains Mikan, fansub ranking, Plex compatibility,
+pending-episode deduplication and immediate new-subscription search. Upstream
+1.3.4 removed the Butailing provider; this fork follows that removal rather than
+keeping UI options for a deleted backend. PirateBay/UIndex additions and the new
+resource aggregation page are retained; existing live configuration is not edited.
 
 The fork includes a public Mikan search provider, defaulting to https://mikanani.me.
 Enable `mikan` in search source order and `magnet` in resource types. It searches

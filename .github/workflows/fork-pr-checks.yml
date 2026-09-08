@@ -1,0 +1,33 @@
+name: Validate fork PR
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify merge and backend
+        run: |
+          python3 -m pip install beautifulsoup4
+          python3 .github/scripts/apply_plex_patch.py
+          python3 .github/scripts/apply_mikan_patch.py
+          git diff --exit-code
+          python3 -m unittest discover -s tests -v
+          python3 -m compileall -q plugins.v2/cloudsubscribe
+          bash -n .github/scripts/prepare-upstream-pr.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build frontend
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.25.0 --activate
+          pnpm --dir frontend/cloudsubscribe install --frozen-lockfile
+          pnpm --dir frontend/cloudsubscribe build
+          test -f plugins.v2/cloudsubscribe/dist/assets/remoteEntry.js

@@ -214,7 +214,7 @@ const updatedText = computed(() => (updatedAt.value ? new Date(updatedAt.value *
 const selectableKeys = computed(() => tasks.value.map(taskSelectionKey).filter(Boolean));
 const allSelected = computed(
   () => selectableKeys.value.length > 0 && selectableKeys.value.every((key) => selectedKeys.value.includes(key)),
-);
+)
 const selectedTasks = computed(() => {
   const keys = new Set(selectedKeys.value);
   return tasks.value.filter((task) => keys.has(taskSelectionKey(task)));
@@ -222,16 +222,16 @@ const selectedTasks = computed(() => {
 const selectedHashes = computed(() => selectedTasks.value.map((task) => String(task.id || "").trim()).filter(Boolean));
 const selectedPendingKeys = computed(() =>
   selectedTasks.value.map((task) => String(task.pending_key || "").trim()).filter(Boolean),
-);
+)
 const selectedRetryKeys = computed(() =>
   selectedKeys.value.filter((key) => {
     const task = tasks.value.find((item) => taskSelectionKey(item) === key);
     return task && canRetry(task);
   }),
-);
+)
 const quotaPercent = computed(() =>
   quota.value.total ? Math.min(100, Math.max(0, (Number(quota.value.used || 0) / Number(quota.value.total)) * 100)) : 0,
-);
+)
 const deleteConfirmText = computed(() =>
   batchDeleting.value
     ? `确认删除所选 ${selectedKeys.value.length} 个任务？已下载文件会保留。`

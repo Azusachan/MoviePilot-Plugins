@@ -1,7 +1,7 @@
 """
 HDHive OpenAPI 客户端
 基于官方 Python SDK 适配：应用 Secret (X-API-Key) + OAuth 用户 Access Token (Bearer) 双层认证
-参考文档: https://hdhive.com/docs/open
+参考文档: https://re0.me/docs/open
 """
 import json
 import secrets
@@ -56,7 +56,7 @@ class HDHiveOpenAPIClient:
             access_token: str = "",
             refresh_token: str = "",
             token_expires_at: float = 0,
-            base_url: str = "https://hdhive.com",
+            base_url: str = "https://re0.me",
             proxy: Any = None,
             timeout: int = 30,
             request_interval: float = 1.0,
@@ -79,7 +79,7 @@ class HDHiveOpenAPIClient:
         self.access_token = (access_token or "").strip()
         self.refresh_token = (refresh_token or "").strip()
         self.token_expires_at = float(token_expires_at or 0)
-        self.base_url = (base_url or "https://hdhive.com").rstrip("/")
+        self.base_url = (base_url or "https://re0.me").rstrip("/")
         self.timeout = max(5, min(int(timeout or 30), 120))
         self.request_interval = max(
             0.2, min(float(request_interval or 1.0), 10.0)

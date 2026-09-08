@@ -144,7 +144,7 @@ class ConfigApi(OwnerDelegator):
     def _validate_auto_subscribe_config(
             self, payload: Dict[str, Any]
     ) -> Optional[str]:
-        providers = ("douban", "maoyan", "netflix", "mikan")
+        providers = ("douban", "maoyan", "netflix", "mikan", "tmdb", "bangumi", "anilist")
         existing_config = getattr(self, "_applied_config", None) or {}
         for provider_id in providers:
             enabled_key = f"auto_subscribe_{provider_id}_enabled"
@@ -192,7 +192,31 @@ class ConfigApi(OwnerDelegator):
         payload["auto_subscribe_proxy_password"] = password
         if proxy_enabled and not payload["auto_subscribe_proxy"]:
             return "已启用榜单代理，请先填写榜单代理地址"
-        UIConfig.normalize_auto_subscribe_years(payload)
+        provider_limits = {
+            "douban": 30,
+            "tmdb": 20,
+            "bangumi": 50,
+            "anilist": 30,
+            "maoyan": 10,
+            "netflix": 10,
+            "mikan": 100,
+        }
+        for provider_id, default_limit in provider_limits.items():
+            limit_key = f"auto_subscribe_{provider_id}_limit"
+            raw_limit = payload.get(
+                limit_key,
+                existing_config.get(limit_key, default_limit),
+            )
+            if isinstance(raw_limit, bool):
+                return f"{provider_id} 每榜条数必须是整数"
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                return f"{provider_id} 每榜条数必须是整数"
+            if not 1 <= limit <= 100:
+                return f"{provider_id} 每榜条数需在 1-100 之间"
+            payload[limit_key] = limit
+        UIConfig.normalize_auto_subscribe_dates(payload)
         service_urls = {
             "auto_subscribe_douban_rsshub_base": "https://rsshub.app",
             "auto_subscribe_maoyan_base_url": "https://piaofang.maoyan.com",

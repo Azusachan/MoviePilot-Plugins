@@ -28,12 +28,33 @@ class SyncExecutionService(OwnerDelegator):
     # 防止平台短时间重复回调；完成后不应阻塞正常的手动重试一分钟。
     _SUBSCRIBE_SEARCH_DEBOUNCE_SECONDS = 5.0
 
+    def _ensure_sync_operation_executor(self) -> ThreadPoolExecutor:
+        """确保同步操作执行器健康可用并自动自愈。"""
+        shutdown_event = getattr(self, "_subscribe_search_queue_shutdown", None)
+        if shutdown_event is not None and shutdown_event.is_set():
+            shutdown_event.clear()
+        stop_event = getattr(self, "_stop_event", None)
+        if stop_event is not None and stop_event.is_set():
+            stop_event.clear()
+        executor = getattr(self, "_sync_operation_executor", None)
+        is_dead = executor is None or getattr(executor, "_shutdown", False)
+        if is_dead:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="cloudsubscribe-sync-operation",
+            )
+            self._sync_operation_executor = executor
+        return executor
+
     def _run_sync_operation(
             self,
             sync_kwargs: Dict[str, Any],
             label: str,
     ) -> bool:
         logger.info(f"开始执行同步操作：{label}")
+        stop_event = getattr(self, "_stop_event", None)
+        if stop_event is not None and stop_event.is_set():
+            stop_event.clear()
         return self.sync_subscribes(**sync_kwargs, wait_for_slot=True)
 
     def _submit_sync_operation(
@@ -42,16 +63,20 @@ class SyncExecutionService(OwnerDelegator):
             label: str,
     ) -> Any:
         """串行提交同步操作，保证后添加资源位于现有操作之后。"""
-        executor = self._sync_operation_executor
-        if not executor or self._subscribe_search_queue_shutdown.is_set():
-            raise RuntimeError("同步执行器已停止")
+        try:
+            executor = self._ensure_sync_operation_executor()
+        except Exception as error:
+            logger.warning(f"自愈同步执行器异常：{error}")
+            executor = getattr(self, "_sync_operation_executor", None)
+        if not executor or getattr(executor, "_shutdown", False):
+            raise RuntimeError("同步执行器当前不可用，请稍后重试")
         future = executor.submit(
             self._run_sync_operation,
             dict(sync_kwargs),
             str(label or "订阅任务"),
         )
         self._mark_runtime_changed()
-        logger.info(f"同步操作已提交：{label}")
+        logger.debug(f"同步操作已提交：{label}")
         return future
 
     def _direct_cloud_manual_resources(
@@ -508,17 +533,6 @@ class SyncExecutionService(OwnerDelegator):
             CloudDriveCapability.AUTHENTICATION
         )
 
-        task_label = (
-            "手动洗版"
-            if upgrade_request
-            else
-            "手动添加"
-            if manual_resources
-            else
-            "历史记录搜索"
-            if history_search_targets
-            else f"{self._cloud_drive.name}订阅同步"
-        )
         self._set_sync_status("running", "正在读取订阅列表", 5)
 
         try:
@@ -551,6 +565,8 @@ class SyncExecutionService(OwnerDelegator):
             manual_seasons = sorted({
                 int(value) for value in manual_target.get("seasons") or []
             })
+            if manual_media_type == "tv" and not manual_seasons:
+                manual_seasons = [1]
             manual_targets = (
                 [
                     {**manual_target, "season": season}
@@ -597,6 +613,25 @@ class SyncExecutionService(OwnerDelegator):
                 elif subscribe_id:
                     subscribe = subscribe_oper.get(subscribe_id)
                     subscribes = [subscribe] if subscribe else []
+                elif manual_resources:
+                    # 关键安全守护：只要是手动转存且无订阅绑定，绝不能拉取全量订阅！
+                    first_res = manual_resources[0] if manual_resources else {}
+                    inferred_title = str(first_res.get("title") or "手动转存资源").strip()
+                    fallback_target = {
+                        "title": inferred_title,
+                        "media_type": "tv" if any(
+                            k in inferred_title.upper() for k in ["S0", "S1", "第", "季", "E0", "EP"]) else "movie",
+                        "season": 1,
+                        "seasons": [1],
+                        "year": "",
+                    }
+                    subscribes = [
+                        self._sync_handler.build_transient_media_target(
+                            fallback_target,
+                            target_id=-1,
+                            manual_upgrade=manual_upgrade,
+                        )
+                    ]
                 else:
                     subscribes = subscribe_oper.list(subscribe_states or "N,R")
             for index, target in enumerate(history_search_targets or [], start=1):
@@ -726,8 +761,6 @@ class SyncExecutionService(OwnerDelegator):
                 )
             return False
 
-        logger.info(f"🚀 开始执行 {task_label}")
-
         history: List[dict] = self.get_data('history') or []
         history_by_media: Dict[Tuple[str, str, int], List[dict]] = {}
         for record in history:
@@ -743,15 +776,20 @@ class SyncExecutionService(OwnerDelegator):
         transfer_details: List[Dict[str, Any]] = []
         transferred_count = 0
         preparing_phase = (
-            "准备处理手动资源"
+            "准备处理手动转存"
             if manual_resources
             else "准备搜索历史媒体"
             if history_search_targets
             else "准备搜索资源"
         )
+        status_text = (
+            f"正在准备手动转存：{active_subscribes[0].name}"
+            if manual_resources and active_subscribes
+            else f"已加载 {total_subscribes} 个媒体目标，{preparing_phase}"
+        )
         self._set_sync_status(
             "running",
-            f"已加载 {total_subscribes} 个媒体目标，{preparing_phase}",
+            status_text,
             8,
             {
                 "current": 0,
@@ -1014,7 +1052,7 @@ class SyncExecutionService(OwnerDelegator):
                 ]
                 logger.debug(f"搜索性能汇总：{'；'.join(summary)}")
 
-        if self._notify and transferred_count == 0:
+        if self._notify and transferred_count == 0 and not manual_resources:
             self.post_message(
                 mtype=self._notification_type,
                 title="【网盘订阅助手】执行完成",
@@ -1047,7 +1085,7 @@ class SyncExecutionService(OwnerDelegator):
             try:
                 self._search_handler.close()
             except Exception as error:
-                logger.warning(f"同步结束关闭 HDHive 浏览器失败：{error}")
+                logger.warning(f"同步结束关闭搜索客户端失败：{error}")
         try:
             # 配置重载会关闭旧 SyncHandler；必须避开正在使用它的后处理线程。
             with self._offline_monitor_lock:

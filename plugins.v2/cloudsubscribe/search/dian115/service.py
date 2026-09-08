@@ -184,17 +184,17 @@ class Dian115SearchService(OwnerDelegator):
             media_type: str,
             tmdb_id: int,
             target_season: Optional[int],
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
     ) -> Optional[Dict[str, Any]]:
         resource_type = self._resource_type(share)
         if not resource_type or (
-                not test_mode and resource_type not in self._resource_type_order_config
+                not resource_list_mode and resource_type not in self._resource_type_order_config
         ):
             return None
         if str(share.get("status") or "active").strip().lower() != "active":
             return None
         seasons = self._seasons(share)
-        if (not test_mode and media_type == "tv" and target_season is not None
+        if (not resource_list_mode and media_type == "tv" and target_season is not None
                 and int(target_season) not in seasons):
             return None
 
@@ -304,7 +304,7 @@ class Dian115SearchService(OwnerDelegator):
         season = query.season
         target_episodes = list(query.target_episodes)
         subscribe = query.subscribe
-        test_mode = query.test_mode
+        resource_list_mode = query.resource_list_mode
         result_limit = query.result_limit
         tmdb_id = mediainfo.tmdb_id or tmdb_id_of(subscribe)
         search_label = format_search_label(mediainfo, media_type, season)
@@ -325,7 +325,6 @@ class Dian115SearchService(OwnerDelegator):
             resource = detail.get("resource") or {}
             candidates = []
             shares = detail.get("shares") or []
-            restored_count = 0
             normalized_count = 0
             auto_unlock_skipped = 0
             inaccessible_skipped = 0
@@ -340,41 +339,25 @@ class Dian115SearchService(OwnerDelegator):
                     normalized_type,
                     int(tmdb_id),
                     season if normalized_type == "tv" else None,
-                    test_mode=test_mode,
+                    resource_list_mode=resource_list_mode,
                 )
                 if not candidate:
                     continue
                 normalized_count += 1
-                # 免费或历史已解锁但当前详情未直接带链接时，调用 /unlock 只取回
-                # 已有访问数据；服务端返回 already=true 或 cost_points=0，不消耗积分。
-                if not test_mode and not candidate["url"] and not candidate["need_unlock"]:
-                    provider_data = candidate["provider_data"]
-                    unlocked = resources.unlock_share(
-                        int(candidate["resource_ref"]),
-                        provider_data["resource_id"],
-                        max_unlock_points=0,
-                        tmdb_id=provider_data["tmdb_id"],
-                        media_type=provider_data["media_type"],
-                        season=provider_data["season"],
-                    )
-                    candidate["url"] = self._unlock_payload_url(unlocked)
-                    restored_count += bool(candidate["url"])
-                    candidate["need_access"] = not bool(candidate["url"])
-                    candidate["is_unlocked"] = bool(candidate["url"])
-                if not test_mode and candidate["need_unlock"] and not self._dian115_auto_unlock:
+                if not resource_list_mode and candidate["need_unlock"] and not self._dian115_auto_unlock:
                     auto_unlock_skipped += 1
                     continue
-                if not test_mode and not candidate["url"] and not candidate["need_unlock"]:
+                if not resource_list_mode and not candidate["url"] and not candidate["need_unlock"]:
                     inaccessible_skipped += 1
                     continue
                 candidates.append(candidate)
-                if test_mode and len(candidates) >= max(
+                if resource_list_mode and len(candidates) >= max(
                         1, int(result_limit or self._dian115_candidate_limit)
                 ):
                     break
 
             before_limit_count = len(candidates)
-            if test_mode:
+            if resource_list_mode:
                 candidates = candidates[
                     :max(1, int(result_limit or self._dian115_candidate_limit))
                 ]
@@ -388,7 +371,6 @@ class Dian115SearchService(OwnerDelegator):
                 f"{prefix} WebAPI 渠道统计：站点分享={len(shares)}，"
                 f"规范化={normalized_count}，"
                 f"待积分解锁 {sum(bool(item.get('need_unlock')) for item in candidates)} 个，"
-                f"恢复已有访问链接 {restored_count} 个，"
                 f"跳过（自动解锁关闭={auto_unlock_skipped}，"
                 f"无可用链接={inaccessible_skipped}，"
                 f"预筛/上限={max(0, before_limit_count - len(candidates))}）"

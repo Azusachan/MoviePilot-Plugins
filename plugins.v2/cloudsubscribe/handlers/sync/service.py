@@ -325,6 +325,11 @@ class SyncHandler:
         )
         self._share_transfer_risk_lock = threading.Lock()
         self._share_transfer_blocked_until: Dict[str, float] = {}
+        self._offline_blacklist = create_platform_ttl_cache(
+            "offline_blacklist",
+            ttl=86400,
+            maxsize=10000,
+        )
         self._skip_other_season_dirs = skip_other_season_dirs
         self._notify = notify
         self._notification_type = notification_type
@@ -513,7 +518,7 @@ class SyncHandler:
     def subscription_budget_key(
             subscribe: Any, media_type: Optional[MediaType] = None
     ) -> str:
-        """生成普通转存和洗版共用的 HDHive 订阅积分键。"""
+        """生成普通转存和洗版共用的订阅积分键。"""
         resolved_type = media_type or {
             MediaType.MOVIE.value: MediaType.MOVIE,
             MediaType.TV.value: MediaType.TV,
@@ -1407,8 +1412,20 @@ class SyncHandler:
             )
             if not cloud_resource:
                 self._ensure_share_transfer_available(provider_key)
+            # 手动资源标记保存在匹配项的 resource 元数据中；这里不能引用不存在的 resources。
+            is_manual_cross = any(
+                bool(
+                    (item.get("resource") or {}).get("source") == "manual"
+                    or (item.get("resource") or {}).get("is_cross")
+                    or (item.get("resource") or {}).get("_manual")
+                    or item.get("source") == "manual"
+                    or item.get("is_cross")
+                    or item.get("_manual")
+                )
+                for item in selected_items
+            )
             cross_batch = bool(
-                self._cross_transfer_enabled and source_provider
+                (self._cross_transfer_enabled or is_manual_cross) and source_provider
                 and self._cloud_drive and source_provider.key != self._cloud_drive.key
             )
             if cross_batch:
@@ -1777,6 +1794,59 @@ class SyncHandler:
             return f"infoHash={self._offline_hash(share_url) or '未知'}"
         return str(share_url or "")
 
+    def _add_offline_blacklist(self, key_or_url: str, reason: str = "") -> None:
+        """将失败或超时的离线任务/资源加入黑名单（1天TTL）。"""
+        if not key_or_url or not hasattr(self, "_offline_blacklist"):
+            return
+        keys = set()
+        text = str(key_or_url).strip()
+        if text:
+            keys.add(text)
+        info_hash = self._offline_hash(text) if hasattr(self, "_offline_hash") else ""
+        if info_hash:
+            keys.add(info_hash.upper())
+        now = time.time()
+        for k in keys:
+            if k:
+                self._offline_blacklist[k] = {
+                    "reason": reason,
+                    "time": now,
+                }
+        logger.info(f"🚫 离线资源已加入黑名单（1天过期）：{info_hash or text}，原因：{reason}")
+
+    def _remove_offline_blacklist(self, key_or_url: str) -> None:
+        """从黑名单中移除指定的离线任务。"""
+        if not key_or_url or not hasattr(self, "_offline_blacklist"):
+            return
+        keys = [str(key_or_url).strip()]
+        info_hash = self._offline_hash(key_or_url) if hasattr(self, "_offline_hash") else ""
+        if info_hash:
+            keys.append(info_hash.upper())
+        for k in keys:
+            if k and k in self._offline_blacklist:
+                try:
+                    del self._offline_blacklist[k]
+                except Exception:
+                    pass
+
+    def _is_offline_blacklisted(self, resource: Optional[Dict[str, Any]] = None, share_url: str = "") -> bool:
+        """检查离线资源是否在黑名单中。"""
+        if not hasattr(self, "_offline_blacklist"):
+            return False
+        url = share_url or (str((resource or {}).get("url") or (resource or {}).get("link") or "") if resource else "")
+        info_hash = self._offline_hash(url) if (url and hasattr(self, "_offline_hash")) else ""
+        if info_hash and info_hash in self._offline_blacklist:
+            return True
+        if url and url in self._offline_blacklist:
+            return True
+        if resource:
+            res_hash = str(
+                resource.get("info_hash") or resource.get("hash") or (resource.get("magnet_metadata") or {}).get(
+                    "hash") or "").upper()
+            if res_hash and res_hash in self._offline_blacklist:
+                return True
+        return False
+
     def _queue_magnet_package(
             self,
             resource: Dict[str, Any],
@@ -1919,6 +1989,7 @@ class SyncHandler:
                     logger.info("跳过重复候选：目标集已有待完成的离线任务")
                     return ""
         if not self._offline_download.add_offline_download(share_url, staging_dir):
+            self._add_offline_blacklist(share_url, "提交离线下载失败")
             return ""
         now = time.time()
         with self._offline_pending_lock:
@@ -3063,14 +3134,20 @@ class SyncHandler:
             item_media_type = self._normalize_cross_transfer_media_type(
                 file_item.get("media_type") or media_type
             )
-            if item_media_type and item_media_type not in self._cross_transfer_media_types:
-                logger.debug(
-                    f"跨盘转存跳过：{source.name} -> {self._cloud_drive.name}，"
-                    f"媒体类型 {item_media_type} 未启用"
-                )
-                return False
+            is_manual_override = bool(
+                file_item.get("source") == "manual"
+                or file_item.get("is_cross")
+                or file_item.get("_manual")
+            )
+            if not is_manual_override:
+                if item_media_type and item_media_type not in self._cross_transfer_media_types:
+                    logger.debug(
+                        f"跨盘转存跳过：{source.name} -> {self._cloud_drive.name}，"
+                        f"媒体类型 {item_media_type} 未启用"
+                    )
+                    return False
             required = (
-                    self._cross_transfer_enabled
+                    (self._cross_transfer_enabled or is_manual_override)
                     and self._cross_transfer_manager
                     and (
                             cloud_resource
