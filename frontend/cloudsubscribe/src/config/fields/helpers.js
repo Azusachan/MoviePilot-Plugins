@@ -14,7 +14,7 @@ export function createResourceTypeItems(cloudDriveItems, config) {
     {title: "阿里云盘", value: "alipan"},
     {title: "ED2K", value: "ed2k"},
     {title: "Magnet", value: "magnet"},
-  ];
+  ]
   const activeDrive = cloudDriveItems.find((item) => item.value === (config.cloud_drive || "115"));
   const supportedTypes = new Set(activeDrive?.resource_types || ["115", "ed2k", "magnet"]);
   const targetCanUpload = activeDrive?.capabilities?.includes("local_upload");
@@ -30,8 +30,8 @@ export function createResourceTypeItems(cloudDriveItems, config) {
       }
       ;(drive.resource_types || []).forEach((value) => {
         if (!["ed2k", "magnet"].includes(value)) supportedTypes.add(value);
-      });
-    });
+      })
+    })
   }
   return resourceTypes.filter((item) => supportedTypes.has(item.value));
 }

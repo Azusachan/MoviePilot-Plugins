@@ -47,7 +47,7 @@ defineProps({
   selectedPath: {type: String, default: "/"},
   depth: {type: Number, default: 0},
   disabled: {type: Boolean, default: false},
-});
+})
 defineEmits(["select", "toggle"]);
 </script>
 

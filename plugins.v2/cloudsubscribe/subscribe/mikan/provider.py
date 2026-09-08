@@ -3,10 +3,11 @@ from datetime import datetime
 from time import sleep
 from typing import Iterator
 
-from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
-from ...core.subscribe.registry import register
 from .client import MikanClient
 from .service import MikanService
+from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider
+from ...core.subscribe.provider import ranking_scan_limit
+from ...core.subscribe.registry import register
 
 
 @register
@@ -32,6 +33,8 @@ class MikanSubscribeProvider(SubscribeProvider):
     def fetch(self, options: dict, context: SubscribeContext) -> Iterator[MediaCandidate]:
         year = int(options.get("year") or datetime.now().year)
         season = self._season(options.get("season"))
+        limit = int(options.get("limit") or 100)
+        scan_limit = ranking_scan_limit(options)
         proxy = context.proxy_for(options.get("proxy"))
         base_urls = options.get("base_urls")
         client = self.client
@@ -41,7 +44,7 @@ class MikanSubscribeProvider(SubscribeProvider):
         if not result:
             return
         html, base = result
-        entries = self.service.season_entries(html, base)
+        entries = self.service.season_entries(html, base)[:scan_limit]
         resolve_id = bool(options.get("resolve_bangumi_id", True))
 
         def load_detail(entry: dict) -> dict:

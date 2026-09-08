@@ -61,14 +61,15 @@
               {{ formatSize(displayTransferred(task)) }} / {{ formatSize(displayTotal(task)) }} ·
               {{ formatSpeed(task.speed_bytes_per_second || task.upload_speed) }}
             </span>
-            <span
-              v-else-if="task.postprocess_active"
-              class="task-transfer text-caption text-medium-emphasis">
+            <span v-else-if="task.postprocess_active" class="task-transfer text-caption text-medium-emphasis">
               {{ Math.round(taskProgress(task)) }}%
             </span>
           </div>
           <v-progress-linear
-            :class="['task-progress', {'task-progress--active': task.postprocess_active || task.status === 'postprocessing'}]"
+            :class="[
+              'task-progress',
+              { 'task-progress--active': task.postprocess_active || task.status === 'postprocessing' },
+            ]"
             :model-value="taskProgress(task)"
             :style="progressStyle(task)"
             :indeterminate="
@@ -82,9 +83,7 @@
             height="5"
             rounded />
           <v-expand-transition>
-            <div
-              v-if="hasPostprocessDetails(task) && isTaskExpanded(task.id)"
-              class="task-details text-caption">
+            <div v-if="hasPostprocessDetails(task) && isTaskExpanded(task.id)" class="task-details text-caption">
               <div v-if="task.current_file" class="task-detail-row">
                 <span class="task-detail-label">当前文件</span>
                 <span class="task-current-file" :title="task.current_file">{{ task.current_file }}</span>
@@ -166,13 +165,11 @@ function hasPostprocessDetails(task) {
     task?.current_file ||
     Number(task?.postprocess_file_total || 0) > 0 ||
     postprocessSteps(task).length,
-  );
+  )
 }
 
 function postprocessSteps(task) {
-  return Array.isArray(task?.postprocess_steps)
-    ? task.postprocess_steps.filter((step) => step?.key && step?.label)
-    : [];
+  return Array.isArray(task?.postprocess_steps) ? task.postprocess_steps.filter((step) => step?.key && step?.label) : [];
 }
 
 function currentPostprocessStep(task) {
@@ -281,7 +278,7 @@ function taskProgress(task) {
   const value =
     task?.postprocess_active || task?.status === "postprocessing"
       ? Number(task?.postprocess_progress || 0)
-      : Number(task?.progress || 0);
+      : Number(task?.progress || 0)
   return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 }
 
@@ -479,15 +476,18 @@ function displayTotal(task) {
 .task-progress--active :deep(.v-progress-linear__determinate) {
   background-image: linear-gradient(110deg, transparent 22%, rgba(255, 255, 255, 0.72) 48%, transparent 72%),
   var(--task-progress-gradient) !important;
-  background-position: -120px 0, 0 0;
-  background-size: 120px 100%, 100% 100%;
+  background-position: -120px 0,
+  0 0;
+  background-size: 120px 100%,
+  100% 100%;
   background-repeat: no-repeat;
   animation: task-progress-shimmer 1.15s linear infinite;
 }
 
 @keyframes task-progress-shimmer {
   to {
-    background-position: 120px 0, 0 0;
+    background-position: 120px 0,
+    0 0;
   }
 }
 

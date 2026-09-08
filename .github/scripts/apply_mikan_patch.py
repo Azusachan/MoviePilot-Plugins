@@ -39,8 +39,8 @@ replace("plugins.v2/cloudsubscribe/core/hook/events.py",
 
 
 replace("plugins.v2/cloudsubscribe/__init__.py",
-        '"pinglian", "online_docs",\n            )',
-        '"pinglian", "online_docs", "mikan",\n            )')
+        '"pinglian", "piratebay", "uindex", "online_docs",\n            )',
+        '"pinglian", "piratebay", "uindex", "online_docs", "mikan",\n            )')
 replace("plugins.v2/cloudsubscribe/__init__.py",
         '            pansou_client=self._pansou_client,',
         '            mikan_config=self.get_config() or {},\n            pansou_client=self._pansou_client,')
@@ -57,42 +57,42 @@ replace("plugins.v2/cloudsubscribe/search/registry.py",
         '        registry.register(create_mikan_provider(owner._mikan_config, owner._search_proxy))\n'
         '    return registry')
 replace("plugins.v2/cloudsubscribe/core/config.py",
-        '            "butailing_result_limit": 20,',
+        '            "piratebay_result_limit": 20,',
         '            "mikan_base_url": "https://mikanani.me",\n'
         '            "mikan_result_limit": 80,\n'
         '            "mikan_timeout": 30,\n'
         '            "mikan_request_interval": 2,\n'
-        '            "butailing_result_limit": 20,')
+        '            "piratebay_result_limit": 20,')
 replace("frontend/cloudsubscribe/src/config/fields/search/common.js",
-        '  {title: "不太灵", value: "butailing"},',
-        '  {title: "蜜柑", value: "mikan"},\n  {title: "不太灵", value: "butailing"},')
+        '  {title: "盘链", value: "pinglian"},',
+        '  {title: "蜜柑", value: "mikan"},\n  {title: "盘链", value: "pinglian"},')
 replace("frontend/cloudsubscribe/src/config/fields/search/index.js",
-        'import {createButailingGroups}',
-        'import {createMikanGroups} from "./mikan.js";\nimport {createButailingGroups}')
+        'import {createCommonSearchGroups}',
+        'import {createMikanGroups} from "./mikan.js";\nimport {createCommonSearchGroups}')
 replace("frontend/cloudsubscribe/src/config/fields/search/index.js",
-        '      ...createButailingGroups(),',
-        '      ...createMikanGroups(),\n      ...createButailingGroups(),')
+        '      ...createPirateBayGroups(),',
+        '      ...createMikanGroups(),\n      ...createPirateBayGroups(),')
 replace("frontend/cloudsubscribe/src/config/fields/search/index.js",
-        '      {value: "butailing", title: "不太灵", icon: "mdi-magnet"},',
+        '      {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},',
         '      {value: "mikan", title: "蜜柑", icon: "mdi-magnet"},\n'
-        '      {value: "butailing", title: "不太灵", icon: "mdi-magnet"},')
+        '      {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},')
 for path in ["frontend/cloudsubscribe/src/components/Config.vue", "frontend/cloudsubscribe/src/components/dashboard/HistoryTable.vue"]:
-    replace(path, '  butailing: "不太灵",', '  mikan: "蜜柑",\n  butailing: "不太灵",')
+    replace(path, '  pinglian: "盘链",', '  mikan: "蜜柑",\n  pinglian: "盘链",')
 replace("plugins.v2/cloudsubscribe/core/api/form_content.py",
-        '("不太灵", "butailing"),',
-        '("不太灵", "butailing"), ("蜜柑", "mikan"),')
+        '("SeedHub", "seedhub"),',
+        '("SeedHub", "seedhub"), ("蜜柑", "mikan"),')
 replace("plugins.v2/cloudsubscribe/core/api/search.py",
-        '        "butailing": frozenset({',
-        '        "mikan": frozenset({"mikan_base_url", "mikan_result_limit", "mikan_timeout", "mikan_request_interval"}),\n        "butailing": frozenset({')
+        '        "pinglian": frozenset({',
+        '        "mikan": frozenset({"mikan_base_url", "mikan_result_limit", "mikan_timeout", "mikan_request_interval"}),\n        "pinglian": frozenset({')
 replace("plugins.v2/cloudsubscribe/core/api/search.py",
-        '            "butailing", "pinglian", "pansou",',
-        '            "butailing", "pinglian", "pansou", "mikan",')
+        '            "pinglian", "pansou", "piratebay", "uindex",',
+        '            "pinglian", "pansou", "piratebay", "uindex", "mikan",')
 replace("plugins.v2/cloudsubscribe/core/api/search.py",
         '            pansou_client=pansou_client,',
         '            mikan_config=config,\n            pansou_client=pansou_client,')
 replace("plugins.v2/cloudsubscribe/core/api/search.py",
-        '            "butailing": "不太灵",',
-        '            "mikan": "蜜柑",\n            "butailing": "不太灵",')
+        '            "pinglian": "盘链",',
+        '            "mikan": "蜜柑",\n            "pinglian": "盘链",')
 print("Mikan integration applied")
 replace("plugins.v2/cloudsubscribe/handlers/notification/media_server.py",
         '            success = bool(future.result(timeout=self._REFRESH_TIMEOUT_SECONDS))',

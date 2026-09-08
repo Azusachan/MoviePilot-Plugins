@@ -7,12 +7,12 @@
             <template #activator="{ props: menuProps }">
               <v-badge :content="activeFilterCount" :model-value="activeFilterCount > 0" color="primary">
                 <v-btn
-                    v-bind="menuProps"
-                    icon="mdi-filter-variant"
-                    :color="activeFilterCount ? 'primary' : undefined"
-                    variant="text"
-                    size="small"
-                    title="筛选历史记录" />
+                  v-bind="menuProps"
+                  icon="mdi-filter-variant"
+                  :color="activeFilterCount ? 'primary' : undefined"
+                  variant="text"
+                  size="small"
+                  title="筛选历史记录" />
               </v-badge>
             </template>
             <v-card class="history-filter-menu" elevation="8">
@@ -27,12 +27,12 @@
                   <span class="history-filter-label">资源类型</span>
                   <v-chip-group v-model="selectedResourceTypes" multiple selected-class="text-primary">
                     <v-chip
-                        v-for="option in resourceTypeOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        size="small"
-                        variant="tonal"
-                        filter>
+                      v-for="option in resourceTypeOptions"
+                      :key="option.value"
+                      :value="option.value"
+                      size="small"
+                      variant="tonal"
+                      filter>
                       {{ option.title }}
                     </v-chip>
                   </v-chip-group>
@@ -41,12 +41,12 @@
                   <span class="history-filter-label">来源</span>
                   <v-chip-group v-model="selectedSources" multiple selected-class="text-primary">
                     <v-chip
-                        v-for="option in sourceOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        size="small"
-                        variant="tonal"
-                        filter>
+                      v-for="option in sourceOptions"
+                      :key="option.value"
+                      :value="option.value"
+                      size="small"
+                      variant="tonal"
+                      filter>
                       {{ option.title }}
                     </v-chip>
                   </v-chip-group>
@@ -55,12 +55,12 @@
                   <span class="history-filter-label">任务类型</span>
                   <v-chip-group v-model="selectedTaskTypes" multiple selected-class="text-primary">
                     <v-chip
-                        v-for="option in taskTypeOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        size="small"
-                        variant="tonal"
-                        filter>
+                      v-for="option in taskTypeOptions"
+                      :key="option.value"
+                      :value="option.value"
+                      size="small"
+                      variant="tonal"
+                      filter>
                       {{ option.title }}
                     </v-chip>
                   </v-chip-group>
@@ -69,12 +69,12 @@
                   <span class="history-filter-label">状态</span>
                   <v-chip-group v-model="selectedStatuses" multiple selected-class="text-primary">
                     <v-chip
-                        v-for="status in statusOptions"
-                        :key="status"
-                        :value="status"
-                        size="small"
-                        variant="tonal"
-                        filter>
+                      v-for="status in statusOptions"
+                      :key="status"
+                      :value="status"
+                      size="small"
+                      variant="tonal"
+                      filter>
                       {{ status }}
                     </v-chip>
                   </v-chip-group>
@@ -84,56 +84,56 @@
           </v-menu>
         </div>
         <v-text-field
-            v-if="!isMobile"
-            v-model="keyword"
-            class="history-search"
-            placeholder="搜索标题或文件名"
-            prepend-inner-icon="mdi-magnify"
-            clearable
-            density="compact"
-            variant="outlined"
-            hide-details
-            @keyup.enter="submitSearch"
-            @click:prepend-inner="submitSearch"
-            @click:clear="clearSearch" />
+          v-if="!isMobile"
+          v-model="keyword"
+          class="history-search"
+          placeholder="搜索标题或文件名"
+          prepend-inner-icon="mdi-magnify"
+          clearable
+          density="compact"
+          variant="outlined"
+          hide-details
+          @keyup.enter="submitSearch"
+          @click:prepend-inner="submitSearch"
+          @click:clear="clearSearch" />
         <div v-else class="history-search-trigger">
           <v-menu v-model="searchVisible" :close-on-content-click="false" location="bottom start" offset="6">
             <template #activator="{ props: menuProps }">
               <v-btn
-                  v-bind="menuProps"
-                  icon="mdi-magnify"
-                  :color="keyword ? 'primary' : undefined"
-                  variant="text"
-                  size="small"
-                  title="搜索历史记录" />
+                v-bind="menuProps"
+                icon="mdi-magnify"
+                :color="keyword ? 'primary' : undefined"
+                variant="text"
+                size="small"
+                title="搜索历史记录" />
             </template>
             <v-card class="history-search-menu" elevation="8">
               <v-card-text class="pa-2">
                 <v-text-field
-                    v-model="keyword"
-                    placeholder="搜索标题或文件名"
-                    prepend-inner-icon="mdi-magnify"
-                    clearable
-                    autofocus
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                    @keyup.enter="submitSearch"
-                    @click:prepend-inner="submitSearch"
-                    @click:clear="clearSearch" />
+                  v-model="keyword"
+                  placeholder="搜索标题或文件名"
+                  prepend-inner-icon="mdi-magnify"
+                  clearable
+                  autofocus
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  @keyup.enter="submitSearch"
+                  @click:prepend-inner="submitSearch"
+                  @click:clear="clearSearch" />
               </v-card-text>
             </v-card>
           </v-menu>
         </div>
         <v-spacer />
         <v-btn
-            class="delete-selected-button"
-            color="error"
-            variant="text"
-            size="small"
-            :disabled="!deletableSelectedGroups.length"
-            :loading="deletingKey === 'batch'"
-            @click.stop="deleteSelected">
+          class="delete-selected-button"
+          color="error"
+          variant="text"
+          size="small"
+          :disabled="!deletableSelectedGroups.length"
+          :loading="deletingKey === 'batch'"
+          @click.stop="deleteSelected">
           <v-icon icon="mdi-delete-outline" class="history-action-icon" />
           <span class="history-action-label">删除所选</span>
         </v-btn>
@@ -153,8 +153,8 @@
 
     <div class="history-content">
       <div
-          v-if="loading"
-          :class="[
+        v-if="loading"
+        :class="[
           'history-loading-mask',
           {
             'history-loading-mask--empty': !historyGroups.length,
@@ -169,9 +169,9 @@
       </div>
 
       <v-data-table-server
-          v-if="!isMobile"
+        v-if="!isMobile"
         :headers="headers"
-          :items="historyGroups"
+        :items="historyGroups"
         :items-length="total"
         :page="page"
         v-model="selectedGroupKeys"
@@ -193,7 +193,7 @@
         class="history-table"
         @update:page="changePage"
         @update:items-per-page="changePageSize"
-          @click:row="toggleExpanded">
+        @click:row="toggleExpanded">
         <template #item.media="{ item }">
           <div class="media-cell">
             <span class="media-title font-weight-medium" :title="item.title + (item.year ? ` (${item.year})` : '')">
@@ -690,7 +690,6 @@ const sourceNames = {
   juying: "聚影",
   seedhub: "SeedHub",
   mikan: "蜜柑",
-  butailing: "不太灵",
   pinglian: "盘链",
   online_docs: "在线文档",
   manual: "手动添加",
@@ -718,13 +717,13 @@ const headers = [
 ]
 
 const resourceTypeOptions = computed(() =>
-    uniqueOptions(props.filterOptions?.resourceTypes || []).map((value) => ({
-      title: resourceTypeLabel(value),
-      value,
-    })),
+  uniqueOptions(props.filterOptions?.resourceTypes || []).map((value) => ({
+    title: resourceTypeLabel(value),
+    value,
+  })),
 )
 const sourceOptions = computed(() =>
-    uniqueOptions(props.filterOptions?.sources || []).map((value) => ({title: sourceLabel(value), value})),
+  uniqueOptions(props.filterOptions?.sources || []).map((value) => ({title: sourceLabel(value), value})),
 )
 
 function notificationSummaryTitle(item) {
@@ -735,11 +734,11 @@ function notificationSummaryTitle(item) {
 
 const historyGroups = computed(() => (Array.isArray(props.items) ? props.items : []));
 const activeFilterCount = computed(
-    () =>
-        selectedResourceTypes.value.length +
-        selectedSources.value.length +
-        selectedTaskTypes.value.length +
-        selectedStatuses.value.length,
+  () =>
+    selectedResourceTypes.value.length +
+    selectedSources.value.length +
+    selectedTaskTypes.value.length +
+    selectedStatuses.value.length,
 )
 const selectedGroups = computed(() => {
   const keys = new Set(selectedGroupKeys.value);
@@ -760,7 +759,7 @@ function historySeasonEpisodes(group) {
   }
   return Object.fromEntries(
     Object.entries(episodes).map(([season, values]) => [season, uniqueOptions(values).sort((a, b) => a - b)]),
-  );
+  )
 }
 
 function emitQueryChange(overrides = {}) {
@@ -807,19 +806,19 @@ function clearSearch() {
 }
 
 watch(
-    [selectedResourceTypes, selectedSources, selectedTaskTypes, selectedStatuses],
-    () => emitQueryChange({page: 1}),
-    {
-      deep: true,
-    },
+  [selectedResourceTypes, selectedSources, selectedTaskTypes, selectedStatuses],
+  () => emitQueryChange({page: 1}),
+  {
+    deep: true,
+  },
 )
 
 watch(
-    () => props.page,
-    () => {
-      expanded.value = [];
-      selectedGroupKeys.value = [];
-    },
+  () => props.page,
+  () => {
+    expanded.value = [];
+    selectedGroupKeys.value = [];
+  },
 )
 
 watch(groupedItemKeys, (keys) => {
@@ -827,26 +826,26 @@ watch(groupedItemKeys, (keys) => {
 })
 
 watch(
-    selectedGroups,
-    (groups) => {
-      emit("selection-change", {
-        groupCount: groups.length,
-        subscribeIds: uniqueOptions(
-            groups
-                .flatMap((group) => group.records.map((record) => Number(record.subscribe_id || 0)))
-                .filter((value) => value > 0),
-        ),
-        targets: groups.map((group) => ({
-          tmdb_id: Number(group.tmdb_id || 0),
-          media_type: group.type || "",
-          title: group.title || "",
-          year: group.year || "",
-          seasons: group.seasons || [],
-          season_episodes: historySeasonEpisodes(group),
-        })),
-      });
-    },
-    {immediate: true},
+  selectedGroups,
+  (groups) => {
+    emit("selection-change", {
+      groupCount: groups.length,
+      subscribeIds: uniqueOptions(
+        groups
+          .flatMap((group) => group.records.map((record) => Number(record.subscribe_id || 0)))
+          .filter((value) => value > 0),
+      ),
+      targets: groups.map((group) => ({
+        tmdb_id: Number(group.tmdb_id || 0),
+        media_type: group.type || "",
+        title: group.title || "",
+        year: group.year || "",
+        seasons: group.seasons || [],
+        season_episodes: historySeasonEpisodes(group),
+      })),
+    });
+  },
+  {immediate: true},
 )
 
 function uniqueOptions(values) {
@@ -855,9 +854,9 @@ function uniqueOptions(values) {
 
 function normalizeSource(value) {
   const normalized =
-      String(value || "unknown")
-          .trim()
-          .toLowerCase() || "unknown"
+    String(value || "unknown")
+      .trim()
+      .toLowerCase() || "unknown"
   return ["manual", "手动添加", "手动资源"].includes(normalized) ? "manual" : normalized;
 }
 
@@ -869,28 +868,28 @@ function sourceLabel(value) {
 function resourceType(item) {
   if (typeof item === "string") return item.trim().toLowerCase();
   const configured = String(item?.resource_type || "")
-      .trim()
-      .toLowerCase()
+    .trim()
+    .toLowerCase()
   return configured || "unknown";
 }
 
 function resourceTypeLabel(value) {
   const normalized = resourceType(value);
   return (
-      {
-        115: "115网盘",
-        123: "123网盘",
-        quark: "夸克网盘",
-        guangya: "光鸭网盘",
-        tianyi: "天翼云盘",
-        alipan: "阿里云盘",
-        aliyun: "阿里云盘",
-        cloud: "网盘路径",
-        ed2k: "ED2K",
-        magnet: "Magnet",
-        unknown: "未知",
-      }[normalized] || normalized.toUpperCase()
-  );
+    {
+      115: "115网盘",
+      123: "123网盘",
+      quark: "夸克网盘",
+      guangya: "光鸭网盘",
+      tianyi: "天翼云盘",
+      alipan: "阿里云盘",
+      aliyun: "阿里云盘",
+      cloud: "网盘路径",
+      ed2k: "ED2K",
+      magnet: "Magnet",
+      unknown: "未知",
+    }[normalized] || normalized.toUpperCase()
+  )
 }
 
 function resourceTypeColor(value) {
@@ -937,8 +936,8 @@ function toggleExpanded(event, row) {
   const key = item?.group_key;
   if (!key) return;
   expanded.value = expanded.value.includes(key)
-      ? expanded.value.filter((value) => value !== key)
-      : [...expanded.value, key]
+    ? expanded.value.filter((value) => value !== key)
+    : [...expanded.value, key]
 }
 
 function recordKey(record, index) {
@@ -959,7 +958,7 @@ function historyUpgradeRecordKey(record) {
 
 function canUpgradeRecord(record) {
   return (
-      record?.type !== "电影" && record?.status === "成功" && !record?.finalize_key && Number(record?.episode || 0) > 0
+    record?.type !== "电影" && record?.status === "成功" && !record?.finalize_key && Number(record?.episode || 0) > 0
   )
 }
 

@@ -134,7 +134,7 @@ class SearchQuery:
     target_episodes: tuple[int, ...] = ()
     target_episode_air_dates: Mapping[int, str] = field(default_factory=dict)
     subscribe: Any = field(default=None, repr=False, compare=False)
-    test_mode: bool = False
+    resource_list_mode: bool = False
     result_limit: Optional[int] = None
 
 

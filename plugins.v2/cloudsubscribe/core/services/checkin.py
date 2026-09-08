@@ -634,7 +634,7 @@ class CheckinService(OwnerDelegator):
             self, client: Any, mode: str
     ) -> Dict[str, Any]:
         """分别执行 Dian115 签到和转盘，再合并为单条业务结果。"""
-        before = client.get_account_info(allow_browser_login=False)
+        before = client.get_account_info()
         signin = client.signin(mode=mode)
         lottery_count = (
             getattr(self, "_dian115_lottery_count", 0)
@@ -653,7 +653,7 @@ class CheckinService(OwnerDelegator):
             }
         )
         try:
-            after = client.get_account_info(allow_browser_login=False)
+            after = client.get_account_info()
         except Dian115Error:
             after = dict(before)
             fallback_balance = (

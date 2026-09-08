@@ -80,19 +80,19 @@ import {computed, ref} from "vue";
 const props = defineProps({
   modelValue: {type: Object, default: () => ({})},
   field: {type: Object, required: true},
-});
+})
 const emit = defineEmits(["update:modelValue"]);
 const dialogVisible = ref(false);
 
 const normalizedMap = computed(() => {
   const value = props.modelValue;
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-});
+})
 const selectedRegions = computed(() => Object.keys(normalizedMap.value));
 const summary = computed(() => {
   if (!selectedRegions.value.length) return "未选择";
   return selectedRegions.value.map((region) => `${regionLabel(region)} (${values(region).length})`).join("、");
-});
+})
 
 function updateMap(value) {
   emit("update:modelValue", value);
@@ -111,7 +111,7 @@ function availableValues(region) {
   const normalizedRegion = String(region);
   return (props.field.columns || [])
     .filter((column) => !Array.isArray(column.rows) || column.rows.some((row) => String(row) === normalizedRegion))
-    .map((column) => column.value);
+    .map((column) => column.value)
 }
 
 function setSelectedRegions(regions) {
@@ -120,7 +120,7 @@ function setSelectedRegions(regions) {
   for (const region of selected) {
     next[region] = Object.prototype.hasOwnProperty.call(normalizedMap.value, region)
       ? [...values(region)]
-      : availableValues(region);
+      : availableValues(region)
   }
   updateMap(next);
 }

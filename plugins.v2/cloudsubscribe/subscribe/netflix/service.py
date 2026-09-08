@@ -120,6 +120,7 @@ class NetflixService:
                 source="netflix",
                 source_meta={
                     "scope": scope,
+                    "category": kind,
                     "rank": entry.get("rank"),
                     "week": entry.get("week"),
                     "video_id": entry.get("video_id"),

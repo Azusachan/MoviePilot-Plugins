@@ -8,10 +8,17 @@ from urllib.parse import quote
 from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
+from app.log import logger
 from app.schemas.types import MediaType
 
 from .. import CloudDriveCapability, OwnerDelegator
 from ..media import recognize_media, tmdb_id_of
+from ...search.types import normalize_resource_type
+from ...utils.cache import create_platform_ttl_cache
+
+_RECENT_MANUAL_SUBMITS = create_platform_ttl_cache(
+    "sync:manual_submits", maxsize=256, ttl=4
+)
 
 
 class SyncApi(OwnerDelegator):
@@ -46,6 +53,12 @@ class SyncApi(OwnerDelegator):
                 ("123pan", "123"), ("123.cn", "123"),
                 ("123684.com", "123"), ("123865.com", "123"),
                 ("alipan.com", "alipan"), ("aliyundrive.com", "alipan"),
+                ("pan.baidu.com", "baidu"), ("baidu.com", "baidu"),
+                ("drive.uc.cn", "uc"), ("uc.cn", "uc"),
+                ("115.com", "115"), ("anxia.com", "115"),
+                ("pan.xunlei.com", "xunlei"), ("xunlei.com", "xunlei"),
+                ("mypikpak.com", "pikpak"), ("pikpak", "pikpak"),
+                ("115cdn.com", "115"),
         ):
             if marker in value:
                 return resource_type
@@ -61,7 +74,7 @@ class SyncApi(OwnerDelegator):
                     CloudDriveCapability.SHARE_TRANSFER
                 )
             except (KeyError, RuntimeError):
-                return None
+                pass
         if self._cloud_drive and resource_type == self._cloud_drive.key:
             return self._share_transfer
         return None
@@ -74,13 +87,18 @@ class SyncApi(OwnerDelegator):
     @staticmethod
     def _manual_resource_name(resource_type: str) -> str:
         return {
-            "115": "115",
-            "123": "123",
-            "quark": "夸克",
-            "guangya": "光鸭",
-            "tianyi": "天翼",
+            "115": "115网盘",
+            "123": "123网盘",
+            "quark": "夸克网盘",
+            "guangya": "光鸭网盘",
+            "tianyi": "天翼云盘",
             "aliyun": "阿里云盘",
-        }.get(resource_type, resource_type.upper() or "未知网盘")
+            "alipan": "阿里云盘",
+            "baidu": "百度网盘",
+            "uc": "UC网盘",
+            "xunlei": "迅雷网盘",
+            "pikpak": "PikPak",
+        }.get(resource_type, (resource_type.upper() if resource_type else "未知网盘"))
 
     @staticmethod
     def _positive_ints(values: Any) -> List[int]:
@@ -318,6 +336,37 @@ class SyncApi(OwnerDelegator):
     ) -> dict:
         """校验指定订阅和资源链接后进入现有转存流程。"""
         try:
+            return self._do_api_vue_start_manual_sync(payload, wait=wait)
+        except Exception as error:
+            logger.error(f"手动转存任务执行异常：{error}", exc_info=True)
+            return {"success": False, "message": f"提交转存任务失败：{error}"}
+
+    def _do_api_vue_start_manual_sync(
+            self, payload: Dict[str, Any], wait: bool = False
+    ) -> dict:
+        # 短时间防重复点击保护
+        try:
+            sub_id_check = int((payload or {}).get("subscribe_id") or 0)
+            raw_m = (payload or {}).get("media") or {}
+            res_list = (payload or {}).get("resources") or (payload or {}).get("resource_links") or []
+            first_key = ""
+            if res_list and isinstance(res_list, list) and isinstance(res_list[0], dict):
+                first_key = str(
+                    res_list[0].get("url") or res_list[0].get("resource_ref") or res_list[0].get("title") or "")
+            elif res_list and isinstance(res_list, list):
+                first_key = str(res_list[0])
+            fingerprint = f"{sub_id_check}:{raw_m.get('tmdb_id')}:{raw_m.get('media_type')}:{first_key}"
+            if fingerprint in _RECENT_MANUAL_SUBMITS:
+                logger.debug(f"拦截短时间内重复提交的转存请求：{fingerprint}")
+                return {
+                    "success": True,
+                    "message": "转存任务已在处理中，请勿重复点击",
+                }
+            _RECENT_MANUAL_SUBMITS[fingerprint] = True
+        except Exception:
+            pass
+
+        try:
             subscribe_id = int((payload or {}).get("subscribe_id") or 0)
         except (TypeError, ValueError):
             subscribe_id = 0
@@ -376,22 +425,124 @@ class SyncApi(OwnerDelegator):
                         total_seasons = int(getattr(canonical_media, "number_of_seasons", 0) or 0)
                         seasons = list(range(1, total_seasons + 1))
                 if not seasons:
-                    return {"success": False, "message": "未查询到 TMDB 真实季信息"}
+                    seasons = [1]
                 if seasons[-1] > 999:
                     return {"success": False, "message": "请选择 1 到 999 之间的季"}
             media_target = {
                 "tmdb_id": tmdb_id,
+                "douban_id": raw_media.get("douban_id"),
+                "bangumi_id": raw_media.get("bangumi_id"),
                 "media_type": media_type,
                 "title": canonical_title,
-                "year": getattr(canonical_media, "year", None),
+                "year": getattr(canonical_media, "year", None) or raw_media.get("year"),
                 "seasons": seasons,
             }
+
+        resource_list = (payload or {}).get("resources") or []
+        if not isinstance(resource_list, list):
+            resource_list = []
+
+        # 资源列表提交时优先使用后端返回的渠道元数据。HDHive 的候选可能只有
+        # resource_ref（或 URL 尚未回填），这里在已解锁/零积分场景由后端补齐链接。
+        resource_items = []
+        for value in resource_list:
+            if not isinstance(value, dict):
+                continue
+            item = dict(value)
+            source = str(item.get("source") or "").strip().lower()
+            resource_ref = str(item.get("resource_ref") or "").strip()
+            raw_item_url = item.get("url") or item.get("share_url")
+            provider_data = (
+                dict(item.get("provider_data") or {})
+                if isinstance(item.get("provider_data"), dict) else {}
+            )
+            try:
+                unlock_points = int(item.get("unlock_points") or 0)
+            except (TypeError, ValueError):
+                unlock_points = 0
+            can_resolve = bool(
+                self._search_handler
+                and not raw_item_url
+                and source in {"hdhive", "juying", "seedhub", "pinglian"}
+                and (
+                        resource_ref
+                        or provider_data.get("resource_id")
+                        or provider_data.get("seed_id")
+                        or provider_data.get("token")
+                )
+            )
+            # 付费 HDHive 仍需先解锁；已解锁、零积分及其它渠道的延迟资源，
+            # 在提交转存时统一由后端解析为真实链接。
+            can_resolve = can_resolve and (
+                    source != "hdhive"
+                    or bool(item.get("is_unlocked"))
+                    or unlock_points <= 0
+            )
+            if can_resolve:
+                try:
+                    if source == "hdhive":
+                        resolve_item = dict(item)
+                        if bool(item.get("is_unlocked")):
+                            resolve_item["unlock_points"] = 0
+                        resolved = self._search_handler.unlock_resource(
+                            source, resolve_item, search_label="资源列表转存"
+                        )
+                    elif source == "juying":
+                        resolved = self._search_handler.resolve_source_resource(
+                            source,
+                            resource_id=str(
+                                provider_data.get("resource_id") or resource_ref
+                            ).strip(),
+                        )
+                    elif source == "seedhub":
+                        resolved = self._search_handler.resolve_source_resource(
+                            source,
+                            kind=str(provider_data.get("kind") or ""),
+                            resource_type=str(
+                                item.get("resource_type") or ""
+                            ),
+                            seed_id=str(
+                                provider_data.get("seed_id") or resource_ref
+                            ),
+                            path=str(provider_data.get("path") or ""),
+                            host=str(provider_data.get("host") or ""),
+                        )
+                    else:
+                        resolved = self._search_handler.resolve_source_resource(
+                            source,
+                            token=str(provider_data.get("token") or resource_ref),
+                            resource_type=str(
+                                item.get("resource_type") or ""
+                            ),
+                            password=str(provider_data.get("password") or ""),
+                        )
+                    resolved_url = (
+                        resolved.get("url") if isinstance(resolved, dict) else resolved
+                    )
+                    if isinstance(resolved_url, (list, tuple, set)):
+                        item["url"] = list(resolved_url)
+                    else:
+                        item["url"] = str(resolved_url or "").strip()
+                    if isinstance(resolved, dict) and resolved.get("resource_type"):
+                        item["resource_type"] = resolved["resource_type"]
+                except Exception as error:
+                    logger.warning(
+                        f"资源列表后端解析 {source.upper()} 链接失败：{error}"
+                    )
+            resource_items.append(item)
 
         raw_links = (payload or {}).get("resource_links") or []
         if isinstance(raw_links, str):
             raw_links = raw_links.splitlines()
         if not isinstance(raw_links, list):
             return {"success": False, "message": "资源链接格式错误"}
+
+        # 允许前端只提交 resources；实际链接仍由后端统一抽取和去重。
+        if not raw_links:
+            for item in resource_items:
+                value = item.get("url") or item.get("share_url")
+                values = value if isinstance(value, (list, tuple, set)) else [value]
+                raw_links.extend(values)
 
         links = []
         for value in raw_links:
@@ -416,9 +567,19 @@ class SyncApi(OwnerDelegator):
             cloud_path = str(PurePosixPath(
                 "/" + "/".join(cloud_parts)
             ))
-            target_provider = str(
-                getattr(self._cloud_drive, "key", "") or ""
+            target_cloud_key = str(
+                (payload or {}).get("target_cloud")
+                or (payload or {}).get("target_provider")
+                or getattr(self._cloud_drive, "key", "115")
             ).strip().lower()
+            target_drive = self._cloud_drive
+            if target_cloud_key and self._cloud_drive_registry:
+                try:
+                    target_drive = self._cloud_drive_registry.get(target_cloud_key)
+                except KeyError:
+                    pass
+            target_key = getattr(target_drive, "key", "115")
+            target_provider = target_key
             cloud_provider = str(
                 (payload or {}).get("cloud_provider") or target_provider
             ).strip().lower()
@@ -426,7 +587,7 @@ class SyncApi(OwnerDelegator):
                 cloud_drive = (
                     self._cloud_drive_registry.get(cloud_provider)
                     if self._cloud_drive_registry and cloud_provider
-                    else self._cloud_drive
+                    else target_drive
                 )
             except KeyError:
                 return {"success": False, "message": "所选网盘提供方不存在"}
@@ -436,12 +597,11 @@ class SyncApi(OwnerDelegator):
                 return {"success": False, "message": "所选网盘不支持目录浏览"}
             if cloud_provider != target_provider:
                 cross_ready = bool(
-                    self._cross_transfer_enabled
-                    and cloud_drive.supports(CloudDriveCapability.FILE_QUERY)
+                    cloud_drive.supports(CloudDriveCapability.FILE_QUERY)
                     and cloud_drive.supports(CloudDriveCapability.FILE_DOWNLOAD)
-                    and self._cloud_drive
-                    and self._cloud_drive.supports(CloudDriveCapability.LOCAL_UPLOAD)
-                    and self._cloud_drive.supports(CloudDriveCapability.FILE_QUERY)
+                    and target_drive
+                    and target_drive.supports(CloudDriveCapability.LOCAL_UPLOAD)
+                    and target_drive.supports(CloudDriveCapability.FILE_QUERY)
                 )
                 if not cross_ready:
                     return {"success": False, "message": "所选网盘未满足跨盘转存条件"}
@@ -470,24 +630,6 @@ class SyncApi(OwnerDelegator):
                 return {"success": False, "message": "指定订阅不存在"}
             if subscribe.type not in {MediaType.TV.value, MediaType.MOVIE.value}:
                 return {"success": False, "message": "仅支持电影或电视剧订阅"}
-        if cloud_path and cloud_provider != target_provider:
-            requested_media_type = (
-                str(media_target.get("media_type") or "").strip().lower()
-                if media_target
-                else {
-                    MediaType.MOVIE.value: "movie",
-                    MediaType.TV.value: "tv",
-                }.get(getattr(subscribe, "type", None), "")
-            )
-            allowed_cross_types = {
-                str(value or "").strip().lower()
-                for value in getattr(self, "_cross_transfer_media_types", set())
-            }
-            if requested_media_type not in allowed_cross_types:
-                return {
-                    "success": False,
-                    "message": "当前媒体类型未启用跨盘转存",
-                }
 
         share_transfer = None
         offline_download = None
@@ -520,11 +662,29 @@ class SyncApi(OwnerDelegator):
 
         resources = []
         skip_history = bool((payload or {}).get("skip_history"))
+        resource_titles = (payload or {}).get("resource_titles") or {}
+        title_map = {}
+        if isinstance(resource_titles, dict):
+            for k, v in resource_titles.items():
+                if k and v:
+                    title_map[str(k).strip()] = str(v).strip()
+        resource_meta_by_url = {}
+        for r in resource_items:
+            values = r.get("url") or r.get("share_url")
+            values = values if isinstance(values, (list, tuple, set)) else [values]
+            for value in values:
+                normalized = str(value or "").strip()
+                if normalized:
+                    resource_meta_by_url[normalized] = r
+                    if r.get("title"):
+                        title_map[normalized] = str(r["title"]).strip()
+
         if cloud_path:
             provider_name = str(getattr(cloud_drive, "name", cloud_provider) or cloud_provider)
+            cloud_url = f"cloud://{cloud_provider}{quote(cloud_path, safe='/')}"
             resources.append({
-                "url": f"cloud://{cloud_provider}{quote(cloud_path, safe='/')}",
-                "title": f"{provider_name}路径 {cloud_path}",
+                "url": cloud_url,
+                "title": title_map.get(cloud_url) or f"{provider_name}路径 {cloud_path}",
                 "resource_type": "cloud",
                 "source": "manual",
                 "cloud_path": cloud_path,
@@ -534,6 +694,9 @@ class SyncApi(OwnerDelegator):
             })
         invalid_links = []
         for index, link in enumerate(links, start=1):
+            metadata = resource_meta_by_url.get(link) or (
+                resource_items[index - 1] if index <= len(resource_items) else {}
+            )
             if offline_download and offline_download.is_ed2k_url(link):
                 resource_type = "ed2k"
                 valid = bool(offline_download.parse_ed2k_link(link))
@@ -545,16 +708,28 @@ class SyncApi(OwnerDelegator):
                     and (magnet_info.get("metadata") or {}).get("metadata_available")
                 )
             else:
-                resource_type = self._manual_resource_type(link, self._cloud_drive.key)
+                metadata_type = normalize_resource_type(
+                    metadata.get("resource_type") or metadata.get("pan_type")
+                )
+                target_cloud_key = str(
+                    (payload or {}).get("target_cloud")
+                    or (payload or {}).get("target_provider")
+                    or getattr(self._cloud_drive, "key", "115")
+                ).strip().lower()
+                target_key = target_cloud_key or getattr(self._cloud_drive, "key", "115")
+                resource_type = metadata_type or self._manual_resource_type(link, target_key)
                 share_service = self._manual_share_service(resource_type)
                 if not share_service:
-                    invalid_links.append(
-                        (
-                            index,
-                            f"{self._manual_resource_name(resource_type)}分享源尚未接入，"
-                            "暂不支持手动转存",
+                    source_name = self._manual_resource_name(resource_type)
+                    target_name = self._manual_resource_name(target_key)
+                    if resource_type != target_key:
+                        hint = (
+                            f"检测到跨盘转存【{source_name}】资源到【{target_name}】。"
+                            f"需要配置【{source_name}】账号凭据以提取源文件，请在插件设置中配置【{source_name}】凭据后重试"
                         )
-                    )
+                    else:
+                        hint = f"{source_name}分享源尚未接入或未配置凭据，暂不支持手动转存"
+                    invalid_links.append((index, hint))
                     continue
                 share_info = share_service.extract_share_info(link)
                 valid = self._manual_share_info_valid(resource_type, share_info)
@@ -569,16 +744,38 @@ class SyncApi(OwnerDelegator):
                 )
                 invalid_links.append((index, reason))
                 continue
+
+            # 优先使用真实资源标题，以便 MoviePilot 刮削整理能准确识别集数、压制组与分辨率
+            real_title = title_map.get(link)
+            if not real_title and resource_type == "magnet" and magnet_info:
+                real_title = (magnet_info.get("metadata") or {}).get("name")
+            if not real_title:
+                canonical_media_name = (media_target or {}).get("title")
+                real_title = f"{canonical_media_name} - 资源 {index}" if canonical_media_name else f"手动添加 {index}"
+
+            target_cloud_param = str((payload or {}).get("target_cloud") or "").strip().lower()
+            metadata = resource_meta_by_url.get(link) or {}
             resources.append({
                 "url": link,
-                "title": f"手动添加 {index}",
-                "resource_type": resource_type,
-                "source": "manual",
+                "title": real_title,
+                "resource_type": metadata.get("resource_type") or resource_type,
+                "source": metadata.get("source") or "manual",
                 "unlock_points": 0,
                 "skip_history": skip_history,
+                "target_cloud": target_cloud_param,
+                "is_cross": bool(target_cloud_param or (payload or {}).get("is_cross")),
+                **{
+                    key: metadata[key]
+                    for key in (
+                        "resource_ref", "provider_data", "media_page_url",
+                        "is_unlocked", "preview_episodes", "target_season",
+                        "target_episodes", "supports_file_preview",
+                    )
+                    if metadata.get(key) is not None
+                },
                 **(
                     {"magnet_metadata": magnet_info["metadata"]}
-                    if resource_type == "magnet" else {}
+                    if resource_type == "magnet" and magnet_info else {}
                 ),
             })
         if invalid_links:

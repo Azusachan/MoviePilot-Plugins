@@ -12,7 +12,7 @@ cloudsubscribe/
 ├── core/                # 领域模型、配置、平台适配和通用服务
 ├── drive/               # 网盘能力接口及提供方实现
 ├── handlers/            # 搜索、订阅、同步、通知和 API 编排
-├── search/              # HDHive、PanSou 等搜索源客户端
+├── search/              # 搜索源客户端
 ├── utils/               # 文件解析、匹配、Magnet 和 STRM 工具
 └── dist/assets/         # CI 构建后写入 Release ZIP 的 Vue 模块联邦产物
 ```

@@ -13,6 +13,7 @@ from ..http_client import (
     RequestGate, gated_request, normalize_proxies, normalize_proxy_address,
     proxy_server, requests,
 )
+from ..matching import extract_year
 from ..types import resource_type_from_url
 from ...utils.cache import create_platform_ttl_cache
 

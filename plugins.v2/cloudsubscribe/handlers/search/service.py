@@ -1,6 +1,5 @@
 """
 搜索处理模块
-负责所有搜索相关逻辑：HDHive、Dian115、PanSou 等搜索源
 """
 import copy
 import hashlib
@@ -62,9 +61,8 @@ class SearchHandler:
     def __init__(
             self,
             pansou_client,
-            hdhive_client,
+            hdhive_client=None,
             seedhub_client=None,
-            butailing_client=None,
             juying_client=None,
             pinglian_client=None,
             online_docs_client=None,
@@ -74,7 +72,6 @@ class SearchHandler:
             hdhive_enabled: bool = False,
             dian115_enabled: bool = False,
             seedhub_enabled: bool = False,
-            butailing_enabled: bool = False,
             juying_enabled: bool = False,
             pinglian_enabled: bool = False,
             hdhive_username: str = "",
@@ -99,7 +96,12 @@ class SearchHandler:
             pansou_refresh: bool = True,
             pansou_timeout: int = 30,
             seedhub_result_limit: int = 20,
-            butailing_result_limit: int = 20,
+            piratebay_client: Any = None,
+            piratebay_enabled: bool = False,
+            piratebay_result_limit: int = 20,
+            uindex_client: Any = None,
+            uindex_enabled: bool = False,
+            uindex_result_limit: int = 20,
             juying_result_limit: int = 5,
             pinglian_result_limit: int = 20,
             search_source_order: Optional[List[str]] = None,
@@ -124,21 +126,16 @@ class SearchHandler:
         初始化搜索处理器
 
         :param pansou_client: PanSou 客户端实例
-        :param hdhive_client: HDHive OpenAPI 客户端实例（API 模式使用）
         :param pansou_enabled: 是否启用 PanSou
-        :param hdhive_enabled: 是否启用 HDHive
-        :param hdhive_username: HDHive 用户名
-        :param hdhive_password: HDHive 密码
-        :param hdhive_query_mode: HDHive 查询模式
-        :param hdhive_auto_unlock: 是否自动解锁 HDHive 资源
         :param pansou_channels: PanSou 搜索频道
-        :param search_source_order: 自定义搜索源优先级列表，如 ["pansou", "hdhive"]
+        :param search_source_order: 自定义搜索源优先级列表
         """
         self._mikan_config = mikan_config or {}
         self._pansou_client = pansou_client
         self._hdhive_client = hdhive_client
         self._seedhub_client = seedhub_client
-        self._butailing_client = butailing_client
+        self._piratebay_client = piratebay_client
+        self._uindex_client = uindex_client
         self._juying_client = juying_client
         self._pinglian_client = pinglian_client
         self._online_docs_client = online_docs_client
@@ -149,7 +146,10 @@ class SearchHandler:
         self._hdhive_enabled = hdhive_enabled
         self._dian115_enabled = bool(dian115_enabled)
         self._seedhub_enabled = bool(seedhub_enabled)
-        self._butailing_enabled = bool(butailing_enabled)
+        self._piratebay_enabled = bool(piratebay_enabled)
+        self._piratebay_result_limit = int(piratebay_result_limit or 20)
+        self._uindex_enabled = bool(uindex_enabled)
+        self._uindex_result_limit = int(uindex_result_limit or 20)
         self._juying_enabled = bool(juying_enabled)
         self._pinglian_enabled = bool(pinglian_enabled)
         self._online_docs_enabled = bool(online_docs_client)
@@ -210,9 +210,6 @@ class SearchHandler:
         self._pansou_timeout = max(5, min(int(pansou_timeout or 30), 120))
         self._seedhub_result_limit = max(
             1, min(int(seedhub_result_limit or 20), 80)
-        )
-        self._butailing_result_limit = max(
-            1, min(int(butailing_result_limit or 20), 80)
         )
         self._juying_result_limit = max(
             1, min(int(juying_result_limit or 5), 20)
@@ -310,14 +307,29 @@ class SearchHandler:
             return False
 
     def get_enabled_sources(self) -> List[str]:
-        """返回用户选择且当前已注册的搜索渠道。"""
+        """返回用户选择且当前已启用的搜索渠道（供自动追剧与定时下载使用）。"""
         available_set = {
             provider.key for provider in self._search_registry.available()
         }
+        enabled_map = {
+            "pansou": getattr(self, "_pansou_enabled", True),
+            "hdhive": getattr(self, "_hdhive_enabled", False),
+            "seedhub": getattr(self, "_seedhub_enabled", False),
+            "piratebay": getattr(self, "_piratebay_enabled", False),
+            "uindex": getattr(self, "_uindex_enabled", False),
+            "juying": getattr(self, "_juying_enabled", False),
+            "pinglian": getattr(self, "_pinglian_enabled", False),
+            "online_docs": getattr(self, "_online_docs_enabled", False),
+            "dian115": True,
+        }
         return [
             source for source in self._search_source_order
-            if source in available_set
+            if source in available_set and enabled_map.get(source, True)
         ]
+
+    def get_all_search_sources(self) -> List[str]:
+        """返回所有当前已注册的搜索渠道（供网盘资源列表实时嗅探使用，无需手动启用即可搜索）。"""
+        return [provider.key for provider in self._search_registry.available()]
 
     @property
     def source_concurrency_enabled(self) -> bool:
@@ -559,7 +571,7 @@ class SearchHandler:
             target_episodes: Optional[List[int]] = None,
             target_episode_air_dates: Optional[Dict[int, str]] = None,
             subscribe: Any = None,
-            test_mode: bool = False,
+            resource_list_mode: bool = False,
             result_limit: Optional[int] = None,
     ) -> List[Dict]:
         try:
@@ -573,15 +585,11 @@ class SearchHandler:
             target_episodes=tuple(target_episodes or ()),
             target_episode_air_dates=dict(target_episode_air_dates or {}),
             subscribe=subscribe,
-            test_mode=test_mode,
+            resource_list_mode=resource_list_mode,
             result_limit=result_limit,
         )
         prefix = format_search_log_prefix(query, provider.key)
         started = time.monotonic()
-        logger.debug(
-            f"{prefix} 搜索开始："
-            f"模式={'测试' if test_mode else '正式'}"
-        )
         try:
             results = provider.search(query)
         except Exception as error:
@@ -620,6 +628,7 @@ class SearchHandler:
             target_episodes=target_episodes,
             log_prefix=f"[{self._search_label(mediainfo, media_type, season)}]"
                        f"[{source.upper()}]",
+            filter_unsupported_types=apply_platform_rules,
         )
         if not apply_platform_rules:
             return ordered
@@ -666,7 +675,7 @@ class SearchHandler:
             mediainfo,
             media_type,
             season,
-            test_mode=True,
+            resource_list_mode=True,
             result_limit=self._TEST_RESULT_LIMIT,
         )
         return list(results)[:self._TEST_RESULT_LIMIT]
@@ -681,6 +690,8 @@ class SearchHandler:
             target_episode_air_dates: Optional[Dict[int, str]] = None,
             subscribe: Any = None,
             apply_platform_rules: bool = True,
+            force_refresh: bool = False,
+            result_limit: Optional[int] = None,
     ) -> List[Dict]:
         source = str(source or "").strip().lower()
         if self._stop_requested():
@@ -697,7 +708,7 @@ class SearchHandler:
         search_label = self._search_label(mediainfo, media_type, season)
         results = (
             self._get_cached_results(cache_key, source, search_label)
-            if provider.policy.cacheable else None
+            if (provider.policy.cacheable and not force_refresh and result_limit is None) else None
         )
         if results is not None:
             return self._prepare_source_results(
@@ -721,8 +732,14 @@ class SearchHandler:
                 target_episodes,
                 target_episode_air_dates,
                 subscribe,
+                resource_list_mode=not apply_platform_rules,
+                result_limit=result_limit,
             )
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                f"[{search_label}][{source.upper()}] 外部查询抛出异常：{error}",
+                exc_info=True,
+            )
             return []
         finally:
             self._record_search_metric(source, "external_calls")
@@ -734,7 +751,7 @@ class SearchHandler:
         if self._stop_requested():
             return []
         label = f"[{search_label}][{source.upper()}]"
-        if provider.policy.cacheable:
+        if provider.policy.cacheable and result_limit is None:
             self._set_cached_results(cache_key, label, results, source=source)
         return self._prepare_source_results(
             results,
@@ -756,6 +773,9 @@ class SearchHandler:
             target_episodes: Optional[List[int]] = None,
             target_episode_air_dates: Optional[Dict[int, str]] = None,
             subscribe: Any = None,
+            apply_platform_rules: bool = True,
+            force_refresh: bool = False,
+            result_limit: Optional[int] = None,
     ) -> Dict[str, List[Dict]]:
         """并发查询相互独立的来源；各来源内部仍遵守自己的限流和串行约束。"""
         ordered_sources = list(dict.fromkeys(sources or []))
@@ -770,6 +790,9 @@ class SearchHandler:
                     target_episodes=target_episodes,
                     target_episode_air_dates=target_episode_air_dates,
                     subscribe=subscribe,
+                    apply_platform_rules=apply_platform_rules,
+                    force_refresh=force_refresh,
+                    result_limit=result_limit,
                 )
                 for source in ordered_sources
             }
@@ -792,6 +815,9 @@ class SearchHandler:
                     target_episodes,
                     target_episode_air_dates,
                     subscribe,
+                    apply_platform_rules,
+                    force_refresh,
+                    result_limit,
                 ): source
                 for source in ordered_sources
             }
@@ -941,8 +967,9 @@ class SearchHandler:
             season: Optional[int] = None,
             target_episodes: Optional[List[int]] = None,
             log_prefix: str = "",
+            filter_unsupported_types: bool = True,
     ) -> List[Dict]:
-        """按类型、可用性、HDHive 官组、集数覆盖和积分筛选排序。"""
+        """按类型、可用性、集数覆盖和积分筛选排序。"""
         targets = positive_ints(target_episodes)
         prepared = []
         unsupported_type_count = 0
@@ -951,10 +978,12 @@ class SearchHandler:
             resource_type = self._resource_type(item)
             type_order = self._resource_type_order_map.get(resource_type)
             if type_order is None:
-                unsupported_type_count += 1
-                continue
+                if filter_unsupported_types:
+                    unsupported_type_count += 1
+                    continue
+                type_order = 999
             coverage = self._resource_target_coverage(item, season, targets)
-            if coverage[0] >= 3:
+            if filter_unsupported_types and coverage[0] >= 3:
                 uncovered_count += 1
                 continue
             sort_key = (

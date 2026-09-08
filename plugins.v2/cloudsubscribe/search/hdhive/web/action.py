@@ -117,8 +117,8 @@ def server_action_headers(
         "accept": "text/x-component",
         "content-type": "text/plain;charset=UTF-8",
         "next-action": str(action_id or ""),
-        "origin": "https://hdhive.com",
-        "referer": str(referer or "https://hdhive.com/"),
+        "origin": "https://re0.me",
+        "referer": str(referer or "https://re0.me/"),
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
@@ -259,7 +259,7 @@ class ServerActionProtocol:
             chunk_patterns: Iterable[Pattern[str]] = (),
     ) -> str:
         page_url = str(
-            getattr(page_response, "url", "") or "https://hdhive.com/"
+            getattr(page_response, "url", "") or "https://re0.me/"
         )
         return self.action_id_from_scripts(
             request,
@@ -300,7 +300,7 @@ class ServerActionProtocol:
             username: str,
             password: str,
             *,
-            base_url: str = "https://hdhive.com",
+            base_url: str = "https://re0.me",
             refresh_action: bool = False,
     ) -> ServerActionResponse:
         """预检登录页、发现并提交登录 Action。"""
@@ -356,7 +356,7 @@ class ServerActionProtocol:
             request: Callable[..., Any],
             is_gambler: bool,
             *,
-            base_url: str = "https://hdhive.com",
+            base_url: str = "https://re0.me",
             refresh_action: bool = False,
             retry_token: bool = True,
             on_page: Optional[Callable[[Any], None]] = None,
@@ -435,7 +435,7 @@ class ServerActionProtocol:
             slug: str,
             *,
             page_headers: Optional[Dict[str, str]] = None,
-            base_url: str = "https://hdhive.com",
+            base_url: str = "https://re0.me",
             on_submit: Optional[Callable[[], None]] = None,
     ) -> Tuple[Any, ServerActionResponse, str, str]:
         """预检详情页、读取蜜罐证明并提交解锁 Action。"""
@@ -666,7 +666,7 @@ def server_action_message(payload: Optional[Dict[str, Any]]) -> str:
     return next((str(value).strip() for value in candidates if value), "")
 
 
-def server_action_redirect_url(text: str, base_url: str = "https://hdhive.com") -> str:
+def server_action_redirect_url(text: str, base_url: str = "https://re0.me") -> str:
     """解析 Action RSC 中的绝对或相对跳转地址。"""
     normalized = decode_embedded_text(text)
     match = SERVER_ACTION_REDIRECT_RE.search(normalized)

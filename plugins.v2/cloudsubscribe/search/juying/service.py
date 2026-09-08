@@ -51,9 +51,9 @@ class JuyingSearchService:
             resource_type_order=self._resource_types,
             limit=(
                 query.result_limit or self._result_limit
-                if query.test_mode else self._result_limit
+                if query.resource_list_mode else self._result_limit
             ),
-            test_mode=query.test_mode,
+            resource_list_mode=query.resource_list_mode,
         )
         return normalize_magnets(resources, "juying")
 

@@ -348,7 +348,7 @@ def normalize_languages(values: Any) -> List[str]:
 
 
 def torrentclaw_rows(
-        value: Any, base_url: str = "https://hdhive.com"
+        value: Any, base_url: str = "https://re0.me"
 ) -> List[Dict[str, Any]]:
     result = value.get("result") if isinstance(value, dict) else None
     if not isinstance(result, dict):
@@ -552,7 +552,7 @@ def resolve_resource_detail_path(
         resource_type_value: str,
         slug: str,
         detail_path: str = "",
-        base_url: str = "https://hdhive.com",
+        base_url: str = "https://re0.me",
 ) -> str:
     """校验并复用卡片详情路径，缺失时按资源类别推导。"""
     normalized_type = normalize_resource_type(resource_type_value)

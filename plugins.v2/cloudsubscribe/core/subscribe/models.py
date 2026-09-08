@@ -80,11 +80,16 @@ class MediaCandidate:
     source: str = ""
     source_meta: dict[str, Any] = field(default_factory=dict)
     unique_seed: str = ""
+    vote_average: float = 0.0
 
     def __post_init__(self) -> None:
         self.title = _text(self.title)
         self.year = _text(self.year) or None
         self.media_type = _type_value(self.media_type) or None
+        try:
+            self.vote_average = float(self.vote_average or 0.0)
+        except (TypeError, ValueError):
+            self.vote_average = 0.0
         if self.media_type == "tv":
             try:
                 self.season = max(0, int(1 if self.season is None else self.season))

@@ -14,6 +14,6 @@ export function connectRuntimeStream(pluginId, handlers = {}) {
     } catch (error) {
       handlers.onInvalidData?.(error);
     }
-  };
+  }
   return source;
 }

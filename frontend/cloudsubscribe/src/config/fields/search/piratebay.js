@@ -1,32 +1,33 @@
-export function createButailingGroups() {
+export function createPirateBayGroups() {
   return [
     {
-      tab: "butailing",
-      title: "不太灵",
-      icon: "mdi-magnet",
+      tab: "piratebay",
+      title: "海盗湾 (The Pirate Bay)",
+      icon: "mdi-pirate",
       fields: [
         {
-          key: "butailing_base_url",
-          label: "服务地址",
+          key: "piratebay_base_url",
+          label: "API 接口地址",
+          hint: "默认 https://apibay.org，可填入可用镜像。",
           cols: 12,
         },
         {
-          key: "test_butailing",
+          key: "test_piratebay",
           label: "测试搜索",
           type: "test-source",
-          source: "butailing",
+          source: "piratebay",
           cols: 12,
         },
       ],
     },
     {
-      tab: "butailing",
-      title: "搜索与风控",
+      tab: "piratebay",
+      title: "搜索与限速",
       icon: "mdi-shield-search",
-      hint: "列表和详情接口共享请求限速。",
+      hint: "针对海盗湾 API 设置结果条数与并发间隔。",
       fields: [
         {
-          key: "butailing_result_limit",
+          key: "piratebay_result_limit",
           label: "候选上限",
           type: "number",
           min: 1,
@@ -34,17 +35,17 @@ export function createButailingGroups() {
           cols: 4,
         },
         {
-          key: "butailing_request_interval",
+          key: "piratebay_request_interval",
           label: "请求间隔",
           type: "number",
-          min: 1,
+          min: 0.2,
           max: 10,
           step: 0.1,
           suffix: "秒",
           cols: 4,
         },
         {
-          key: "butailing_timeout",
+          key: "piratebay_timeout",
           label: "请求超时",
           type: "number",
           min: 5,
@@ -54,5 +55,5 @@ export function createButailingGroups() {
         },
       ],
     },
-  ]
+  ];
 }

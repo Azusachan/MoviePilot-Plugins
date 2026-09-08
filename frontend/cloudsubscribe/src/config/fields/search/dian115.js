@@ -108,5 +108,5 @@ export function createDian115Groups(options = {}) {
         },
       ],
     },
-  ];
+  ]
 }

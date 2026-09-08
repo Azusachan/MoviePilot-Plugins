@@ -8,6 +8,7 @@ import time
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.chain.mediaserver import MediaServerChain
 from app.core.context import MediaInfo
@@ -861,8 +862,7 @@ class HistoryService(OwnerDelegator):
             amount /= 1024
         return "-"
 
-    @staticmethod
-    def _history_page_fields(record: Dict[str, Any]) -> Dict[str, str]:
+    def _history_page_fields(self, record: Dict[str, Any]) -> Dict[str, str]:
         """生成历史页面所需的稳定标识、名称和可点击链接。"""
         media_type = str(record.get("type") or "未知类型")
 
@@ -915,6 +915,15 @@ class HistoryService(OwnerDelegator):
         source_url = str(
             record.get("source_url") or record.get("media_page_url") or ""
         ).strip()
+        if source == "hdhive" and source_url:
+            parsed = urlsplit(source_url)
+            if parsed.scheme and parsed.netloc:
+                source_url = urlunsplit(("", "", parsed.path, parsed.query, ""))
+            base_url = str(
+                getattr(self, "_hdhive_base_url", "https://re0.me")
+                or "https://re0.me"
+            ).strip().rstrip("/")
+            source_url = urljoin(f"{base_url}/", source_url.lstrip("/"))
         has_source_link = (
                 source not in {"manual", "手动添加", "手动资源"}
                 and bool(re.match(r"^https?://", source_url, re.IGNORECASE))
@@ -961,9 +970,8 @@ class HistoryService(OwnerDelegator):
             return True, "修复此记录"
         return False, "当前记录无需重试"
 
-    @classmethod
     def prepare_history_records(
-            cls, records: List[Dict[str, Any]]
+            self, records: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """为历史页面生成业务展示字段，前端不再重复推导状态。"""
         prepared = []
@@ -976,10 +984,10 @@ class HistoryService(OwnerDelegator):
                     or resource_type_from_url(record.get("share_url"))
                     or "unknown"
             )
-            record.update(cls._history_page_fields(record))
+            record.update(self._history_page_fields(record))
             is_cross = str(record.get("transfer_mode") or "") == "cross"
             record["is_cross_transfer"] = is_cross
-            record["task_types"] = cls._history_task_types(record)
+            record["task_types"] = self._history_task_types(record)
             if is_cross:
                 source_name = str(
                     record.get("source_drive_name")
@@ -1002,16 +1010,16 @@ class HistoryService(OwnerDelegator):
                 record["cross_transfer_title"] = (
                     f"{source_name} → {target_name} · {cache_label}"
                 )
-            can_retry, retry_title = cls._history_retry_state(record)
+            can_retry, retry_title = self._history_retry_state(record)
             record["can_retry"] = can_retry
             record["retry_title"] = retry_title
-            if cls._is_upgrade_history(record):
+            if self._is_upgrade_history(record):
                 parts = []
                 previous_name = str(record.get("previous_file_name") or "").strip()
                 if previous_name:
                     parts.append(previous_name)
-                previous_size = cls._format_history_size(record.get("previous_file_size"))
-                current_size = cls._format_history_size(record.get("file_size"))
+                previous_size = self._format_history_size(record.get("previous_file_size"))
+                current_size = self._format_history_size(record.get("file_size"))
                 if previous_size != "-":
                     parts.append(
                         f"{previous_size} → {current_size}"
@@ -1569,6 +1577,7 @@ class HistoryService(OwnerDelegator):
             "type": media_type.value,
             "tmdbid": tmdb_id,
             "doubanid": media.get("douban_id") or media.get("doubanid"),
+            "bangumiid": media.get("bangumi_id") or media.get("bangumiid"),
             "season": season,
             "start_episode": min(selected_episodes) if selected_episodes else 1,
             "total_episode": max(selected_episodes) if selected_episodes else 0,

@@ -147,5 +147,5 @@ export function createNotifySection(options) {
         ],
       },
     ],
-  };
+  }
 }

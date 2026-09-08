@@ -98,4 +98,4 @@ jobs:
           gh api "repos/$GH_REPO/statuses/$head" \
             -f state=failure -f context=upstream-sync/validation \
             -f target_url="$RUN_URL" -f description='Sync blocked; inspect conflicts or failed validation'
-          gh pr comment "$PR_NUMBER" --body "Automatic sync stopped. No conflict was auto-resolved. Inspect this run, resolve conflicts on this branch if needed, then rerun the sync workflow: $RUN_URL"
+          gh pr comment "$PR_NUMBER" --body "Automatic sync stopped. Do not merge this PR until upstream-sync/validation succeeds. No conflict was auto-resolved. Inspect the conflict or permission comment, resolve on this branch, then rerun: $RUN_URL"

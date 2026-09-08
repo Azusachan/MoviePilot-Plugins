@@ -8,6 +8,7 @@ from app.db import SessionFactory
 from app.db.models.mediaserver import MediaServerItem
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
+from sqlalchemy import func
 
 from .. import OwnerDelegator
 from ..media import media_server_tmdb_filters, tmdb_id_of
@@ -231,6 +232,181 @@ class MediaLibraryApi(OwnerDelegator):
             if play_url:
                 return {"success": True, "data": {"url": play_url}}
         return {"success": False, "message": "未在已启用的 Emby 中找到播放地址"}
+
+    @staticmethod
+    def _media_type(value: Any) -> str:
+        text = str(getattr(value, "value", value) or "").strip().casefold()
+        if text in {"movie", "film", "电影"}:
+            return "movie"
+        if text in {"tv", "series", "show", "television", "电视剧", "剧集"}:
+            return "tv"
+        return ""
+
+    @staticmethod
+    def _storage_server_name(name: str, service: Any) -> str:
+        return str(getattr(service, "type", "") or name or "").strip().casefold()
+
+    def lookup_media_library(self, media_items) -> Dict[str, list]:
+        """按 TMDB ID 和媒体类型汇总媒体库条目，避免电影/剧集同 ID 误判。"""
+        requested = {}
+        for item in media_items or []:
+            if isinstance(item, dict):
+                value = item.get("tmdb_id")
+                media_type = self._media_type(item.get("media_type"))
+            else:
+                value = item
+                media_type = ""
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                requested.setdefault(value, set()).add(media_type)
+        normalized_ids = set(requested)
+        if not normalized_ids:
+            return {}
+
+        services = MediaServerHelper().get_services() or {}
+        storage_servers = set()
+        server_names = {}
+        for name, service in services.items():
+            if not service or getattr(service, "instance", None) is None:
+                continue
+            if service.instance.is_inactive():
+                continue
+            storage_name = self._storage_server_name(name, service)
+            aliases = {str(name).casefold(), storage_name}
+            storage_servers.update(aliases)
+            for alias in aliases:
+                server_names[alias] = str(name)
+        if not storage_servers:
+            return {}
+
+        result = {str(tmdb_id): [] for tmdb_id in normalized_ids}
+        with SessionFactory() as db:
+            rows = db.query(MediaServerItem).filter(
+                func.lower(MediaServerItem.server).in_(storage_servers),
+                *media_server_tmdb_filters(MediaServerItem, normalized_ids),
+            ).all()
+        for row in rows:
+            tmdb_id = tmdb_id_of(row)
+            if not tmdb_id:
+                continue
+            row_type = self._media_type(getattr(row, "item_type", ""))
+            requested_types = requested.get(tmdb_id, set())
+            if requested_types and "" not in requested_types and row_type not in requested_types:
+                continue
+            storage_server = str(row.server or "").casefold()
+            result.setdefault(str(tmdb_id), []).append({
+                "server": server_names.get(storage_server, str(row.server or "媒体服务器")),
+                "library": str(row.library or "").strip(),
+                "item_id": str(row.item_id or "").strip(),
+                "title": str(row.title or "").strip(),
+                "year": row.year,
+                "item_type": str(row.item_type or "").strip(),
+                "media_type": row_type,
+                "path": str(row.path or "").strip(),
+                "seasoninfo": row.seasoninfo or {},
+            })
+        return {key: value for key, value in result.items() if value}
+
+    def lookup_media_library_by_douban(self, douban_ids) -> Dict[str, list]:
+        """按豆瓣 ID 查询媒体库，用于未补全 TMDB ID 的豆瓣榜单卡片。"""
+        normalized = {
+            str(value).strip() for value in (douban_ids or [])
+            if str(value or "").strip()
+        }
+        if not normalized:
+            return {}
+        if not hasattr(MediaServerItem, "media_source") or not hasattr(MediaServerItem, "media_id"):
+            return {}
+        services = MediaServerHelper().get_services() or {}
+        storage_servers = set()
+        server_names = {}
+        for name, service in services.items():
+            if not service or getattr(service, "instance", None) is None:
+                continue
+            if service.instance.is_inactive():
+                continue
+            storage_name = self._storage_server_name(name, service)
+            aliases = {str(name).casefold(), storage_name}
+            storage_servers.update(aliases)
+            for alias in aliases:
+                server_names[alias] = str(name)
+        if not storage_servers:
+            return {}
+        result = {value: [] for value in normalized}
+        with SessionFactory() as db:
+            rows = db.query(MediaServerItem).filter(
+                func.lower(MediaServerItem.server).in_(storage_servers),
+                func.lower(MediaServerItem.media_source) == "douban",
+                MediaServerItem.media_id.in_(normalized),
+            ).all()
+        for row in rows:
+            key = str(row.media_id or "").strip()
+            if key not in result:
+                continue
+            result[key].append({
+                "server": server_names.get(str(row.server or "").casefold(), str(row.server or "媒体服务器")),
+                "library": str(row.library or "").strip(),
+                "item_id": str(row.item_id or "").strip(),
+                "title": str(row.title or "").strip(),
+                "year": row.year,
+                "item_type": str(row.item_type or "").strip(),
+                "media_type": self._media_type(getattr(row, "item_type", "")),
+                "path": str(row.path or "").strip(),
+                "seasoninfo": row.seasoninfo or {},
+            })
+        return {key: value for key, value in result.items() if value}
+
+    def lookup_media_library_by_bangumi(self, bangumi_ids) -> Dict[str, list]:
+        """按 Bangumi ID 查询媒体库入库状态。"""
+        normalized = {
+            str(value).strip() for value in (bangumi_ids or [])
+            if str(value or "").strip()
+        }
+        if not normalized:
+            return {}
+        if not hasattr(MediaServerItem, "media_source") or not hasattr(MediaServerItem, "media_id"):
+            return {}
+        services = MediaServerHelper().get_services() or {}
+        storage_servers = set()
+        server_names = {}
+        for name, service in services.items():
+            if not service or getattr(service, "instance", None) is None:
+                continue
+            if service.instance.is_inactive():
+                continue
+            storage_name = self._storage_server_name(name, service)
+            aliases = {str(name).casefold(), storage_name}
+            storage_servers.update(aliases)
+            for alias in aliases:
+                server_names[alias] = str(name)
+        if not storage_servers:
+            return {}
+        result = {value: [] for value in normalized}
+        with SessionFactory() as db:
+            rows = db.query(MediaServerItem).filter(
+                func.lower(MediaServerItem.server).in_(storage_servers),
+                func.lower(MediaServerItem.media_source).in_(["bangumi", "bgm"]),
+                MediaServerItem.media_id.in_(normalized),
+            ).all()
+        for row in rows:
+            key = str(row.media_id or "").strip()
+            if key not in result:
+                continue
+            result[key].append({
+                "server": server_names.get(str(row.server or "").casefold(), str(row.server or "媒体服务器")),
+                "library": str(row.library or "").strip(),
+                "item_id": str(row.item_id or "").strip(),
+                "title": str(row.title or "").strip(),
+                "year": row.year,
+                "item_type": str(row.item_type or "").strip(),
+                "media_type": self._media_type(getattr(row, "item_type", "")),
+                "path": str(row.path or "").strip(),
+                "seasoninfo": row.seasoninfo or {},
+            })
+        return {key: value for key, value in result.items() if value}
 
     def api_vue_media_server_content(
             self,
