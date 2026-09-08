@@ -71,7 +71,7 @@ jobs:
           corepack prepare pnpm@10.25.0 --activate
           pnpm --dir frontend/cloudsubscribe install --frozen-lockfile
           pnpm --dir frontend/cloudsubscribe build
-          test -f frontend/cloudsubscribe/dist/assets/remoteEntry.js
+          test -f plugins.v2/cloudsubscribe/dist/assets/remoteEntry.js
       - name: Merge tested PR with a merge commit
         if: steps.prepare.outputs.changed == 'true'
         run: |
