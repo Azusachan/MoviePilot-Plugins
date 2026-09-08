@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MEDIA_SERVER = ROOT / "plugins.v2/cloudsubscribe/handlers/notification/media_server.py"
-NOTIFICATION_INIT = ROOT / "plugins.v2/cloudsubscribe/handlers/notification/__init__.py"
-TELEVISION = ROOT / "plugins.v2/cloudsubscribe/handlers/sync/television.py"
+MEDIA_SERVER = ROOT / "plugins.v2/cloudsubscribefork/handlers/notification/media_server.py"
+NOTIFICATION_INIT = ROOT / "plugins.v2/cloudsubscribefork/handlers/notification/__init__.py"
+TELEVISION = ROOT / "plugins.v2/cloudsubscribefork/handlers/sync/television.py"
 
 RESOLVER = '''class MediaServerEpisodeResolver:
     """Read existing TV episodes through MoviePilot's generic media-server API."""

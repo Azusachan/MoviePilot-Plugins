@@ -1,7 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
-spec=importlib.util.spec_from_file_location('pending_test',Path(__file__).resolve().parents[1]/'plugins.v2/cloudsubscribe/search/pending.py')
+spec=importlib.util.spec_from_file_location('pending_test',Path(__file__).resolve().parents[1]/'plugins.v2/cloudsubscribefork/search/pending.py')
 mod=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 class PendingTests(unittest.TestCase):

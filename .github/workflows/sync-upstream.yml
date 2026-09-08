@@ -12,7 +12,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: cloudsubscribe-plex-upstream-sync
+  group: cloudsubscribefork-plex-upstream-sync
   cancel-in-progress: false
 
 jobs:
@@ -53,12 +53,12 @@ jobs:
           set -euo pipefail
           python3 -m pip install beautifulsoup4
           python3 -m unittest discover -s tests -v
-          python3 -m compileall -q plugins.v2/cloudsubscribe
+          python3 -m compileall -q plugins.v2/cloudsubscribefork
           python3 .github/scripts/get_plugin_meta.py >/dev/null
         env:
           GITHUB_EVENT_NAME: workflow_dispatch
           INPUT_SOURCE_DIRECTORY: plugins.v2
-          INPUT_PLUGIN_ID: CloudSubscribe
+          INPUT_PLUGIN_ID: CloudSubscribeFork
       - uses: actions/setup-node@v4
         if: steps.prepare.outputs.changed == 'true'
         with:
@@ -69,9 +69,9 @@ jobs:
           set -euo pipefail
           corepack enable
           corepack prepare pnpm@10.25.0 --activate
-          pnpm --dir frontend/cloudsubscribe install --frozen-lockfile
-          pnpm --dir frontend/cloudsubscribe build
-          test -f plugins.v2/cloudsubscribe/dist/assets/remoteEntry.js
+          pnpm --dir frontend/cloudsubscribefork install --frozen-lockfile
+          pnpm --dir frontend/cloudsubscribefork build
+          test -f plugins.v2/cloudsubscribefork/dist/assets/remoteEntry.js
       - name: Merge tested PR with a merge commit
         if: steps.prepare.outputs.changed == 'true'
         run: |
@@ -89,7 +89,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --body "Validation passed; merged with a merge commit. Build: $RUN_URL"
           # Explicit dispatch: do not rely on a GITHUB_TOKEN push event.
           gh workflow run plugins-release.yml --ref main \
-            -f source_directory=plugins.v2 -f plugin_id=CloudSubscribe
+            -f source_directory=plugins.v2 -f plugin_id=CloudSubscribeFork
       - name: Record failure on the PR
         if: ${{ failure() && env.PR_NUMBER != '' }}
         run: |

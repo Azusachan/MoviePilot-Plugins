@@ -19,7 +19,7 @@ jobs:
           python3 .github/scripts/apply_mikan_patch.py
           git diff --exit-code
           python3 -m unittest discover -s tests -v
-          python3 -m compileall -q plugins.v2/cloudsubscribe
+          python3 -m compileall -q plugins.v2/cloudsubscribefork
           bash -n .github/scripts/prepare-upstream-pr.sh
       - uses: actions/setup-node@v4
         with:
@@ -28,6 +28,6 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@10.25.0 --activate
-          pnpm --dir frontend/cloudsubscribe install --frozen-lockfile
-          pnpm --dir frontend/cloudsubscribe build
-          test -f plugins.v2/cloudsubscribe/dist/assets/remoteEntry.js
+          pnpm --dir frontend/cloudsubscribefork install --frozen-lockfile
+          pnpm --dir frontend/cloudsubscribefork build
+          test -f plugins.v2/cloudsubscribefork/dist/assets/remoteEntry.js

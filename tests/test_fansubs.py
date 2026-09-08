@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-spec = importlib.util.spec_from_file_location('fansubs_test', Path(__file__).resolve().parents[1] / 'plugins.v2/cloudsubscribe/search/fansubs.py')
+spec = importlib.util.spec_from_file_location('fansubs_test', Path(__file__).resolve().parents[1] / 'plugins.v2/cloudsubscribefork/search/fansubs.py')
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 
