@@ -701,9 +701,11 @@ class SearchHandler:
         search_label = self._search_label(mediainfo, media_type, season)
         results = (
             self._get_cached_results(cache_key, source, search_label)
-            if (provider.policy.cacheable and not force_refresh and result_limit is None) else None
+            if (provider.policy.cacheable and not force_refresh) else None
         )
         if results is not None:
+            if result_limit is not None and len(results) > result_limit:
+                results = results[:result_limit]
             return self._prepare_source_results(
                 results,
                 source,
@@ -744,7 +746,7 @@ class SearchHandler:
         if self._stop_requested():
             return []
         label = f"[{search_label}][{source.upper()}]"
-        if provider.policy.cacheable and result_limit is None:
+        if provider.policy.cacheable:
             self._set_cached_results(cache_key, label, results, source=source)
         return self._prepare_source_results(
             results,

@@ -1,10 +1,8 @@
 """盘链网页登录、资源查询与分享链接解析。"""
 
-import html
 import re
 import threading
 import time
-from html.parser import HTMLParser
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -31,83 +29,6 @@ class PinglianError(RuntimeError):
     def __init__(self, message: str, code: str = "pinglian_error"):
         super().__init__(message)
         self.code = code
-
-
-class _ProfileParser(HTMLParser):
-    """只读取个人中心账户卡片中的稳定 class 字段。"""
-
-    _DIRECT_FIELDS = {
-        "pf-username": "name",
-        "vip-badge": "level",
-        "pf-reg-date": "registered_at",
-    }
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.result: Dict[str, Any] = {"details": {}}
-        self._capture = ""
-        self._capture_tag = ""
-        self._buffer: List[str] = []
-        self._card_depth = 0
-        self._card: Dict[str, str] = {}
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        values = dict(attrs)
-        classes = set(str(values.get("class") or "").split())
-        if tag == "div" and "stat-card" in classes and not self._card_depth:
-            self._card_depth = 1
-            self._card = {}
-        elif tag == "div" and self._card_depth:
-            self._card_depth += 1
-
-        capture = next((value for key, value in self._DIRECT_FIELDS.items()
-                        if key in classes), "")
-        if values.get("id") == "profileCoinCount":
-            capture = "points"
-        if self._card_depth and "stat-label" in classes:
-            capture = "card_label"
-        elif self._card_depth and "stat-value" in classes:
-            capture = "card_value"
-        if capture and not self._capture:
-            self._capture = capture
-            self._capture_tag = tag
-            self._buffer = []
-
-    def handle_data(self, data: str) -> None:
-        if self._capture:
-            self._buffer.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._capture and tag == self._capture_tag:
-            value = re.sub(r"\s+", " ", " ".join(self._buffer)).strip()
-            if self._capture.startswith("card_"):
-                self._card[self._capture.removeprefix("card_")] = value
-            elif value and not self.result.get(self._capture):
-                self.result[self._capture] = value
-            self._capture = ""
-            self._capture_tag = ""
-            self._buffer = []
-        if tag == "div" and self._card_depth:
-            self._card_depth -= 1
-            if not self._card_depth:
-                label = self._card.get("label", "")
-                value = self._card.get("value", "")
-                if label and value:
-                    self.result["details"][label] = value
-                self._card = {}
-
-
-class _RedirectParser(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.target = ""
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag != "a" or self.target:
-            return
-        values = dict(attrs)
-        if values.get("id") == "jumpBtn":
-            self.target = str(values.get("href") or "").strip()
 
 
 class PinglianClient:
@@ -230,6 +151,34 @@ class PinglianClient:
         self._session.cookies.clear()
         self._save_session()
 
+    def _check_auth_status(self) -> bool:
+        """检查当前已保存的会话状态是否仍然有效。"""
+        try:
+            response = gated_idempotent_request(
+                self._request_gate,
+                self._session_request,
+                "GET",
+                f"{self.base_url}/api/auth/status",
+                headers={
+                    "Origin": self.base_url,
+                    "Referer": f"{self.base_url}/",
+                },
+                proxies=self._proxies,
+                timeout=self._timeout,
+            )
+            if response.status_code == 200 and self._is_json(response):
+                payload = response.json()
+                data = payload.get("data") if isinstance(payload, dict) else {}
+                if isinstance(data, dict):
+                    if data.get("is_admin") or (
+                        data.get("role") == "user"
+                        and int(data.get("user_id") or 0) > 0
+                    ):
+                        return True
+        except Exception as error:
+            logger.debug(f"盘链鉴权状态检查异常：{error}")
+        return False
+
     def _login(self, force: bool = False) -> None:
         if not self.is_configured:
             raise PinglianError("盘链账号或密码未配置", "pinglian_not_configured")
@@ -240,40 +189,24 @@ class PinglianClient:
                 return
             if force:
                 self._clear_session()
+            elif self._authenticated and self._check_auth_status():
+                return
+
             try:
-                login_page = gated_idempotent_request(
-                    self._request_gate,
-                    self._session_request,
-                    "GET",
-                    f"{self.base_url}/pages/login.php",
-                    on_retry=self._reset_transport,
-                    headers={
-                        "Accept": (
-                            "text/html,application/xhtml+xml,application/xml;"
-                            "q=0.9,*/*;q=0.8"
-                        ),
-                    },
-                    proxies=self._proxies,
-                    timeout=self._timeout,
-                )
-                if login_page.status_code != 200:
-                    raise PinglianError(
-                        f"盘链登录页初始化失败（HTTP {login_page.status_code}）",
-                        "pinglian_login_failed",
-                    )
                 response = gated_request(
                     self._request_gate,
                     self._session_request,
                     "POST",
-                    f"{self.base_url}/api/login.php",
+                    f"{self.base_url}/api/auth/login",
                     data={
                         "username": self.username,
                         "password": self.password,
-                        "remember": "on",
+                        "remember": "1",
                     },
                     headers={
                         "Origin": self.base_url,
-                        "Referer": f"{self.base_url}/pages/login.php",
+                        "Referer": f"{self.base_url}/login",
+                        "Content-Type": "application/x-www-form-urlencoded",
                     },
                     proxies=self._proxies,
                     timeout=self._timeout,
@@ -283,6 +216,7 @@ class PinglianClient:
                     f"盘链登录失败：{request_error_summary(error)}",
                     "pinglian_login_failed",
                 ) from error
+
             if response.status_code != 200 or not self._is_json(response):
                 raise PinglianError(
                     f"盘链登录失败（HTTP {response.status_code}）",
@@ -294,19 +228,30 @@ class PinglianClient:
                 raise PinglianError(
                     "盘链登录响应格式异常", "pinglian_schema_changed"
                 ) from error
+
             if not isinstance(payload, dict) or not payload.get("success"):
-                raise PinglianError(
-                    str((payload or {}).get("message") or "盘链账号或密码错误"),
-                    "pinglian_login_failed",
+                error_msg = str(
+                    (payload or {}).get("message")
+                    or "盘链账号或密码错误"
                 )
+                raise PinglianError(error_msg, "pinglian_login_failed")
+
             self._authenticated = True
             self._save_session()
+            logger.info("盘链登录成功并已更新会话")
 
-    def _request(self, method: str, path: str, retry_auth: bool = True, **kwargs):
-        self._login()
+    def _request(
+            self,
+            method: str,
+            path: str,
+            retry_auth: bool = True,
+            **kwargs,
+    ):
+        if not path.startswith("/api/auth/login"):
+            self._login()
         headers = dict(kwargs.pop("headers", {}) or {})
         headers.setdefault("Origin", self.base_url)
-        headers.setdefault("Referer", f"{self.base_url}/all-videos.php")
+        headers.setdefault("Referer", f"{self.base_url}/")
         try:
             response = gated_idempotent_request(
                 self._request_gate,
@@ -324,24 +269,32 @@ class PinglianClient:
                 f"盘链请求失败：{request_error_summary(error)}",
                 "pinglian_request_failed",
             ) from error
-        auth_failed = response.status_code == 401
+
+        auth_failed = response.status_code in (401, 403)
         payload = None
         if self._is_json(response):
             try:
                 payload = response.json()
             except ValueError:
                 payload = None
-            auth_failed = auth_failed or (
-                    isinstance(payload, dict)
-                    and str(payload.get("code") or "") == "-1"
-            )
+            if isinstance(payload, dict):
+                error_type = str(payload.get("error_type") or "").strip()
+                message = str(payload.get("message") or "").strip()
+                if (
+                    error_type in ("ADMIN_AUTH_REQUIRED", "AUTH_REQUIRED")
+                    or "请先登录" in message
+                    or str(payload.get("code") or "") == "-1"
+                ):
+                    auth_failed = True
         else:
             response_path = str(urlparse(str(response.url or "")).path or "")
-            auth_failed = auth_failed or response_path.endswith("/pages/login.php")
+            auth_failed = auth_failed or "/login" in response_path
+
         if auth_failed and retry_auth:
             self._clear_session()
             self._login(force=True)
             return self._request(method, path, retry_auth=False, **kwargs)
+
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after") or ""
             try:
@@ -352,6 +305,7 @@ class PinglianClient:
                 cooldown, status=429, reason="盘链 HTTP 429"
             )
             raise PinglianError("盘链请求过于频繁，请稍后重试", "pinglian_rate_limited")
+
         if response.status_code >= 400:
             raise PinglianError(
                 f"盘链请求失败（HTTP {response.status_code}）",
@@ -359,12 +313,24 @@ class PinglianClient:
             )
         return response, payload
 
-    def request_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict:
-        response, payload = self._request("GET", path, params=params)
+    def request_json(
+            self,
+            path: str,
+            method: str = "GET",
+            params: Optional[Dict[str, Any]] = None,
+            **kwargs,
+    ) -> Dict[str, Any]:
+        response, payload = self._request(
+            method, path, params=params, **kwargs
+        )
         if not self._is_json(response) or not isinstance(payload, dict):
             raise PinglianError(
                 "盘链返回了非 JSON 页面，接口可能已改版", "pinglian_schema_changed"
             )
+        if payload.get("success") is False:
+            message = str(payload.get("message") or "盘链接口调用失败")
+            error_type = str(payload.get("error_type") or "pinglian_api_error")
+            raise PinglianError(message, error_type)
         return payload
 
     @staticmethod
@@ -384,66 +350,120 @@ class PinglianClient:
             return f"{target} 提取码: {password}"
         return target
 
-    def _resolve_token(self, token: str, expected_type: str) -> str:
-        response, _ = self._request(
-            "GET", "/api/go.php", params={"t": token}, allow_redirects=False
-        )
-        target = str(response.headers.get("location") or "").strip()
-        if not target and response.status_code == 200:
-            text = str(response.text or "")
-            parser = _RedirectParser()
-            parser.feed(text)
-            target = parser.target
-            if not target:
-                match = re.search(r'\btargetUrl\s*=\s*["\']([^"\']+)', text, re.I)
-                target = match.group(1) if match else ""
-            target = html.unescape(target).replace(r"\/", "/")
-        if not target:
-            raise PinglianError("盘链资源令牌未返回跳转链接", "pinglian_empty_link")
-        actual_type = resource_type_from_url(target)
-        if actual_type != expected_type:
-            raise PinglianError("盘链资源跳转类型异常", "pinglian_invalid_link")
-        return target
-
     def resolve_resource(
-            self, token: str, resource_type: str, password: str = ""
+            self,
+            token: str = "",
+            resource_type: str = "",
+            password: str = "",
+            link_id: str = "",
+            **kwargs,
     ) -> Dict[str, str | bytes]:
-        """解析测试列表中用户选中的单条盘链资源。"""
-        token = str(token or "").strip()
+        """按两步解锁流程换取盘链的真实网盘直链。"""
+        target_id = str(link_id or token or "").strip()
         expected_type = normalize_resource_type(resource_type)
-        if (
-                not token or len(token) > 512
-                or any(character.isspace() for character in token)
-                or expected_type not in SUPPORTED_RESOURCE_TYPES
-        ):
+        if not target_id:
             raise PinglianError("盘链资源标识无效", "pinglian_invalid_token")
-        target = self._resolve_token(token, expected_type)
+
+        # 第一步：获取解锁凭证 (link-ticket)
+        try:
+            ticket_payload = self.request_json(
+                "/api/videos/link-ticket",
+                method="POST",
+                json={"link_id": int(target_id) if target_id.isdigit() else target_id},
+            )
+        except Exception as error:
+            raise PinglianError(
+                f"获取盘链资源解锁凭证失败：{error}", "pinglian_ticket_failed"
+            ) from error
+
+        ticket_data = ticket_payload.get("data") if isinstance(ticket_payload, dict) else {}
+        ticket = str((ticket_data or {}).get("ticket") or "").strip()
+        ticket_code = str((ticket_data or {}).get("code") or "").strip()
+        if not ticket:
+            raise PinglianError("盘链未返回有效解锁凭证", "pinglian_ticket_empty")
+
+        # 第二步：使用凭证换取实际网盘链接 (link-open)
+        try:
+            open_payload = self.request_json(
+                f"/api/videos/link-open/{target_id}",
+                method="GET",
+                params={"t": ticket},
+            )
+        except Exception as error:
+            raise PinglianError(
+                f"打开盘链真实链接失败：{error}", "pinglian_open_failed"
+            ) from error
+
+        open_data = open_payload.get("data") if isinstance(open_payload, dict) else {}
+        target_url = str((open_data or {}).get("url") or "").strip()
+        if not target_url:
+            raise PinglianError("盘链未返回有效分享链接", "pinglian_empty_link")
+
+        actual_type = resource_type_from_url(target_url)
+        final_type = actual_type or expected_type
+
+        # 密码提取优先级：link-open 返回的密码 > ticket 附带的 code > 参数传入的 password
+        resolved_pwd = str(
+            (open_data or {}).get("password")
+            or (open_data or {}).get("code")
+            or ticket_code
+            or password
+            or ""
+        ).strip()
+
         return {
-            "url": self.apply_password(expected_type, target, password),
-            "resource_type": expected_type,
+            "url": self.apply_password(final_type, target_url, resolved_pwd),
+            "resource_type": final_type,
         }
 
     def get_account_info(self) -> Dict[str, Any]:
-        """从个人中心读取账户、会员和金币信息。"""
-        response, _ = self._request("GET", "/pages/profile.php")
-        parser = _ProfileParser()
-        parser.feed(str(response.text or ""))
-        profile = parser.result
-        details = profile.get("details") or {}
-        name = str(profile.get("name") or "").strip()
-        if not name:
-            raise PinglianError("盘链个人中心缺少账户字段", "pinglian_schema_changed")
-        points_text = str(profile.get("points") or "0")
-        points_match = re.search(r"\d+", points_text)
+        """从新版个人中心及配额接口读取账户、会员与配额信息。"""
+        profile_payload = self.request_json("/api/me/profile")
+        profile = profile_payload.get("data") if isinstance(profile_payload, dict) else {}
+        if not isinstance(profile, dict):
+            raise PinglianError("盘链个人中心数据格式异常", "pinglian_schema_changed")
+
+        name = str(profile.get("username") or self.username).strip()
+        vip_level = profile.get("vip_level")
+        level_str = f"VIP{vip_level}" if vip_level else "普通用户"
+
+        quota = {}
+        try:
+            quota_payload = self.request_json("/api/videos/link-quota")
+            quota = quota_payload.get("data") if isinstance(quota_payload, dict) else {}
+        except Exception as error:
+            logger.debug(f"盘链读取配额信息失败：{error}")
+
+        details: Dict[str, str] = {}
+        if isinstance(quota, dict) and quota:
+            if quota.get("unlimited"):
+                details["今日解锁配额"] = "不限次数"
+            elif "limit" in quota and "used" in quota:
+                details["今日解锁配额"] = (
+                    f"{quota.get('used', 0)}/{quota.get('limit', 0)} 次 "
+                    f"(剩余 {quota.get('remaining', 0)} 次)"
+                )
+        if profile.get("vip_expires_at"):
+            details["VIP 到期"] = str(profile.get("vip_expires_at"))
+        if profile.get("created_at"):
+            details["注册日期"] = str(profile.get("created_at"))
+        if profile.get("account_count") is not None:
+            details["关联网盘数"] = f"{int(profile.get('account_count') or 0)} 个"
+
+        remaining_quota = (
+            quota.get("remaining") if isinstance(quota, dict) else None
+        )
+        points = int(remaining_quota) if remaining_quota is not None else 0
+
         return {
             "name": name,
-            "email": details.get("邮箱", ""),
-            "level": details.get("会员等级") or profile.get("level", ""),
-            "points": int(points_match.group()) if points_match else 0,
-            "expires_at": details.get("VIP 到期", ""),
-            "registered_at": str(profile.get("registered_at") or "")
-            .removeprefix("注册于 ").strip(),
-            "invite_count": details.get("已邀请用户", ""),
+            "email": str(profile.get("email") or ""),
+            "level": level_str,
+            "points": points,
+            "expires_at": str(profile.get("vip_expires_at") or ""),
+            "registered_at": str(profile.get("created_at") or ""),
+            "invite_count": "",
+            "details": details,
         }
 
     def clear_cache(self) -> Dict[str, int]:

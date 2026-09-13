@@ -49,6 +49,7 @@ BIND_SECRET_RE = re.compile(
 )
 LOGIN_ACTION_FALLBACK = "602b98dd108c13ebbb69c9e649267ed988f9c3ce8e"
 CHECKIN_ACTION_FALLBACK = "4068b21f57fce3dc23dca0ca104769e9e42c011d22"
+UNLOCK_ACTION_FALLBACK = "60fa60b0abe9c7f09558795da0fc7f8bcc400913aa"
 ACTION_CACHE_TTL = 60 * 60
 LOGIN_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%22(auth)%22%2C%7B%22children%22%3A"
@@ -458,6 +459,7 @@ class ServerActionProtocol:
                 ),
                 action_name="解锁",
                 action_pattern=UNLOCK_ACTION_RE,
+                fallback=UNLOCK_ACTION_FALLBACK,
             ),
         )
         if on_submit:
@@ -593,11 +595,18 @@ def _json_objects(values: Iterable[Any]) -> List[Dict[str, Any]]:
 
 
 def server_action_payload(text: str) -> Optional[Dict[str, Any]]:
-    """提取 Action 业务响应；错误包装优先于内部 success 字段。"""
+    """提取 Action 业务响应；优先提取成功的 response 载荷，避免被组件树 error 误判。"""
     objects = _json_objects(_json_values(text))
     for item in objects:
+        response = item.get("response")
+        if isinstance(response, dict) and response.get("success"):
+            return response
+    for item in objects:
+        if item.get("success") is True and isinstance(item.get("data"), dict):
+            return item
+    for item in objects:
         error = item.get("error")
-        if isinstance(error, dict):
+        if isinstance(error, dict) and (error.get("message") or error.get("code")):
             return {
                 "success": False,
                 "message": str(
@@ -615,7 +624,7 @@ def server_action_payload(text: str) -> Optional[Dict[str, Any]]:
             }
     for item in objects:
         response = item.get("response")
-        if isinstance(response, dict) and "success" in response:
+        if isinstance(response, dict):
             return response
     return next(
         (item for item in objects if "success" in item),

@@ -12,6 +12,19 @@ import {
   unwrapApiResponse,
 } from "./resourceUtils";
 
+// 媒体渠道搜索结果的前端内存缓存（15分钟有效）
+const mediaSearchMemoryCache = new Map();
+const MEDIA_SEARCH_CACHE_TTL = 15 * 60 * 1000;
+
+function getMediaCacheKey(media) {
+  if (!media) return "";
+  const id = media.tmdb_id || media.douban_id || media.media_id || media.imdb_id || "";
+  const title = String(media.title || "").trim().toLowerCase();
+  const year = String(media.year || "").trim();
+  const type = String(media.media_type || "movie").trim();
+  return `${type}:${id}:${title}:${year}`;
+}
+
 /** 管理详情弹窗的数据补全、并发取消和生命周期。 */
 export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const detailVisible = ref(false);
@@ -231,6 +244,15 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
 
   async function searchChannel(channelKey, force = false) {
     if (!channelKey || !isChannelConfigured(channelKey) || !activeMedia.value || (!force && channelSearched.value[channelKey])) return;
+    if (force) {
+      const mKey = getMediaCacheKey(activeMedia.value);
+      if (mKey && mediaSearchMemoryCache.has(mKey)) {
+        const entry = mediaSearchMemoryCache.get(mKey);
+        delete entry.results?.[channelKey];
+        delete entry.searched?.[channelKey];
+        delete entry.elapsed?.[channelKey];
+      }
+    }
     channelLoading.value = {...channelLoading.value, [channelKey]: true};
     try {
       const media = activeMedia.value;
@@ -262,6 +284,17 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
         }
         if (result.data?.main_cloud_drive && pluginConfig?.value)
           pluginConfig.value.cloud_drive = result.data.main_cloud_drive;
+
+        // 缓存该媒体的渠道搜索结果
+        const mKey = getMediaCacheKey(activeMedia.value);
+        if (mKey) {
+          const entry = mediaSearchMemoryCache.get(mKey) || {results: {}, searched: {}, elapsed: {}, time: Date.now()};
+          entry.results[channelKey] = channelResults.value[channelKey];
+          entry.searched[channelKey] = true;
+          entry.elapsed[channelKey] = channelElapsed.value[channelKey];
+          entry.time = Date.now();
+          mediaSearchMemoryCache.set(mKey, entry);
+        }
       } else {
         showMessage?.(result?.message || `${getSourceName(channelKey)} 检索失败`, "warning");
       }
@@ -281,7 +314,19 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   }
 
   async function openMediaDetail(item) {
-    resetChannelState();
+    const key = getMediaCacheKey(item);
+    const cached = mediaSearchMemoryCache.get(key);
+    if (cached && Date.now() - cached.time < MEDIA_SEARCH_CACHE_TTL) {
+      channelResults.value = {...(cached.results || {})};
+      channelLoading.value = {};
+      channelSearched.value = {...(cached.searched || {})};
+      channelElapsed.value = {...(cached.elapsed || {})};
+      activeResourceTab.value = "";
+      resourceSearchQuery.value = "";
+      selectedResourceSpecs.value = [];
+    } else {
+      resetChannelState();
+    }
     try {
       const stillOpen = await openMedia(item);
       if (!stillOpen) return;
@@ -298,7 +343,9 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     activeDetailSeason.value = defaultSeason?.season_number || 1;
     const firstChannel = availableChannels.value[0]?.key || "";
     activeChannelTab.value = firstChannel;
-    if (firstChannel) await searchChannel(firstChannel);
+    if (firstChannel && !channelSearched.value[firstChannel]) {
+      await searchChannel(firstChannel);
+    }
   }
 
   function onChannelTabChange(channelKey) {
