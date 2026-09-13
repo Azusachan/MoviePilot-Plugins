@@ -53,6 +53,27 @@ def normalize_media_source(value: Any) -> Optional[str]:
     return _SOURCE_ALIASES.get(normalized, normalized or None)
 
 
+def coerce_media_source(value: Any) -> Any:
+    """尝试将媒体来源转为当前宿主支持的 MediaSource 枚举，失败时回退为规范化字符串。"""
+    if value is None:
+        return None
+    try:
+        from app.schemas.types import MediaSource
+        if isinstance(value, MediaSource):
+            return value
+        normalized = normalize_media_source(value)
+        if normalized:
+            try:
+                return MediaSource(normalized)
+            except (ValueError, KeyError, TypeError):
+                attr_name = normalized.upper()
+                if hasattr(MediaSource, attr_name):
+                    return getattr(MediaSource, attr_name)
+    except Exception:
+        pass
+    return normalize_media_source(value)
+
+
 def media_identity(value: Any) -> Tuple[Optional[str], Optional[str]]:
     """读取规范媒体身份；缺失时回退到 v2 的独立 ID 字段。"""
     source = normalize_media_source(
@@ -235,6 +256,36 @@ def recognize_media(
         kwargs.update({key: value for key, value in explicit_ids.items() if _present(value)})
 
     return method(**_accepted_kwargs(method, kwargs))
+
+
+def search_medias(
+        chain: Any,
+        meta: Any = None,
+        *,
+        source: Any = None,
+        media_source: Any = None,
+        **kwargs: Any,
+) -> Any:
+    """按运行时签名使用 v2 (source) 或 v3 (media_source) 契约调用媒体搜索。"""
+    method = getattr(chain, "search_medias", None)
+    if not callable(method):
+        return []
+
+    raw_source = media_source if media_source is not None else source
+    parameters = _parameters(method)
+    call_kwargs: Dict[str, Any] = {"meta": meta, **kwargs}
+
+    if "media_source" in parameters:
+        target_source = coerce_media_source(raw_source) if raw_source is not None else None
+        call_kwargs["media_source"] = target_source
+    elif "source" in parameters:
+        target_source = normalize_media_source(raw_source) if raw_source is not None else None
+        call_kwargs["source"] = target_source
+    else:
+        call_kwargs["media_source"] = coerce_media_source(raw_source) if raw_source is not None else None
+        call_kwargs["source"] = normalize_media_source(raw_source) if raw_source is not None else None
+
+    return method(**_accepted_kwargs(method, call_kwargs))
 
 
 def list_subscribes_by_tmdb_id(

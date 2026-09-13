@@ -18,7 +18,7 @@ from .page import _platform_image_url
 from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
-from ..media import apply_media_identity, recognize_media
+from ..media import apply_media_identity, recognize_media, search_medias
 from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
@@ -935,7 +935,8 @@ class SearchApi(OwnerDelegator):
         requested_media_type = str(payload.get("media_type") or "").strip().lower()
         try:
             meta = MetaInfo(title)
-            candidates = self.chain.search_medias(
+            candidates = search_medias(
+                self.chain,
                 meta=meta,
                 source="themoviedb",
             ) or []

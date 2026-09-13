@@ -937,17 +937,32 @@ class PlatformIntegrationService(OwnerDelegator):
             }
 
         if selected_candidate is None:
-            preview = self._preview_link_media(links) if not str(title or "").strip() else {}
-            recognized_title = str(title or "").strip() or str(preview.get("title") or "").strip()
-            if not str(title or "").strip() and recognized_title:
+            preview = detected[0] if detected else self._preview_link_media(links)
+            link_title = str(preview.get("title") or "").strip()
+            if link_title:
+                recognized_title = link_title
                 if preview.get("year") and str(preview["year"]) not in recognized_title:
                     recognized_title = f"{recognized_title} ({preview['year']})"
                 if not media_type:
                     media_type = str(preview.get("media_type") or "")
                 if season is None:
                     season = preview.get("season")
+                    if season is None and preview.get("seasons"):
+                        try:
+                            season = next(iter(sorted(preview["seasons"])))
+                        except (TypeError, ValueError, StopIteration):
+                            season = None
+                if not normalized_seasons and preview.get("seasons"):
+                    normalized_seasons = sorted({
+                        int(value) for value in preview["seasons"] if int(value) > 0
+                    })
+                if str(title or "").strip() and str(title or "").strip() != recognized_title:
+                    logger.info(
+                        f"分享内容识别到有效媒体，优先采用链接内容：'{recognized_title}'"
+                        f"（忽略消息附带文本 '{str(title).strip()}'）"
+                    )
             else:
-                recognized_title = recognized_title or self._link_media_title(links)
+                recognized_title = str(title or "").strip() or self._link_media_title(links)
 
             if not recognized_title:
                 return {
