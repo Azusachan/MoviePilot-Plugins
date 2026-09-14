@@ -1,4 +1,4 @@
-"""转存完成后的媒体服务器入库通知与 Emby 媒体信息提取。"""
+"""转存完成后的媒体服务器入库通知与媒体信息提取。"""
 
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -15,24 +15,35 @@ from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 
 
-class EmbyMediaResolver:
-    """读取 Emby 中已入库剧集的实际文件路径，供洗版建立现有版本基线。"""
+class MediaServerResolver:
+    """通过 MoviePilot 平台接口读取各媒体服务器的实际入库内容。"""
+
+    _name_filters: Optional[List[str]] = None
+
+    @classmethod
+    def configure(cls, name_filters: Optional[List[str]]) -> None:
+        cls._name_filters = list(name_filters or []) or None
 
     @staticmethod
-    def _stream_rule_title(path: str, source: Dict[str, Any]) -> str:
-        """把 Emby 媒体流详情转换为 MoviePilot 规则可识别的标题。"""
-        streams = source.get("MediaStreams") or []
+    def _services() -> Dict[str, Any]:
+        return MediaServerHelper().get_services(
+            name_filters=MediaServerResolver._name_filters
+        ) or {}
+
+    @staticmethod
+    def _stream_rule_title(path: str, container: str, streams: list) -> str:
+        """组合媒体项已提供的流信息；无流详情时保留文件名。"""
         video = next((
             value for value in streams
-            if isinstance(value, dict) and value.get("Type") == "Video"
+            if isinstance(value, dict) and str(value.get("Type") or value.get("type") or "").lower() == "video"
         ), {})
         audio = next((
             value for value in streams
-            if isinstance(value, dict) and value.get("Type") == "Audio"
+            if isinstance(value, dict) and str(value.get("Type") or value.get("type") or "").lower() == "audio"
         ), {})
         values = [Path(str(path or "")).stem]
         values.extend((
-            source.get("Container"),
+            container,
             video.get("DisplayTitle") or video.get("Title"),
             video.get("Codec"),
             video.get("VideoRangeType") or video.get("VideoRange"),
@@ -45,50 +56,79 @@ class EmbyMediaResolver:
         ))
 
     @staticmethod
-    def _item_media(service, item_id: str) -> Dict[str, Any]:
-        """直接读取 Emby 项目详情中的路径和真实媒体大小。"""
-        instance = service.instance
-        host = str(getattr(instance, "_host", "") or "").rstrip("/")
-        api_key = str(getattr(instance, "_apikey", "") or "")
-        user = str(getattr(instance, "user", "") or "")
-        if not host or not api_key or not user or not item_id:
+    def _platform_item_media(
+            mediaserver_chain: MediaServerChain,
+            server_name: str,
+            item_id: str,
+    ) -> Dict[str, Any]:
+        item = mediaserver_chain.iteminfo(server=server_name, item_id=item_id)
+
+        def value(*names: str, default: Any = None) -> Any:
+            if isinstance(item, dict):
+                for name in names:
+                    if item.get(name) is not None:
+                        return item.get(name)
+                return default
+            for name in names:
+                result = getattr(item, name, None)
+                if result is not None:
+                    return result
+            return default
+
+        path = str(value("path", "Path", default="") or "").strip() if item else ""
+        if not path:
             return {}
-        response = RequestUtils().get_res(
-            f"{host}/emby/Users/{user}/Items/{item_id}",
-            params={"api_key": api_key},
-        )
-        if not response or response.status_code != 200:
-            return {}
-        data = response.json() or {}
-        media_sources = data.get("MediaSources") or []
-        source = next((value for value in media_sources if isinstance(value, dict)), {})
-        source = {
-            **data,
-            **source,
-            "MediaStreams": (
-                source.get("MediaStreams") or data.get("MediaStreams") or []
-            ),
-        }
         try:
-            size = max(0, int(data.get("Size") or source.get("Size") or 0))
+            size = max(0, int(value("size", "Size", default=0) or 0))
         except (TypeError, ValueError):
             size = 0
-        path = str(data.get("Path") or source.get("Path") or "").strip()
+        if not size and Path(path).suffix.lower() != ".strm":
+            try:
+                size = Path(path).stat().st_size
+            except OSError:
+                pass
+        container = str(value("container", "Container", default="") or "").strip() or Path(path).suffix.lstrip(".")
+        streams = value("media_streams", "MediaStreams", "mediaStreams", default=[]) or []
+        streams = [stream if isinstance(stream, dict) else stream.model_dump()
+                   for stream in streams if isinstance(stream, dict) or hasattr(stream, "model_dump")]
         return {
             "path": path,
             "size": size,
             "item_id": str(item_id),
-            "rule_title": EmbyMediaResolver._stream_rule_title(path, source),
-            "container": str(source.get("Container") or "").strip(),
-            "media_streams": list(source.get("MediaStreams") or []),
+            "rule_title": MediaServerResolver._stream_rule_title(path, container, streams),
+            "container": container,
+            "media_streams": streams,
         }
+
+    @staticmethod
+    def _episode_ids(
+            mediaserver_chain: MediaServerChain,
+            server_name: str,
+            item_id: str,
+            season: int,
+    ) -> Dict[int, str]:
+        episode_ids = mediaserver_chain.get_season_episode_ids(
+            server=server_name, item_id=item_id, season=season
+        )
+        if episode_ids:
+            return {int(episode): str(value) for episode, value in episode_ids.items()}
+        for season_info in mediaserver_chain.episodes(
+                server=server_name, item_id=item_id
+        ) or []:
+            if int(getattr(season_info, "season", -1) or -1) != int(season):
+                continue
+            return {
+                int(episode): ""
+                for episode in (getattr(season_info, "episodes", None) or [])
+            }
+        return {}
 
     @staticmethod
     def episode_media(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Dict[int, Dict[str, Any]]]:
-        """返回 Emby 逐集路径和大小；不读取网盘。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """返回媒体服务器逐集路径和大小；不读取网盘。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return False, {}
 
@@ -103,30 +143,32 @@ class EmbyMediaResolver:
                 checked = True
                 if not exists_media or not exists_media.itemid:
                     continue
-                episode_ids = mediaserver_chain.get_season_episode_ids(
-                    server=server_name, item_id=exists_media.itemid, season=season
+                episode_ids = MediaServerResolver._episode_ids(
+                    mediaserver_chain, server_name, str(exists_media.itemid), season
                 )
                 missing = [
                     (int(episode), str(item_id))
                     for episode, item_id in (episode_ids or {}).items()
-                    if int(episode) not in result
+                    if item_id and int(episode) not in result
                 ]
                 if missing:
                     with ThreadPoolExecutor(
                             max_workers=min(6, len(missing)),
-                            thread_name_prefix="cloudsubscribe-emby-baseline",
+                            thread_name_prefix="cloudsubscribe-media-baseline",
                     ) as executor:
                         media_items = executor.map(
                             lambda value: (
                                 value[0],
-                                EmbyMediaResolver._item_media(service, value[1]),
+                                MediaServerResolver._platform_item_media(
+                                    mediaserver_chain, server_name, value[1]
+                                ),
                             ),
                             missing,
                         )
                         result.update(media_items)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 洗版基线失败：{server_name} - "
+                    f"读取媒体服务器洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year} S{season:02d}，原因：{error}"
                 )
         return checked, {episode: value for episode, value in result.items() if value.get("path")}
@@ -135,21 +177,21 @@ class EmbyMediaResolver:
     def episode_snapshot(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Dict[int, str]]:
-        """返回是否成功检查过可用 Emby，以及实际存在的剧集路径。"""
-        checked, media = EmbyMediaResolver.episode_media(chain, mediainfo, season)
+        """返回是否成功检查过媒体服务器，以及实际存在的剧集路径。"""
+        checked, media = MediaServerResolver.episode_media(chain, mediainfo, season)
         return checked, {
             episode: str(value.get("path") or "") for episode, value in media.items()
         }
 
     @staticmethod
     def episode_paths(chain, mediainfo: MediaInfo, season: int) -> Dict[int, str]:
-        _, paths = EmbyMediaResolver.episode_snapshot(chain, mediainfo, season)
+        _, paths = MediaServerResolver.episode_snapshot(chain, mediainfo, season)
         return paths
 
     @staticmethod
     def movie_paths(chain, mediainfo: MediaInfo) -> list[str]:
-        """读取 Emby 中已入库电影的实际文件路径，供电影洗版建立基线。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """读取媒体服务器中已入库电影的实际文件路径。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return []
 
@@ -165,23 +207,24 @@ class EmbyMediaResolver:
                 if not exists_media or not exists_media.itemid:
                     continue
                 item_path = str(
-                    EmbyMediaResolver._item_media(
-                        service, str(exists_media.itemid)
+                    MediaServerResolver._platform_item_media(
+                        MediaServerChain(), server_name,
+                        str(exists_media.itemid)
                     ).get("path") or ""
                 ).strip()
                 if item_path and item_path not in paths:
                     paths.append(item_path)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 电影洗版基线失败：{server_name} - "
+                    f"读取媒体服务器电影洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year}，原因：{error}"
                 )
         return paths
 
     @staticmethod
     def movie_media(chain, mediainfo: MediaInfo) -> list[Dict[str, Any]]:
-        """读取 Emby 电影路径和大小，作为网盘查询前的首选基线。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """读取媒体服务器电影路径和大小，作为网盘查询前的首选基线。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return []
         result = []
@@ -192,12 +235,15 @@ class EmbyMediaResolver:
                 exists_media = chain.media_exists(mediainfo=mediainfo, server=server_name)
                 if not exists_media or not exists_media.itemid:
                     continue
-                media = EmbyMediaResolver._item_media(service, str(exists_media.itemid))
+                media = MediaServerResolver._platform_item_media(
+                    MediaServerChain(), server_name,
+                    str(exists_media.itemid)
+                )
                 if media.get("path") and media not in result:
                     result.append(media)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 电影洗版基线失败：{server_name} - "
+                    f"读取媒体服务器电影洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year}，原因：{error}"
                 )
         return result
@@ -206,8 +252,8 @@ class EmbyMediaResolver:
     def episode_numbers(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Set[int]]:
-        """只读取 Emby 季集 ID，不逐集请求详情路径。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """通过平台接口读取各媒体服务器季集清单。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return False, set()
 
@@ -225,15 +271,14 @@ class EmbyMediaResolver:
                 checked = True
                 if not exists_media or not exists_media.itemid:
                     continue
-                episode_ids = mediaserver_chain.get_season_episode_ids(
-                    server=server_name,
-                    item_id=exists_media.itemid,
-                    season=season,
+                episode_ids = MediaServerResolver._episode_ids(
+                    mediaserver_chain, server_name,
+                    str(exists_media.itemid), season
                 )
                 episodes.update(int(episode) for episode in (episode_ids or {}))
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 剧集清单失败：{server_name} - "
+                    f"读取媒体服务器剧集清单失败：{server_name} - "
                     f"{mediainfo.title_year} S{season:02d}，原因：{error}"
                 )
         return checked, episodes
@@ -499,8 +544,15 @@ class MediaServerNotifier:
             if self._refresh_service(name, service, items, entries):
                 refreshed += 1
                 if self.emby_mediainfo_enabled and service.type == "emby":
+                    logger.debug(
+                        f"媒体库通知：{name} 已刷新，启动 Emby 神医媒体信息提取"
+                    )
                     for path in mediainfo_paths:
                         self._schedule_emby_mediainfo(name, path, attempt=1)
+                elif self.emby_mediainfo_enabled:
+                    logger.debug(
+                        f"媒体库通知：{name} 已刷新；该媒体库不支持 Emby 神医媒体信息提取"
+                    )
         if submitted:
             logger.info(
                 f"媒体库刷新批次完成：成功 {refreshed}/{submitted}，"

@@ -25,7 +25,7 @@
         </v-btn>
       </v-card-title>
       <v-divider />
-      <div class="page-summary">
+      <div class="page-summary page-summary--compact">
         <div class="summary-heading">
           <div class="d-flex align-center ga-2">
             <v-icon icon="mdi-chart-box-outline" color="primary" size="small" />

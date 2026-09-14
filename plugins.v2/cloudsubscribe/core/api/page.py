@@ -20,10 +20,10 @@ _UI_OPTIONS_CACHE = create_platform_ttl_cache(
     "ui:options", maxsize=16, ttl=2 * 60
 )
 _RESOURCE_RECOMMEND_CACHE = create_platform_ttl_cache(
-    "resource:recommend", maxsize=64, ttl=15 * 60
+    "resource:recommend", maxsize=64, ttl=5 * 60
 )
 _RESOURCE_DETAIL_CACHE = create_platform_ttl_cache(
-    "resource:detail", maxsize=512, ttl=30 * 60
+    "resource:detail", maxsize=512, ttl=5 * 60
 )
 
 
@@ -1199,6 +1199,25 @@ class PageApi(OwnerDelegator):
             except Exception as error:
                 logger.warning(f"详情媒体身份识别失败 [{source}:{source_id}]：{error}")
 
+        # 缓存只保存相对稳定的媒体身份与官方总集数；简介缺失或缓存季集为空时，
+        # 重新走平台识别，避免榜单首次返回不完整数据后长期沿用旧结果。
+        if cached_detail is not None and source and source_id and (
+                not str(detail.get("overview") or "").strip()
+                or not season_counts
+        ):
+            try:
+                recognized = recognize_media(
+                    self.chain,
+                    meta=meta,
+                    mtype=media_type,
+                    media_source=source,
+                    media_id=str(source_id),
+                    cache=True,
+                )
+                season_counts = _recognized_season_counts(recognized)
+            except Exception as error:
+                logger.debug(f"缓存详情补全失败 [{source}:{source_id}]：{error}")
+
         if recognized:
             for field in (
                     "tmdb_id", "imdb_id", "tvdb_id", "douban_id",
@@ -1320,8 +1339,7 @@ class PageApi(OwnerDelegator):
         # 若已识别出 TMDB ID 但缺少简介或展示评分，通过 TMDB 详情接口补全
         current_tmdb_id = detail.get("tmdb_id")
         if (
-                cached_detail is None
-                and current_tmdb_id
+                current_tmdb_id
                 and (
                 not str(detail.get("overview") or "").strip()
                 or detail.get("vote_average") in (None, "", 0, "0")

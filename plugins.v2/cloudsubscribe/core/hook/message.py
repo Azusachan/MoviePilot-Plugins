@@ -1,4 +1,4 @@
-"""Telegram 资源链接的消息路由接管。"""
+"""平台消息中的资源链接路由接管。"""
 
 import inspect
 from functools import wraps
@@ -7,14 +7,13 @@ from typing import Any, Callable, Dict, Optional
 
 from app.chain.message import MessageChain
 from app.log import logger
-from app.schemas.types import MessageChannel
 
 from ..delegation import OwnerDelegator
 from ...search.types import resource_type_from_url
 
 
 class MessageRoutingHook(OwnerDelegator):
-    """在全局智能体路由前接管 Telegram 资源链接。"""
+    """在全局智能体路由前接管支持渠道中的资源链接。"""
 
     _patch_lock = Lock()
     _original: Optional[Callable] = None
@@ -30,8 +29,6 @@ class MessageRoutingHook(OwnerDelegator):
         if not self._enabled or not self._direct_transfer_enabled:
             return None
         channel = arguments.get("channel")
-        if self._channel_value(channel) != MessageChannel.Telegram.value.lower():
-            return None
         text = str(arguments.get("text") or "").strip()
         if not text or text.startswith(("/", "CALLBACK:")):
             return None
@@ -73,7 +70,7 @@ class MessageRoutingHook(OwnerDelegator):
                 name="cloudsubscribe-telegram-links",
             ).start()
         except Exception as error:
-            logger.error(f"Telegram 资源链接处理线程启动失败：{error}")
+            logger.error(f"平台资源链接处理线程启动失败：{error}")
             self._post_command_message(
                 payload,
                 "【网盘订阅】资源处理失败",

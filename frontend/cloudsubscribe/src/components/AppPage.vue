@@ -770,7 +770,7 @@ async function notifyHistory() {
 
 .app-identity h1 {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: 1.15rem;
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0;
@@ -785,7 +785,13 @@ async function notifyHistory() {
 
 .app-actions {
   flex: 0 0 auto;
-  gap: 8px;
+  gap: 6px;
+}
+
+.app-actions :deep(.v-btn) {
+  min-height: 34px;
+  padding-inline: 10px;
+  font-size: 0.8rem;
 }
 
 .overview-band {

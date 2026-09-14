@@ -36,7 +36,7 @@ from .rule_scoring import UpgradeRuleScoringService
 from .subtitles import SubtitleService
 from .television import TelevisionSyncProcessor
 from .upgrade import UpgradeService
-from ..notification import EmbyMediaResolver, MediaServerNotifier
+from ..notification import MediaServerNotifier, MediaServerResolver
 from ..search import SearchHandler
 from ..subscription import SubscribeHandler
 from ...core import (
@@ -429,7 +429,8 @@ class SyncHandler:
         self._notification_batch_lock = threading.RLock()
         self._notification_batch: List[Dict[str, Any]] = []
         self._notification_batch_timer: Optional[threading.Timer] = None
-        self._emby_media_resolver = EmbyMediaResolver()
+        self._media_server_resolver = MediaServerResolver()
+        MediaServerResolver.configure(media_servers)
         self._should_stop = should_stop
         self._offline_pending_changed = offline_pending_changed
         self._history_changed = history_changed
@@ -482,8 +483,8 @@ class SyncHandler:
             "sync:baseline_plugin", self, maxsize=256,
             ttl=self._RUNTIME_CACHE_TTL,
         )
-        self._baseline_emby_cache = create_platform_ttl_cache(
-            "sync:baseline_emby", self, maxsize=256,
+        self._baseline_media_server_cache = create_platform_ttl_cache(
+            "sync:baseline_media_server", self, maxsize=256,
             ttl=self._RUNTIME_CACHE_TTL,
         )
 
@@ -559,10 +560,10 @@ class SyncHandler:
         with self._baseline_cache_lock:
             baseline_transfer = len(self._baseline_transfer_cache)
             baseline_plugin = len(self._baseline_plugin_cache)
-            baseline_emby = len(self._baseline_emby_cache)
+            baseline_media_server = len(self._baseline_media_server_cache)
             self._baseline_transfer_cache.clear()
             self._baseline_plugin_cache.clear()
-            self._baseline_emby_cache.clear()
+            self._baseline_media_server_cache.clear()
         return {
             "media_recognition": media_recognition,
             "resource_season_dirs": resource_season_dirs,
@@ -571,7 +572,7 @@ class SyncHandler:
             "subscribe_calendar": subscribe_calendar,
             "baseline_transfer": baseline_transfer,
             "baseline_plugin": baseline_plugin,
-            "baseline_emby": baseline_emby,
+            "baseline_media_server": baseline_media_server,
         }
 
     def reset_sync_metrics(self) -> None:

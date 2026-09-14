@@ -41,6 +41,11 @@ class PostprocessService(OwnerDelegator):
     def _postprocess_steps(
             self, item: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, str]]:
+        item = item or {}
+        task_type = str(item.get("task_type") or "share").strip().lower()
+        waiting_offline = task_type in {"magnet", "ed2k"} and not bool(
+            item.get("offline_completed") or item.get("moved_at")
+        )
         has_subtitles = bool((item or {}).get("subtitles"))
         strm_enabled = bool(
             self._strm_generate_enabled
@@ -53,7 +58,10 @@ class PostprocessService(OwnerDelegator):
             and (self._nfo_scrape_enabled or self._image_scrape_enabled)
         )
         return [
-            {"key": key, "label": label}
+            {
+                "key": key,
+                "label": "等待离线下载" if key == "locate" and waiting_offline else label,
+            }
             for key, label in self._POSTPROCESS_STEPS
             if not (key == "strm" and not strm_enabled)
                and not (key == "subtitle" and not has_subtitles)

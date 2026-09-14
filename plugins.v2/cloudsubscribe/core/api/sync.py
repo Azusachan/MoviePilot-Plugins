@@ -630,6 +630,10 @@ class SyncApi(OwnerDelegator):
                 return {"success": False, "message": "指定订阅不存在"}
             if subscribe.type not in {MediaType.TV.value, MediaType.MOVIE.value}:
                 return {"success": False, "message": "仅支持电影或电视剧订阅"}
+            # 资源链接提交到已启用洗版的 best_version 订阅时，沿用订阅洗版策略。
+            # 这样 Telegram 等入口不会把已入库媒体误判为普通重复资源。
+            if "manual_upgrade" not in (payload or {}):
+                payload = {**(payload or {}), "manual_upgrade": True}
 
         share_transfer = None
         offline_download = None

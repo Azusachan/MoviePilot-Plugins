@@ -1,6 +1,6 @@
 # 网盘订阅助手
 
-网盘订阅助手是面向 MoviePilot v2 的多网盘订阅、转存和洗版插件。插件接管指定范围内的 MoviePilot
+网盘订阅助手是兼容 MoviePilot v2/v3 的多网盘订阅、转存和洗版插件。插件接管指定范围内的 MoviePilot
 订阅搜索，按当前网盘的能力选择分享转存或离线下载，并复用 MoviePilot 的识别、命名、优先级和媒体服务器配置完成后处理。
 
 ## 能力范围
@@ -169,6 +169,8 @@ NFO 和图片刮削是独立开关，不依赖彼此。
 - “发送消息通知”控制 MoviePilot 消息，并可选择通知类型。
 - “启用入库通知”在 STRM 或目标文件就绪后通知所选媒体服务器，不执行全库扫描。
 - Emby 媒体信息提取使用 MoviePilot 中已配置的 Emby 服务。
+- 订阅缺集检查和洗版基线通过 MoviePilot 媒体服务器接口读取，支持 Emby、Jellyfin、Plex、飞牛影视、 MediaVault、极影视和绿联影视；Emby
+  媒体流详情提取仍仅用于 Emby。
 - 媒体服务器路径映射每行使用 `媒体服务器路径#MoviePilot 路径`。
 - Webhook 支持 GET/POST、独立地址和超时。
 

@@ -8,7 +8,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
-from ..notification import EmbyMediaResolver
+from ..notification import MediaServerResolver
 from ...core import OwnerDelegator
 
 
@@ -139,34 +139,34 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         f"{mediainfo.title_year} S{season:02d} "
                         "TMDB 季网页未返回剧集信息，跳过播出过滤"
                     )
-            # 1. 先读取 Emby 实际剧集，不混入订阅 note。
+            # 1. 先读取媒体服务器实际剧集，不混入订阅 note。
             self._set_task_phase(subscribe, "检查媒体库内容", 30)
-            emby_valid, emby_episodes = self._timed_sync_call(
-                "emby_scan",
-                EmbyMediaResolver.episode_numbers,
+            media_server_valid, media_server_episodes = self._timed_sync_call(
+                "media_server_scan",
+                MediaServerResolver.episode_numbers,
                 self._chain,
                 mediainfo,
                 season,
             )
             existing_episodes_in_resources: Set[int] = (
-                    emby_episodes & expected_episodes
+                    media_server_episodes & expected_episodes
             )
-            if not emby_valid:
+            if not media_server_valid:
                 if transient_target:
-                    emby_episodes = set()
+                    media_server_episodes = set()
                     logger.debug(
-                        f"{mediainfo.title_year} S{season:02d} 未读取到 Emby 数据，"
+                        f"{mediainfo.title_year} S{season:02d} 未读取到媒体服务器数据，"
                         "临时媒体目标继续按网盘实际内容检查"
                     )
                 else:
                     logger.warning(
-                        f"{mediainfo.title_year} S{season:02d} 无法读取 Emby 实际数据，"
+                        f"{mediainfo.title_year} S{season:02d} 无法读取媒体服务器实际数据，"
                         "本轮跳过且不访问115，不修改订阅进度"
                     )
                     return transferred_count
             logger.debug(
-                f"Emby 实际存在剧集："
-                f"{self._format_episode_ranges(emby_episodes & expected_episodes)}"
+                f"媒体服务器实际存在剧集："
+                f"{self._format_episode_ranges(media_server_episodes & expected_episodes)}"
             )
 
             # 2. 再读取115目标目录；不扫描本地 STRM 路径。

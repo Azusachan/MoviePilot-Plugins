@@ -5,13 +5,14 @@ import os
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import unquote, urljoin, urlparse, urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from app.log import logger
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
+from ..cloudflare import is_cloudflare_challenge
 from ..http_client import (
     AccountActionGate,
     RequestGate,
@@ -234,10 +235,9 @@ class Dian115Client:
     @staticmethod
     def _is_challenge_response(response) -> bool:
         content_type = str(response.headers.get("content-type") or "").lower()
-        cf_mitigated = str(
-            response.headers.get("cf-mitigated") or ""
-        ).strip().lower()
-        return cf_mitigated == "challenge" or "text/html" in content_type
+        return is_cloudflare_challenge(
+            response.text or "", response.status_code, response.headers
+        ) or "text/html" in content_type
 
     def _check_cooldown(self) -> None:
         remaining = self._request_gate.cooldown_remaining
@@ -387,27 +387,6 @@ class Dian115Client:
         headers["x-portal-browser-proof"] = proof
         headers.update(self._browser_signature(method, api_path))
         return headers
-
-    def _browser_proxy(self) -> Optional[Dict[str, str]]:
-        proxies = self._proxies or {}
-        proxy = proxies.get("https") or proxies.get("http")
-        if not proxy:
-            return None
-        parsed = urlparse(str(proxy))
-        if not parsed.scheme or not parsed.hostname:
-            return None
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        server = f"{parsed.scheme}://{host}"
-        if parsed.port:
-            server += f":{parsed.port}"
-        result = {"server": server}
-        if parsed.username:
-            result["username"] = unquote(parsed.username)
-        if parsed.password:
-            result["password"] = unquote(parsed.password)
-        return result
 
     def _login(self, allow_browser_login: bool = True) -> None:
         if self._authenticated:

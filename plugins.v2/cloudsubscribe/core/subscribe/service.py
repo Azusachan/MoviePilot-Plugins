@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import inspect
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -75,6 +76,7 @@ class AutoSubscribeService:
             download_chain: Any = None,
             subscribe_chain: Any = None,
             subscribe_oper: Any = None,
+            subscribe_history_oper: Any = None,
     ) -> None:
         self.owner = owner
         self.registry = provider_registry
@@ -82,6 +84,7 @@ class AutoSubscribeService:
         self.download_chain = download_chain or DownloadChain()
         self.subscribe_chain = subscribe_chain or SubscribeChain()
         self.subscribe_oper = subscribe_oper or SubscribeOper()
+        self.subscribe_history_oper = subscribe_history_oper
         self._existing_subscriptions: Optional[list[Any]] = None
 
     def run(self, notify: Optional[bool] = None) -> dict[str, Any]:
@@ -671,7 +674,7 @@ class AutoSubscribeService:
                 identity=identity,
                 mediainfo=item.mediainfo,
             )
-        if skip_history and self._exists_any(self.subscribe_oper.exist_history, group, season):
+        if skip_history and self._history_exists(group, season):
             return SubscribeOutcome(
                 SubscribeStatus.SUBSCRIPTION_EXISTS,
                 item.candidate,
@@ -706,39 +709,50 @@ class AutoSubscribeService:
             )
 
         media_source, media_id = self._preferred_identity(item.mediainfo)
-        sid, message = self.subscribe_chain.add(
-            title=subscribe_title,
-            year=getattr(item.mediainfo, "year", item.candidate.year),
-            mtype=getattr(item.mediainfo, "type", None),
-            tmdbid=tmdb_id_of(item.mediainfo),
-            doubanid=(
-                    getattr(item.mediainfo, "douban_id", None)
-                    or item.candidate.douban_id
-            ),
-            bangumiid=(
-                    getattr(item.mediainfo, "bangumi_id", None)
-                    or item.candidate.bangumi_id
-            ),
-            media_source=media_source,
-            media_id=media_id,
-            season=season,
-            note=library_progress.existing_episodes,
-            total_episode=library_progress.total_episode or None,
-            start_episode=(
+        add_kwargs = {
+            "title": subscribe_title,
+            "year": getattr(item.mediainfo, "year", item.candidate.year),
+            "mtype": getattr(item.mediainfo, "type", None),
+            "media_source": media_source,
+            "media_id": media_id,
+            "season": season,
+            "note": library_progress.existing_episodes,
+            "total_episode": library_progress.total_episode or None,
+            "start_episode": (
                 min(library_progress.missing_episodes)
                 if library_progress.missing_episodes
                 else library_progress.start_episode
             ),
-            lack_episode=(
+            "lack_episode": (
                 len(library_progress.missing_episodes)
                 if library_progress.missing_episodes
                 else None
             ),
-            username=str(
+            "username": str(
                 config.get("auto_subscribe_username") or DEFAULT_AUTO_SUBSCRIBE_USERNAME
             ).strip(),
-            exist_ok=False,
-            message=False,
+            "exist_ok": False,
+            "message": False,
+        }
+        # v2 的 SubscribeChain.add 显式接收旧身份字段；v3 统一身份后禁止写入这些别名。
+        try:
+            add_parameters = inspect.signature(self.subscribe_chain.add).parameters
+        except (TypeError, ValueError):
+            add_parameters = {}
+        if "tmdbid" in add_parameters:
+            add_kwargs["tmdbid"] = tmdb_id_of(item.mediainfo)
+        if "doubanid" in add_parameters:
+            add_kwargs["doubanid"] = (
+                    getattr(item.mediainfo, "douban_id", None)
+                    or item.candidate.douban_id
+            )
+        if "bangumiid" in add_parameters:
+            add_kwargs["bangumiid"] = (
+                    getattr(item.mediainfo, "bangumi_id", None)
+                    or item.candidate.bangumi_id
+            )
+        sid, message = self.subscribe_chain.add(
+            **add_kwargs,
         )
         return SubscribeOutcome(
             SubscribeStatus.SUBSCRIBED if sid else SubscribeStatus.ERROR,
@@ -843,6 +857,32 @@ class AutoSubscribeService:
         """按归并组内全部身份查重，避免来源字段不同导致重复订阅。"""
         identity_kwargs = cls._identity_kwargs_list(group, season)
         return any(cls._exists(func, item) for item in identity_kwargs)
+
+    def _history_exists(
+            self, group: list[_ResolvedMedia], season: Optional[int]
+    ) -> bool:
+        """查询历史订阅，兼容 v2 合并入口与 v3 独立 HistoryOper。"""
+        legacy_method = getattr(self.subscribe_oper, "exist_history", None)
+        if callable(legacy_method):
+            return self._exists_any(legacy_method, group, season)
+
+        history_oper = self.subscribe_history_oper
+        if history_oper is None:
+            try:
+                from app.db.subscribehistory_oper import SubscribeHistoryOper
+            except ImportError:
+                try:
+                    from app.db.oper.subscribehistory import SubscribeHistoryOper
+                except ImportError:
+                    logger.debug("当前 MoviePilot 未提供订阅历史查询接口，跳过历史订阅查重")
+                    return False
+            history_oper = SubscribeHistoryOper()
+            self.subscribe_history_oper = history_oper
+        history_method = getattr(history_oper, "exists", None)
+        if not callable(history_method):
+            logger.debug("当前 MoviePilot 的 SubscribeHistoryOper 无 exists 接口，跳过历史订阅查重")
+            return False
+        return self._exists_any(history_method, group, season)
 
     def _exists_primary(
             self, group: list[_ResolvedMedia], season: Optional[int]

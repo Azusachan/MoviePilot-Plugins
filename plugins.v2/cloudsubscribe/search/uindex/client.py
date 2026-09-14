@@ -2,12 +2,12 @@ import html
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, unquote, urlparse, urlsplit
+from urllib.parse import quote
 
 from app.log import logger
 
+from ..cloudflare import click_challenge_frame, is_cloudflare_challenge, launch_challenge_context
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
@@ -87,9 +87,6 @@ class UIndexClient:
         )
         self._cache = create_platform_ttl_cache("uindex_search", ttl=1800, maxsize=500)
         self._cache_lock = threading.Lock()
-        self._browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="UIndex-Browser")
-        self._browser_context = None
-        self._browser_lock = threading.RLock()
 
     @property
     def proxy(self) -> str:
@@ -121,34 +118,6 @@ class UIndexClient:
             minimum_interval=0.2,
             serial_requests=False,
         )
-        self._close_browser()
-
-    def _browser_proxy(self) -> Optional[Dict[str, str]]:
-        proxies = normalize_proxies(self._proxy) or {}
-        proxy = proxies.get("https") or proxies.get("http")
-        if not proxy:
-            return None
-        parsed = urlparse(str(proxy))
-        if not parsed.scheme or not parsed.hostname:
-            return None
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        server = f"{parsed.scheme}://{host}"
-        if parsed.port:
-            server += f":{parsed.port}"
-        result = {"server": server}
-        if parsed.username:
-            result["username"] = unquote(parsed.username)
-        if parsed.password:
-            result["password"] = unquote(parsed.password)
-        return result
-
-    def _close_browser(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
 
     def _fetch_page_with_browser(self, url: str) -> str:
         """按需在独立纯净线程中通过 CloakBrowser 穿透 Cloudflare 盾并获取搜索页面 HTML。"""
@@ -160,15 +129,7 @@ class UIndexClient:
             except Exception:
                 pass
 
-            from app.core.config import settings
-            from cloakbrowser import launch_context
-
-            context = launch_context(
-                headless=True,
-                proxy=self._browser_proxy(),
-                humanize=getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
-                human_preset="careful",
-            )
+            context = launch_challenge_context(self._proxy)
             try:
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -192,18 +153,7 @@ class UIndexClient:
                             continue
 
                     if not clicked:
-                        for frame in page.frames:
-                            if urlsplit(frame.url).hostname == "challenges.cloudflare.com":
-                                try:
-                                    element = frame.frame_element()
-                                    if element.is_visible():
-                                        box = element.bounding_box()
-                                        if box and box["width"] >= 60 and box["height"] >= 30:
-                                            page.mouse.click(box["x"] + 30, box["y"] + box["height"] / 2)
-                                            clicked = True
-                                            break
-                                except Exception:
-                                    pass
+                        clicked = click_challenge_frame(page)
                     page.wait_for_timeout(500)
 
                 try:
@@ -267,11 +217,8 @@ class UIndexClient:
             page_text = getattr(response, "text", "") or ""
 
             # 智能判断是否受到 Cloudflare Managed Challenge 拦截
-            is_cf_blocked = (
-                    status_code == 403
-                    or "challenges.cloudflare.com" in page_text
-                    or "cf-mitigated" in str(getattr(response, "headers", {}))
-                    or "<title>Just a moment..." in page_text
+            is_cf_blocked = is_cloudflare_challenge(
+                page_text, status_code, getattr(response, "headers", {})
             )
 
             if not is_cf_blocked:

@@ -1,4 +1,4 @@
-export function createBasicSection(cloudDriveItems) {
+export function createBasicSection(cloudDriveItems, options = {}) {
   return {
     value: "basic",
     title: "基础设置",
@@ -94,7 +94,7 @@ export function createBasicSection(cloudDriveItems) {
         ],
       },
       {
-        title: "网盘提供方",
+        title: "提供方设置",
         icon: "mdi-cloud-outline",
         fields: [
           {
@@ -104,6 +104,15 @@ export function createBasicSection(cloudDriveItems) {
             items: cloudDriveItems,
             disabled: () => cloudDriveItems.length <= 1,
             cols: 4,
+          },
+          {
+            key: "media_servers",
+            label: "启用媒体库",
+            type: "select",
+            items: options.mediaservers || [],
+            multiple: true,
+            hint: "仅对选中的媒体库执行入库通知、媒体存在性检查和洗版基线读取。",
+            cols: 8,
           },
         ],
       },

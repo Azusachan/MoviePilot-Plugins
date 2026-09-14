@@ -7,11 +7,11 @@ import threading
 import time
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
+from ..cloudflare import browser_proxy, is_cloudflare_challenge, playwright_snapshot
 from ..http_client import (
-    RequestGate, gated_request, normalize_proxies, normalize_proxy_address,
-    proxy_server, requests,
+    RequestGate, gated_request, normalize_proxies, requests,
 )
 from ..matching import extract_year
 from ..types import resource_type_from_url
@@ -109,7 +109,7 @@ class SeedHubClient:
     ):
         self.base_url = str(base_url or "https://www.seedhub.cc").rstrip("/")
         self._proxies = normalize_proxies(proxy)
-        self._browser_proxy = self._normalize_browser_proxy(proxy)
+        self._browser_proxy = browser_proxy(proxy)
         self._request_timeout = max(5, min(int(request_timeout or 20), 60))
         self._magnet_cache = create_platform_ttl_cache(
             "seedhub:magnets", self.base_url, maxsize=1024, ttl=60 * 60
@@ -129,42 +129,8 @@ class SeedHubClient:
         )
 
     @staticmethod
-    def _normalize_browser_proxy(proxy: Any) -> Optional[Dict[str, str]]:
-        if isinstance(proxy, dict):
-            proxy = (
-                    proxy.get("https") or proxy.get("http") or proxy.get("server")
-            )
-        value = normalize_proxy_address(proxy)
-        if not value:
-            return None
-        parsed = urlparse(value)
-        if not parsed.scheme or not parsed.hostname:
-            return None
-        result = {"server": proxy_server(value)}
-        if parsed.username:
-            result["username"] = unquote(parsed.username)
-        if parsed.password:
-            result["password"] = unquote(parsed.password)
-        return result
-
-    @staticmethod
     def _clean_text(value: object) -> str:
         return html.unescape(re.sub(r"<[^>]+>", "", str(value or ""))).strip()
-
-    @staticmethod
-    def _is_cloudflare_challenge(
-            text: str, status_code: int = 200, server: str = ""
-    ) -> bool:
-        lowered = str(text or "").lower()
-        markers = (
-            "cf-chl-",
-            "cdn-cgi/challenge-platform",
-            "enable javascript and cookies",
-            "<title>just a moment",
-        )
-        return any(marker in lowered for marker in markers) or (
-            status_code in {403, 503} and str(server or "").lower() == "cloudflare"
-        )
 
     def _request_headers(self) -> Dict[str, str]:
         with self._browser_lock:
@@ -177,10 +143,8 @@ class SeedHubClient:
 
     @classmethod
     def _is_challenge_response(cls, response) -> bool:
-        return cls._is_cloudflare_challenge(
-            response.text or "",
-            response.status_code,
-            response.headers.get("Server", ""),
+        return is_cloudflare_challenge(
+            response.text or "", response.status_code, response.headers
         )
 
     def _request_once(self, url: str):
@@ -203,36 +167,22 @@ class SeedHubClient:
                     text = response.text or ""
                     if (
                             response.ok
-                            and not self._is_cloudflare_challenge(
-                                text,
-                                response.status_code,
-                                response.headers.get("Server", ""),
+                            and not is_cloudflare_challenge(
+                        text, response.status_code, response.headers
                             )
                     ):
                         return text
                 except requests.exceptions.RequestException:
                     pass
 
-            from app.helper.browser import PlaywrightHelper
-
-            def snapshot(page) -> Dict[str, Any]:
-                return {
-                    "text": page.content() or "",
-                    "cookies": page.context.cookies(),
-                    "user_agent": page.evaluate("navigator.userAgent") or "",
-                }
-
-            result = self._request_gate.run(lambda: PlaywrightHelper().action(
-                url=url,
-                callback=snapshot,
-                proxies=self._browser_proxy,
-                headless=True,
-                timeout=max(30, self._request_timeout),
-            ))
+            result = playwright_snapshot(
+                url, self._browser_proxy, max(30, self._request_timeout),
+                self._request_gate,
+            )
             if not isinstance(result, dict):
                 return ""
             text = str(result.get("text") or "")
-            if not text or self._is_cloudflare_challenge(text):
+            if not text or is_cloudflare_challenge(text):
                 self._request_gate.activate_cooldown(
                     60, reason="SeedHub 浏览器验证"
                 )
@@ -263,10 +213,8 @@ class SeedHubClient:
                     browser_state_version = self._browser_state_version
                 response = self._request_once(url)
                 text = response.text or ""
-                if self._is_cloudflare_challenge(
-                        text,
-                        response.status_code,
-                        response.headers.get("Server", ""),
+                if is_cloudflare_challenge(
+                        text, response.status_code, response.headers
                 ):
                     browser_text = self._get_browser_text(
                         url, browser_state_version

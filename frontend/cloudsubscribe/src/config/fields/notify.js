@@ -34,15 +34,6 @@ export function createNotifySection(options) {
             show: enabled("media_server_refresh_enabled"),
           },
           {
-            key: "media_servers",
-            label: "通知媒体服务器",
-            type: "select",
-            items: options.mediaservers,
-            multiple: true,
-            cols: 8,
-            show: enabled("media_server_refresh_enabled"),
-          },
-          {
             key: "media_server_path_mappings",
             label: "媒体服务器路径映射",
             type: "textarea",
