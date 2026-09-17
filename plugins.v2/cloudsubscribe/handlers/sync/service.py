@@ -1263,6 +1263,17 @@ class SyncHandler:
             self._offline_download and self._offline_download.is_ed2k_url(url)
         )
 
+    @staticmethod
+    def _extract_ed2k_filename(url: str) -> str:
+        """从 ED2K 链接提取真实文件名。"""
+        if not url or not str(url).strip().lower().startswith("ed2k://|file|"):
+            return ""
+        parts = str(url).strip().split("|")
+        if len(parts) > 2 and parts[2]:
+            from urllib.parse import unquote
+            return unquote(parts[2]).strip()
+        return ""
+
     def _is_magnet_url(self, url: str) -> bool:
         return bool(
             self._offline_download and self._offline_download.is_magnet_url(url)
@@ -2107,7 +2118,7 @@ class SyncHandler:
                 return ""
             target_episodes[:] = sorted(confirmed_targets)
         subscribe_id = int(getattr(subscribe, "id", 0) or 0)
-        prefix = "magnet" if self._is_magnet_url(share_url) else "offline"
+        prefix = "magnet" if self._is_magnet_url(share_url) else "ed2k"
         pending_key = f"{prefix}:{info_hash}:{subscribe_id}"
         staging_dir = f"{self._cloud_transfer_path.rstrip('/')}"
 
@@ -2166,6 +2177,37 @@ class SyncHandler:
 
         # 成功转为正式任务记录并持久化
         now = time.time()
+        ed2k_file_name = self._extract_ed2k_filename(share_url)
+        if not ed2k_file_name and isinstance(resource.get("file_list"), list) and resource["file_list"]:
+            ed2k_file_name = str(resource["file_list"][0]).strip()
+        display_name = str(
+            ed2k_file_name
+            or (resource.get("magnet_metadata") or {}).get("display_name")
+            or resource.get("title") or info_hash
+        )
+        target_dir = ""
+        target_name = ""
+        if prefix != "magnet" and mediainfo:
+            try:
+                if mediainfo.type == MediaType.TV:
+                    target_ep = target_episodes[0] if target_episodes and len(target_episodes) == 1 else None
+                    if target_ep is not None and season is not None:
+                        target_dir, target_name = self._platform_target(
+                            self._CLOUD_MEDIA_ROOT, subscribe, mediainfo,
+                            display_name, int(season), int(target_ep)
+                        )
+                else:
+                    target_dir, target_name = self._platform_target(
+                        self._CLOUD_MEDIA_ROOT, subscribe, mediainfo,
+                        display_name
+                    )
+            except Exception as target_err:
+                logger.debug(f"计算离线任务目标路径失败，将保留原始目录：{target_err}")
+        if target_name:
+            source_suffix = Path(display_name).suffix
+            if source_suffix and not target_name.endswith(source_suffix):
+                target_name = f"{Path(target_name).stem}{source_suffix}"
+
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             pending[pending_key] = {
@@ -2173,11 +2215,11 @@ class SyncHandler:
                 "task_type": prefix,
                 "task_id": info_hash,
                 "share_url": share_url,
-                "cloud_dir": staging_dir,
-                "file_name": str(
-                    (resource.get("magnet_metadata") or {}).get("display_name")
-                    or resource.get("title") or info_hash
-                ),
+                "staging_dir": staging_dir,
+                "cloud_dir": target_dir or staging_dir,
+                "file_name": target_name or display_name,
+                "staging_name": display_name,
+                "episode": target_episodes[0] if target_episodes and len(target_episodes) == 1 else None,
                 "created_at": now,
                 "next_check_at": now + self._OFFLINE_CHECK_DELAYS[0],
                 "check_index": 0,
@@ -2186,6 +2228,9 @@ class SyncHandler:
                 "subscribe_id": subscribe_id,
                 "season": season,
                 "target_episodes": sorted({
+                    int(value) for value in (target_episodes or []) if int(value) > 0
+                }),
+                "notification_episodes": sorted({
                     int(value) for value in (target_episodes or []) if int(value) > 0
                 }),
                 "resource": dict(resource),
@@ -2214,7 +2259,7 @@ class SyncHandler:
             pending_count = len(pending)
         self._notify_offline_pending_changed(pending_count)
         logger.info(
-            f"离线任务已提交：{pending[pending_key]['file_name']}"
+            f"离线任务已提交：{pending[pending_key].get('staging_name') or pending[pending_key]['file_name']}"
         )
         return pending_key
 
@@ -3601,15 +3646,19 @@ class SyncHandler:
                     title = detail.get("title", "未知")
                     season = max(1, int(detail.get("season") or 1))
                     episodes = sorted(detail.get("episodes") or [])
-                    file_count += len(episodes)
-                    if len(episodes) <= 5:
-                        ep_str = ", ".join(f"E{episode:02d}" for episode in episodes)
+                    if episodes:
+                        file_count += len(episodes)
+                        if len(episodes) <= 5:
+                            ep_str = ", ".join(f"E{episode:02d}" for episode in episodes)
+                        else:
+                            ep_str = (
+                                f"E{episodes[0]:02d}-E{episodes[-1]:02d} "
+                                f"共{len(episodes)}集"
+                            )
+                        text_lines.append(f"{title} S{season:02d} {ep_str}".strip())
                     else:
-                        ep_str = (
-                            f"E{episodes[0]:02d}-E{episodes[-1]:02d} "
-                            f"共{len(episodes)}集"
-                        )
-                    text_lines.append(f"{title} S{season:02d} {ep_str}")
+                        file_count += 1
+                        text_lines.append(f"{title} S{season:02d}".strip())
                 if not first_image and detail.get("image"):
                     first_image = detail.get("image")
             if len(text_lines) > 10:

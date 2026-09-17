@@ -41,6 +41,17 @@ class PostprocessService(OwnerDelegator):
     )
 
     @staticmethod
+    def _extract_ed2k_filename(url: str) -> str:
+        """从 ED2K 链接提取真实文件名。"""
+        if not url or not str(url).strip().lower().startswith("ed2k://|file|"):
+            return ""
+        parts = str(url).strip().split("|")
+        if len(parts) > 2 and parts[2]:
+            from urllib.parse import unquote
+            return unquote(parts[2]).strip()
+        return ""
+
+    @staticmethod
     def _postprocess_task_id(item: Dict[str, Any]) -> str:
         subscribe_id = int(item.get("subscribe_id") or 0)
         if subscribe_id > 0:
@@ -53,7 +64,7 @@ class PostprocessService(OwnerDelegator):
     ) -> List[Dict[str, str]]:
         item = item or {}
         task_type = str(item.get("task_type") or "share").strip().lower()
-        waiting_offline = task_type in {"magnet", "ed2k"} and not bool(
+        waiting_offline = task_type in {"magnet", "ed2k", "offline"} and not bool(
             item.get("offline_completed") or item.get("moved_at")
         )
         has_subtitles = bool((item or {}).get("subtitles"))
@@ -519,6 +530,7 @@ class PostprocessService(OwnerDelegator):
             episode_values = (
                     item.get("success_episodes")
                     or item.get("notification_episodes")
+                    or item.get("target_episodes")
                     or ([item.get("episode")] if item.get("episode") else [])
             )
             episodes = set()
@@ -549,7 +561,7 @@ class PostprocessService(OwnerDelegator):
 
             needs_offline = any(
                 str((pending.get(key) or {}).get("task_type") or "share")
-                in {"ed2k", "magnet"}
+                in {"ed2k", "magnet", "offline"}
                 for key in due_keys
             )
             tasks = offline_tasks
@@ -698,7 +710,7 @@ class PostprocessService(OwnerDelegator):
                     )
                     if (
                             task_type == "magnet"
-                            or (task_type == "ed2k" and not bool(
+                            or (task_type in {"ed2k", "offline"} and not bool(
                         task and task.get("completed")
                     ))
                             or not item.get("upgrade")
@@ -766,7 +778,7 @@ class PostprocessService(OwnerDelegator):
                     task = task_map.get(
                         str(item.get("task_id") or pending_key).upper()
                     )
-                    if task_type == "ed2k":
+                    if task_type in {"ed2k", "offline"}:
                         share_url = str(item.get("share_url") or "").strip()
                         if share_url and not share_url.lower().startswith("ed2k://"):
                             item["task_type"] = "share"
@@ -958,7 +970,7 @@ class PostprocessService(OwnerDelegator):
                                                     "Magnet 下载完成但未匹配到目标媒体文件")
                         failed += 1
                     continue
-                if task_type == "ed2k":
+                if task_type in {"ed2k", "offline"}:
                     share_url = str(item.get("share_url") or "").strip()
                     if share_url and not share_url.lower().startswith("ed2k://"):
                         item["task_type"] = "share"
@@ -1037,6 +1049,37 @@ class PostprocessService(OwnerDelegator):
                     file_name if already_moved
                     else str(item.get("staging_name") or file_name)
                 )
+                if not already_moved and task_type in {"ed2k", "offline"} and getattr(self, "_organize_after_transfer",
+                                                                                      True):
+                    current_final = str(item.get("cloud_dir") or "").rstrip("/") or "/"
+                    if current_final == staging_dir:
+                        try:
+                            calc_media, _ = self._restore_pending_media_context(item, pending_key)
+                            sub_id = int(item.get("subscribe_id") or 0)
+                            calc_sub = subscribe_cache.get(sub_id) if sub_id in subscribe_cache else None
+                            if not calc_sub and sub_id:
+                                with SessionFactory() as db:
+                                    calc_sub = SubscribeOper(db=db).get(sub_id)
+                            if calc_media:
+                                season_val = max(1, int(item.get(
+                                    "season") or 1)) if calc_media.type == MediaType.TV else None
+                                ep_list = [int(v) for v in (item.get("target_episodes") or []) if int(v) > 0]
+                                ep_val = ep_list[0] if ep_list else (
+                                    int(item.get("episode")) if item.get("episode") else None)
+                                dyn_dir, dyn_name = self._platform_target(
+                                    self._CLOUD_MEDIA_ROOT, calc_sub, calc_media,
+                                    staging_name, season=season_val, episode=ep_val
+                                )
+                                if dyn_dir:
+                                    item["cloud_dir"] = dyn_dir
+                                    source_suffix = Path(staging_name).suffix
+                                    if source_suffix and not dyn_name.endswith(source_suffix):
+                                        dyn_name = f"{Path(dyn_name).stem}{source_suffix}"
+                                    item["file_name"] = dyn_name
+                                    file_name = dyn_name
+                        except Exception as dyn_err:
+                            logger.debug(f"动态计算离线文件目标媒体路径异常：{dyn_err}")
+
                 update_progress(
                     item,
                     pending_key,
@@ -1055,14 +1098,26 @@ class PostprocessService(OwnerDelegator):
                         continue
                 task_name = (
                     str((task or {}).get("name") or "").strip()
-                    if task_type == "ed2k"
+                    if task_type in {"ed2k", "offline"}
                     else ""
                 )
+                ed2k_url_name = self._extract_ed2k_filename(str(item.get("share_url") or ""))
+                res_file_list = (item.get("resource") or {}).get("file_list")
+                res_file_name = str(res_file_list[0]).strip() if isinstance(res_file_list,
+                                                                            list) and res_file_list else ""
                 target_file = (
                         target_file
                         or file_index.get(staging_name)
                         or file_index.get(task_name)
+                        or (file_index.get(ed2k_url_name) if ed2k_url_name else None)
+                        or (file_index.get(res_file_name) if res_file_name else None)
                 )
+                if not target_file:
+                    for fname, fobj in file_index.items():
+                        if (staging_name and staging_name.endswith(fname)) or (
+                                ed2k_url_name and fname == ed2k_url_name):
+                            target_file = fobj
+                            break
                 source_sha1 = str(item.get("source_sha1") or "").upper()
                 if not target_file and source_sha1:
                     target_file = next(
@@ -1820,7 +1875,7 @@ class PostprocessService(OwnerDelegator):
         )
         item["check_index"] = check_index
         retry_at = now + self._OFFLINE_CHECK_DELAYS[check_index]
-        if str(item.get("task_type") or "share") in {"ed2k", "magnet"}:
+        if str(item.get("task_type") or "share") in {"ed2k", "magnet", "offline"}:
             created_at = float(item.get("created_at") or now)
             retry_at = min(retry_at, created_at + self._OFFLINE_TIMEOUT)
         item["next_check_at"] = retry_at

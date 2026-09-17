@@ -501,8 +501,11 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 if ep not in target_ep_set
                             ]
                             missing_episode_set = set(missing_episodes)
+                            file_list_name = str((resource.get("file_list") or [""])[0]).strip() if isinstance(
+                                resource.get("file_list"), list) and resource.get("file_list") else ""
                             provider_name = str(
-                                (resource.get("magnet_metadata") or {}).get("display_name")
+                                file_list_name
+                                or (resource.get("magnet_metadata") or {}).get("display_name")
                                 or resource_title
                             ).strip()
                             self._append_magnet_pending_history(

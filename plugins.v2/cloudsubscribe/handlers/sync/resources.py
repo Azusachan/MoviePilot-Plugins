@@ -335,6 +335,23 @@ class ResourceTransferService(OwnerDelegator):
                 "season": entry_season,
                 "episode": episode,
             })
+        if not entries:
+            file_list = resource.get("file_list") or []
+            file_name = ""
+            if isinstance(file_list, list) and file_list:
+                file_name = str(file_list[0]).strip()
+            if not file_name:
+                file_name = str(
+                    (resource.get("magnet_metadata") or {}).get("display_name") or resource.get("title") or "").strip()
+            if file_name and MediaFileParser.is_video(file_name):
+                eps = [int(v) for v in (target_episodes or []) if int(v) > 0]
+                ep = eps[0] if len(eps) == 1 else 0
+                entries.append({
+                    "file_name": file_name,
+                    "file_size": max(0, int(resource.get("size") or 0)),
+                    "season": int(season or 0),
+                    "episode": ep,
+                })
         return entries
 
     def _append_magnet_pending_history(

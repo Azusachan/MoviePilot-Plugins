@@ -811,10 +811,16 @@ class MediaServerNotifier:
                 item_ids.append(item_id)
 
         if not item_ids:
-            logger.warning(
-                f"Emby 未解析到可刷新的媒体项目，"
-                f"跳过 {unresolved_count} 个目录且不执行全库刷新"
+            logger.info(
+                f"Emby 未解析到可刷新的特定媒体项目，降级调用原生媒体库刷新"
             )
+            items = [entry["item"] for entry in entries if "item" in entry]
+            if items and hasattr(service.instance, "refresh_library_by_items"):
+                try:
+                    fallback_result = service.instance.refresh_library_by_items(items)
+                    return bool(fallback_result) or fallback_result is None
+                except Exception as fb_err:
+                    logger.warning(f"Emby 降级媒体库刷新异常：{fb_err}")
             return False
 
         succeeded = sum(
