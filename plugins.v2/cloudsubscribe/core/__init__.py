@@ -13,9 +13,11 @@ from .cloud import (
 from .delegation import OwnerDelegator, get_component, resolve_component
 from .scraper import MediaScraper
 from .search import (
+    SEARCH_CIRCUIT_BREAKER,
     SearchCandidate,
     SearchCapability,
     SearchCapabilityError,
+    SearchCircuitBreaker,
     SearchPolicy,
     SearchProvider,
     SearchQuery,
@@ -40,6 +42,8 @@ __all__ = [
     "SearchCandidate",
     "SearchCapability",
     "SearchCapabilityError",
+    "SearchCircuitBreaker",
+    "SEARCH_CIRCUIT_BREAKER",
     "SearchPolicy",
     "SearchProvider",
     "SearchQuery",

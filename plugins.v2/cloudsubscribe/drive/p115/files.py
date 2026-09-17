@@ -515,15 +515,6 @@ class P115FileService(OwnerDelegator):
                 item.get("name") or item.get("n")
                 or item.get("file_name") or ""
             ).strip()
-            if (
-                    current_name
-                    and Path(current_name).suffix.lower() != Path(target_name).suffix.lower()
-            ):
-                logger.warning(
-                    f"拒绝重命名扩展名不一致的转存文件：{current_name} -> {target_name}"
-                )
-                unresolved.append(key)
-                continue
             target_file_id = item.get("fid") or item.get("id")
             if not target_file_id:
                 unresolved.append(key)
@@ -569,11 +560,6 @@ class P115FileService(OwnerDelegator):
         current_name = str(current_name or "").strip()
         target_name = str(target_name or "").strip()
         if not current_name or not target_name:
-            return False
-        if Path(current_name).suffix.lower() != Path(target_name).suffix.lower():
-            logger.warning(
-                f"拒绝重命名扩展名不一致的文件：{current_name} -> {target_name}"
-            )
             return False
         if current_name == target_name:
             return bool(
@@ -659,12 +645,6 @@ class P115FileService(OwnerDelegator):
             ).strip()
             file_id = item.get("fid") or item.get("id")
             if not file_id or not current_name or not target_name:
-                continue
-            if Path(current_name).suffix.lower() != Path(target_name).suffix.lower():
-                logger.warning(
-                    f"拒绝批量重命名扩展名不一致的文件："
-                    f"{current_name} -> {target_name}"
-                )
                 continue
             if current_name == target_name:
                 self._cache_target_file(save_path, target_name, item)

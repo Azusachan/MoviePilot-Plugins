@@ -758,7 +758,7 @@ class PostprocessService(OwnerDelegator):
                         item.get("upgrade_mode") or self._upgrade_mode
                     ) != "coexist"
                     if (
-                            task_type == "magnet"
+                            task_type in {"magnet", "ed2k", "offline"}
                             or item.get("moved_at")
                             or (is_replacement and not item.get("upgrade_old_backed_up"))
                     ):
@@ -766,10 +766,18 @@ class PostprocessService(OwnerDelegator):
                     task = task_map.get(
                         str(item.get("task_id") or pending_key).upper()
                     )
-                    if task_type == "ed2k" and not bool(
-                            task and task.get("completed")
-                    ):
-                        continue
+                    if task_type == "ed2k":
+                        share_url = str(item.get("share_url") or "").strip()
+                        if share_url and not share_url.lower().startswith("ed2k://"):
+                            item["task_type"] = "share"
+                            task_type = "share"
+                        elif not bool(task and task.get("completed")):
+                            staging_dir_chk = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
+                            chk_valid, chk_index = directory_snapshot(staging_dir_chk)
+                            chk_sname = str(item.get("staging_name") or item.get("file_name") or "")
+                            chk_fname = str(item.get("file_name") or "")
+                            if not (chk_valid and (chk_index.get(chk_sname) or chk_index.get(chk_fname))):
+                                continue
                     staging_dir = str(
                         item.get("staging_dir") or item.get("cloud_dir") or "/"
                     ).rstrip("/") or "/"
@@ -951,56 +959,74 @@ class PostprocessService(OwnerDelegator):
                         failed += 1
                     continue
                 if task_type == "ed2k":
-                    task = task_map.get(str(item.get("task_id") or pending_key).upper())
-                    task_done = bool(
-                        item.get("moved_at") or (task and task.get("completed"))
-                    )
-                    if task and bool(task.get("failed")):
-                        reason = "离线下载失败"
-                        logger.error(f"{reason}：{file_name}")
-                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                        self._mark_offline_history_status(pending_key, "失败", reason)
-                        pending.pop(pending_key, None)
-                        failed += 1
-                        continue
-                    if task is not None and not task_done:
-                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-                        if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                            logger.error(f"{reason}：{file_name}")
-                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                            self._mark_offline_history_status(pending_key, "失败", reason)
-                            pending.pop(pending_key, None)
-                            failed += 1
-                            continue
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                    if not task_done and task is None and tasks_valid:
-                        staging_dir = str(
-                            item.get("staging_dir") or item.get("cloud_dir") or "/"
+                    share_url = str(item.get("share_url") or "").strip()
+                    if share_url and not share_url.lower().startswith("ed2k://"):
+                        item["task_type"] = "share"
+                        task_type = "share"
+                    else:
+                        task = task_map.get(str(item.get("task_id") or pending_key).upper())
+                        task_done = bool(
+                            item.get("moved_at") or (task and task.get("completed"))
                         )
-                        directory_valid, file_index = directory_snapshot(staging_dir)
-                        if directory_valid and not file_index:
-                            reason = "离线任务及目标文件均不存在"
-                            logger.warning(f"{reason}：{file_name}")
-                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                            self._mark_offline_history_status(pending_key, "失败", reason)
-                            pending.pop(pending_key, None)
-                            failed += 1
-                            continue
-                    if not task_done:
-                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-                        if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                        if task and bool(task.get("failed")):
+                            reason = "离线下载失败"
                             logger.error(f"{reason}：{file_name}")
                             self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
                             pending.pop(pending_key, None)
                             failed += 1
                             continue
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                    item.setdefault("download_completed_at", now)
+                        if not task_done:
+                            staging_dir_chk = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
+                            final_dir_chk = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
+                            s_valid, s_index = directory_snapshot(staging_dir_chk)
+                            f_valid, f_index = directory_snapshot(final_dir_chk) if final_dir_chk != staging_dir_chk else (False, {})
+                            source_sha1 = str(item.get("source_sha1") or "").upper()
+                            staging_name_chk = str(item.get("staging_name") or file_name)
+                            if (
+                                (s_valid and (s_index.get(staging_name_chk) or s_index.get(file_name) or (source_sha1 and any(str(getattr(f, "sha1", "")).upper() == source_sha1 for f in s_index.values()))))
+                                or (f_valid and (f_index.get(file_name) or (source_sha1 and any(str(getattr(f, "sha1", "")).upper() == source_sha1 for f in f_index.values()))))
+                            ):
+                                task_done = True
+                                logger.info(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
+                        if not task_done and task is not None:
+                            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
+                            if now - created_at >= self._OFFLINE_TIMEOUT:
+                                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                                logger.error(f"{reason}：{file_name}")
+                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                                self._mark_offline_history_status(pending_key, "失败", reason)
+                                pending.pop(pending_key, None)
+                                failed += 1
+                                continue
+                            self._schedule_finalize_retry(item, now)
+                            continue
+                        if not task_done and task is None and tasks_valid:
+                            staging_dir = str(
+                                item.get("staging_dir") or item.get("cloud_dir") or "/"
+                            )
+                            directory_valid, file_index = directory_snapshot(staging_dir)
+                            if directory_valid and not file_index:
+                                reason = "离线任务及目标文件均不存在"
+                                logger.warning(f"{reason}：{file_name}")
+                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                                self._mark_offline_history_status(pending_key, "失败", reason)
+                                pending.pop(pending_key, None)
+                                failed += 1
+                                continue
+                        if not task_done:
+                            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
+                            if now - created_at >= self._OFFLINE_TIMEOUT:
+                                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                                logger.error(f"{reason}：{file_name}")
+                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                                self._mark_offline_history_status(pending_key, "失败", reason)
+                                pending.pop(pending_key, None)
+                                failed += 1
+                                continue
+                            self._schedule_finalize_retry(item, now)
+                            continue
+                        item.setdefault("download_completed_at", now)
 
                 already_moved = bool(item.get("moved_at"))
                 staging_dir = str(

@@ -109,10 +109,10 @@ export function createMikanGroups() {
         },
         {
           key: "mikan_timeout",
-          label: "请求超时",
+          label: "搜索超时",
           type: "number",
           min: 5,
-          max: 60,
+          max: 120,
           suffix: "秒",
           cols: 4,
         },

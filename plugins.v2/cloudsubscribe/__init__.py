@@ -115,7 +115,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.4.2"
+    plugin_version = "1.4.4"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -194,22 +194,22 @@ class CloudSubscribe(_PluginBase):
     _pansou_concurrency: Optional[int] = None
     _pansou_result_limit: int = 10
     _pansou_refresh: bool = True
-    _pansou_timeout: int = 30
+    _pansou_timeout: int = 60
     _seedhub_base_url: str = "https://www.seedhub.cc"
     _seedhub_result_limit: int = 20
     _seedhub_request_interval: float = 1.0
-    _seedhub_timeout: int = 20
+    _seedhub_timeout: int = 60
     _piratebay_base_url: str = "https://apibay.org"
     _piratebay_result_limit: int = 20
     _piratebay_request_interval: float = 1.0
-    _piratebay_timeout: int = 20
+    _piratebay_timeout: int = 60
     _uindex_base_url: str = "https://uindex.org"
     _uindex_result_limit: int = 20
-    _uindex_timeout: int = 20
+    _uindex_timeout: int = 60
     _mikan_base_url: str = "https://mikanani.me"
     _mikan_result_limit: int = 10
     _mikan_request_interval: float = 2.0
-    _mikan_timeout: int = 30
+    _mikan_timeout: int = 60
     _mikan_fansub_order: List[Any] = []
     _mikan_exclude_re: str = ""
     _mikan_no_subs_re: str = ""
@@ -217,7 +217,7 @@ class CloudSubscribe(_PluginBase):
     _animegarden_base_url: str = "https://animes.garden/"
     _animegarden_result_limit: int = 10
     _animegarden_request_interval: float = 1.0
-    _animegarden_timeout: int = 30
+    _animegarden_timeout: int = 60
     _animegarden_fansub_order: List[Any] = []
     _animegarden_exclude_re: str = ""
     _animegarden_no_subs_re: str = ""
@@ -227,11 +227,12 @@ class CloudSubscribe(_PluginBase):
     _juying_checkin_enabled: bool = False
     _juying_result_limit: int = 5
     _juying_request_interval: float = 1.0
+    _juying_timeout: int = 60
     _pinglian_username: str = ""
     _pinglian_password: str = ""
     _pinglian_result_limit: int = 20
     _pinglian_request_interval: float = 1.0
-    _pinglian_timeout: int = 30
+    _pinglian_timeout: int = 60
     _online_docs: List[Dict[str, Any]] = []
 
     # 订阅过滤模式："exclude" 排除模式（处理除勾选外的全部订阅）/ "include" 指定模式（仅处理勾选的订阅）
@@ -247,6 +248,10 @@ class CloudSubscribe(_PluginBase):
     _search_cache_enabled: bool = True
     _search_cache_ttl_minutes: int = 30
     _search_concurrency: int = 2
+    _search_source_timeout: int = 60
+    _search_circuit_breaker_enabled: bool = True
+    _search_circuit_breaker_threshold: int = 3
+    _search_circuit_breaker_cooldown: int = 60
     _checkin_cron: str = "0 8 * * *"
     _checkin_auto_retry: bool = True
     _checkin_retry_count: int = 2
@@ -263,6 +268,7 @@ class CloudSubscribe(_PluginBase):
     _dian115_candidate_limit: int = 4
     _dian115_request_interval: float = 1.0
     _dian115_unlocks_per_minute: int = 6
+    _dian115_timeout: int = 60
 
     _hdhive_base_url: str = "https://re0.me"
     _hdhive_username: str = ""
@@ -284,6 +290,7 @@ class CloudSubscribe(_PluginBase):
     _hdhive_candidate_limit: int = 4
     _hdhive_request_interval: float = 5.0
     _hdhive_unlocks_per_minute: int = 2
+    _hdhive_timeout: int = 60
     _hdhive_torrentclaw_enabled: bool = False
     _hdhive_torrentclaw_subtitle_languages: List[str] = ["zh"]
     _hdhive_client: Optional[Any] = None
@@ -865,7 +872,7 @@ class CloudSubscribe(_PluginBase):
             )
             self._pansou_refresh = bool(config.get("pansou_refresh", True))
             self._pansou_timeout = max(
-                5, min(int(config.get("pansou_timeout", 30) or 30), 120)
+                5, min(int(config.get("pansou_timeout", 60) or 60), 120)
             )
             self._seedhub_base_url = str(
                 config.get("seedhub_base_url", "https://www.seedhub.cc") or "https://www.seedhub.cc").strip()
@@ -876,7 +883,7 @@ class CloudSubscribe(_PluginBase):
                 1.0, min(float(config.get("seedhub_request_interval", 1) or 1), 10.0)
             )
             self._seedhub_timeout = max(
-                5, min(int(config.get("seedhub_timeout", 20) or 20), 60)
+                5, min(int(config.get("seedhub_timeout", 60) or 60), 120)
             )
             self._piratebay_base_url = str(
                 config.get("piratebay_base_url", "https://apibay.org") or "https://apibay.org").strip()
@@ -887,7 +894,7 @@ class CloudSubscribe(_PluginBase):
                 0.2, min(float(config.get("piratebay_request_interval", 1) or 1), 10.0)
             )
             self._piratebay_timeout = max(
-                5, min(int(config.get("piratebay_timeout", 20) or 20), 60)
+                5, min(int(config.get("piratebay_timeout", 60) or 60), 120)
             )
             self._uindex_base_url = str(
                 config.get("uindex_base_url", "https://uindex.org") or "https://uindex.org").strip()
@@ -898,7 +905,7 @@ class CloudSubscribe(_PluginBase):
                 0.2, min(float(config.get("uindex_request_interval", 1) or 1), 10.0)
             )
             self._uindex_timeout = max(
-                5, min(int(config.get("uindex_timeout", 20) or 20), 60)
+                5, min(int(config.get("uindex_timeout", 60) or 60), 120)
             )
             self._mikan_base_url = str(
                 config.get("mikan_base_url", "https://mikanani.me") or "https://mikanani.me"
@@ -910,7 +917,7 @@ class CloudSubscribe(_PluginBase):
                 0.5, min(float(config.get("mikan_request_interval", 2.0) or 2.0), 10.0)
             )
             self._mikan_timeout = max(
-                5, min(int(config.get("mikan_timeout", 30) or 30), 120)
+                5, min(int(config.get("mikan_timeout", 60) or 60), 120)
             )
             self._mikan_fansub_order = list(config.get("mikan_fansub_order") or [])
             self._mikan_exclude_re = str(config.get("mikan_exclude_re", "") or "").strip()
@@ -927,7 +934,7 @@ class CloudSubscribe(_PluginBase):
                 0.2, min(float(config.get("animegarden_request_interval", 1.0) or 1.0), 10.0)
             )
             self._animegarden_timeout = max(
-                5, min(int(config.get("animegarden_timeout", 30) or 30), 120)
+                5, min(int(config.get("animegarden_timeout", 60) or 60), 120)
             )
             self._animegarden_fansub_order = list(config.get("animegarden_fansub_order") or [])
             self._animegarden_exclude_re = str(config.get("animegarden_exclude_re", "") or "").strip()
@@ -946,6 +953,9 @@ class CloudSubscribe(_PluginBase):
             self._juying_request_interval = max(
                 0.5, min(float(config.get("juying_request_interval", 1) or 1), 10.0)
             )
+            self._juying_timeout = max(
+                5, min(int(config.get("juying_timeout", 60) or 60), 120)
+            )
             self._pinglian_username = str(
                 config.get("pinglian_username", "") or ""
             ).strip()
@@ -958,7 +968,7 @@ class CloudSubscribe(_PluginBase):
                 min(float(config.get("pinglian_request_interval", 1) or 1), 10.0),
             )
             self._pinglian_timeout = max(
-                5, min(int(config.get("pinglian_timeout", 30) or 30), 120)
+                5, min(int(config.get("pinglian_timeout", 60) or 60), 120)
             )
 
             self._subscribe_filter_mode = config.get("subscribe_filter_mode", "exclude") or "exclude"
@@ -1038,6 +1048,9 @@ class CloudSubscribe(_PluginBase):
             self._hdhive_unlocks_per_minute = max(
                 1, min(int(config.get("hdhive_unlocks_per_minute", 2) or 2), 3)
             )
+            self._hdhive_timeout = max(
+                5, min(int(config.get("hdhive_timeout", 60) or 60), 120)
+            )
             self._hdhive_torrentclaw_enabled = bool(
                 config.get("hdhive_torrentclaw_enabled", False)
             )
@@ -1092,6 +1105,18 @@ class CloudSubscribe(_PluginBase):
             self._search_concurrency = max(
                 1, min(int(config.get("search_concurrency", 2) or 2), 5)
             )
+            self._search_source_timeout = max(
+                5, min(int(config.get("search_source_timeout", 60) or 60), 120)
+            )
+            self._search_circuit_breaker_enabled = bool(
+                config.get("search_circuit_breaker_enabled", True)
+            )
+            self._search_circuit_breaker_threshold = max(
+                1, min(int(config.get("search_circuit_breaker_threshold", 3) or 3), 10)
+            )
+            self._search_circuit_breaker_cooldown = max(
+                10, min(int(config.get("search_circuit_breaker_cooldown", 60) or 60), 600)
+            )
             self._dian115_candidate_limit = max(
                 1, min(int(config.get("dian115_candidate_limit", 4) or 4), 20)
             )
@@ -1100,6 +1125,9 @@ class CloudSubscribe(_PluginBase):
             )
             self._dian115_unlocks_per_minute = max(
                 1, min(int(config.get("dian115_unlocks_per_minute", 6) or 6), 10)
+            )
+            self._dian115_timeout = max(
+                5, min(int(config.get("dian115_timeout", 60) or 60), 120)
             )
 
             # 洗版配置
@@ -1821,6 +1849,17 @@ class CloudSubscribe(_PluginBase):
             animegarden_no_subs_re=self._animegarden_no_subs_re,
             animegarden_chinese_re=self._animegarden_chinese_re,
             anime_pack_preferred=bool(self._anime_pack_preferred),
+            search_source_timeout=self._search_source_timeout,
+            search_circuit_breaker_enabled=self._search_circuit_breaker_enabled,
+            search_circuit_breaker_threshold=self._search_circuit_breaker_threshold,
+            search_circuit_breaker_cooldown=self._search_circuit_breaker_cooldown,
+            hdhive_timeout=self._hdhive_timeout,
+            dian115_timeout=self._dian115_timeout,
+            juying_timeout=self._juying_timeout,
+            seedhub_timeout=self._seedhub_timeout,
+            piratebay_timeout=self._piratebay_timeout,
+            uindex_timeout=self._uindex_timeout,
+            pinglian_timeout=self._pinglian_timeout,
         )
         # 积分花费属于业务状态，不是可丢弃的搜索缓存。
         self._search_handler.configure_point_storage(

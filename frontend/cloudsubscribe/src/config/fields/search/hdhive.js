@@ -145,12 +145,22 @@ export function createHdhiveGroups(options = {}) {
       fields: [
         {
           key: "hdhive_candidate_limit",
-          label: "HDHive 候选上限",
+          label: "候选上限",
           hint: "按平台规则排序后再截取",
           type: "number",
           min: 1,
           max: 20,
-          cols: 4,
+          cols: 3,
+        },
+        {
+          key: "hdhive_timeout",
+          label: "搜索超时",
+          hint: "单次搜索最大等待时间，超时自动中断并上报熔断，默认 60 秒",
+          type: "number",
+          min: 5,
+          max: 120,
+          suffix: "秒",
+          cols: 3,
         },
         {
           key: "hdhive_request_interval",
@@ -161,7 +171,7 @@ export function createHdhiveGroups(options = {}) {
           max: 10,
           step: 0.5,
           suffix: "秒",
-          cols: 4,
+          cols: 3,
         },
         {
           key: "hdhive_unlocks_per_minute",
@@ -172,7 +182,7 @@ export function createHdhiveGroups(options = {}) {
           max: 5,
           step: 1,
           suffix: "次/分钟",
-          cols: 4,
+          cols: 3,
           show: (config) => config.hdhive_query_mode === "web",
         },
         {

@@ -17,6 +17,7 @@ from app.schemas.types import MediaType
 
 from .platform_rules import PlatformRuleService
 from ...core import (
+    SEARCH_CIRCUIT_BREAKER,
     SearchCapability,
     SearchQuery,
     format_search_label,
@@ -27,6 +28,7 @@ from ...core import (
 from ...core.media import tmdb_id_of
 from ...search.dian115 import Dian115SearchService
 from ...search.hdhive import HDHiveSearchService
+from ...search.http_client import RequestGateCooldown
 from ...search.juying import JuyingResourceService
 from ...search.matching import is_anime_media, positive_ints, unique_texts
 from ...search.mikan.service import filter_fansubs
@@ -89,7 +91,7 @@ class SearchHandler:
             pansou_concurrency: Optional[int] = None,
             pansou_result_limit: int = 10,
             pansou_refresh: bool = True,
-            pansou_timeout: int = 30,
+            pansou_timeout: int = 60,
             seedhub_result_limit: int = 20,
             piratebay_client: Any = None,
             piratebay_result_limit: int = 20,
@@ -116,7 +118,7 @@ class SearchHandler:
             mikan_base_url: str = "https://mikanani.me",
             mikan_result_limit: int = 10,
             mikan_request_interval: float = 2.0,
-            mikan_timeout: int = 30,
+            mikan_timeout: int = 60,
             mikan_fansub_order: Optional[List[Any]] = None,
             mikan_exclude_re: str = "",
             mikan_no_subs_re: str = "",
@@ -124,12 +126,23 @@ class SearchHandler:
             animegarden_base_url: str = "https://animes.garden/",
             animegarden_result_limit: int = 10,
             animegarden_request_interval: float = 1.0,
-            animegarden_timeout: int = 30,
+            animegarden_timeout: int = 60,
             animegarden_fansub_order: Optional[List[Any]] = None,
             animegarden_exclude_re: str = "",
             animegarden_no_subs_re: str = "",
             animegarden_chinese_re: str = "",
             anime_pack_preferred: bool = True,
+            search_source_timeout: int = 60,
+            search_circuit_breaker_enabled: bool = True,
+            search_circuit_breaker_threshold: int = 3,
+            search_circuit_breaker_cooldown: int = 60,
+            hdhive_timeout: int = 60,
+            dian115_timeout: int = 60,
+            juying_timeout: int = 60,
+            seedhub_timeout: int = 60,
+            piratebay_timeout: int = 60,
+            uindex_timeout: int = 60,
+            pinglian_timeout: int = 60,
             mikan_config: Optional[Dict[str, Any]] = None,
             animegarden_config: Optional[Dict[str, Any]] = None,
     ):
@@ -143,7 +156,7 @@ class SearchHandler:
         self._mikan_base_url = str(mikan_base_url or "https://mikanani.me").strip()
         self._mikan_result_limit = max(1, min(int(mikan_result_limit or 10), 80))
         self._mikan_request_interval = max(0.5, min(float(mikan_request_interval or 2.0), 10.0))
-        self._mikan_timeout = max(5, min(int(mikan_timeout or 30), 120))
+        self._mikan_timeout = max(5, min(int(mikan_timeout or 60), 120))
         self._mikan_fansub_order = list(mikan_fansub_order or [])
         self._mikan_exclude_re = str(mikan_exclude_re or "").strip()
         self._mikan_no_subs_re = str(mikan_no_subs_re or "").strip()
@@ -152,7 +165,7 @@ class SearchHandler:
         self._animegarden_base_url = str(animegarden_base_url or "https://animes.garden/").strip()
         self._animegarden_result_limit = max(1, min(int(animegarden_result_limit or 10), 80))
         self._animegarden_request_interval = max(0.2, min(float(animegarden_request_interval or 1.0), 10.0))
-        self._animegarden_timeout = max(5, min(int(animegarden_timeout or 30), 120))
+        self._animegarden_timeout = max(5, min(int(animegarden_timeout or 60), 120))
         self._animegarden_fansub_order = list(animegarden_fansub_order or [])
         self._animegarden_exclude_re = str(animegarden_exclude_re or "").strip()
         self._animegarden_no_subs_re = str(animegarden_no_subs_re or "").strip()
@@ -237,7 +250,7 @@ class SearchHandler:
             self._pansou_concurrency = None
         self._pansou_result_limit = max(1, min(int(pansou_result_limit or 10), 100))
         self._pansou_refresh = bool(pansou_refresh)
-        self._pansou_timeout = max(5, min(int(pansou_timeout or 30), 120))
+        self._pansou_timeout = max(5, min(int(pansou_timeout or 60), 120))
         self._seedhub_result_limit = max(
             1, min(int(seedhub_result_limit or 20), 80)
         )
@@ -259,6 +272,26 @@ class SearchHandler:
         self._search_cache_ttl = max(60, int(search_cache_ttl_minutes or 30) * 60)
         self._search_concurrency = max(1, min(int(search_concurrency or 1), 5))
         self._hdhive_candidate_limit = max(1, min(int(hdhive_candidate_limit or 4), 20))
+        self._search_source_timeout = max(5, min(int(search_source_timeout or 60), 120))
+        self._search_circuit_breaker_enabled = bool(search_circuit_breaker_enabled)
+        self._search_circuit_breaker_threshold = max(
+            1, min(int(search_circuit_breaker_threshold or 3), 10)
+        )
+        self._search_circuit_breaker_cooldown = max(
+            10, min(int(search_circuit_breaker_cooldown or 60), 600)
+        )
+        self._hdhive_timeout = max(5, min(int(hdhive_timeout or 60), 120))
+        self._dian115_timeout = max(5, min(int(dian115_timeout or 60), 120))
+        self._juying_timeout = max(5, min(int(juying_timeout or 60), 120))
+        self._seedhub_timeout = max(5, min(int(seedhub_timeout or 60), 120))
+        self._piratebay_timeout = max(5, min(int(piratebay_timeout or 60), 120))
+        self._uindex_timeout = max(5, min(int(uindex_timeout or 60), 120))
+        self._pinglian_timeout = max(5, min(int(pinglian_timeout or 60), 120))
+        SEARCH_CIRCUIT_BREAKER.configure(
+            enabled=self._search_circuit_breaker_enabled,
+            failure_threshold=self._search_circuit_breaker_threshold,
+            cooldown_seconds=self._search_circuit_breaker_cooldown,
+        )
         self._hdhive_request_interval = max(
             2.0, min(float(hdhive_request_interval or 5.0), 10.0)
         )
@@ -335,6 +368,31 @@ class SearchHandler:
         except Exception as error:
             logger.warning(f"读取搜索停止状态失败：{error}")
             return False
+
+    def _get_source_search_timeout(self, source: str) -> float:
+        """获取指定搜索渠道的超时时间（秒）。"""
+        source = str(source or "").strip().lower()
+        if source == "hdhive" and hasattr(self, "_hdhive_timeout"):
+            return float(self._hdhive_timeout)
+        if source == "dian115" and hasattr(self, "_dian115_timeout"):
+            return float(self._dian115_timeout)
+        if source == "pansou" and hasattr(self, "_pansou_timeout"):
+            return float(self._pansou_timeout)
+        if source == "mikan" and hasattr(self, "_mikan_timeout"):
+            return float(self._mikan_timeout)
+        if source == "animegarden" and hasattr(self, "_animegarden_timeout"):
+            return float(self._animegarden_timeout)
+        if source == "seedhub" and hasattr(self, "_seedhub_timeout"):
+            return float(self._seedhub_timeout)
+        if source == "piratebay" and hasattr(self, "_piratebay_timeout"):
+            return float(self._piratebay_timeout)
+        if source == "uindex" and hasattr(self, "_uindex_timeout"):
+            return float(self._uindex_timeout)
+        if source == "juying" and hasattr(self, "_juying_timeout"):
+            return float(self._juying_timeout)
+        if source == "pinglian" and hasattr(self, "_pinglian_timeout"):
+            return float(self._pinglian_timeout)
+        return float(getattr(self, "_search_source_timeout", 60.0))
 
     def get_enabled_sources(self, media_type: Optional[MediaType] = None) -> List[str]:
         """返回用户选择且当前可用的搜索渠道（完全由 search_source_order 优先级列表控制）。"""
@@ -762,6 +820,15 @@ class SearchHandler:
                 apply_platform_rules,
             )
 
+        # 熔断前置保护检查
+        if self._search_circuit_breaker_enabled and not SEARCH_CIRCUIT_BREAKER.can_execute(source):
+            state = SEARCH_CIRCUIT_BREAKER.get_state(source)
+            remaining = SEARCH_CIRCUIT_BREAKER.get_cooldown_remaining(source)
+            logger.warning(
+                f"⚡ [{search_label}][{source.upper()}] 渠道已触发熔断保护({state.value})，跳过检索 (冷却剩余 {remaining:.1f}s)"
+            )
+            return []
+
         external_started = time.monotonic()
         try:
             results = self._run_source_search(
@@ -775,11 +842,18 @@ class SearchHandler:
                 resource_list_mode=is_list_mode,
                 result_limit=actual_result_limit,
             )
+        except RequestGateCooldown as error:
+            logger.warning(f"[{search_label}][{source.upper()}] 渠道风控冷却中，快速跳过：{error}")
+            if self._search_circuit_breaker_enabled:
+                SEARCH_CIRCUIT_BREAKER.record_failure(source, str(error))
+            return []
         except Exception as error:
             logger.warning(
                 f"[{search_label}][{source.upper()}] 外部查询抛出异常：{error}",
                 exc_info=True,
             )
+            if self._search_circuit_breaker_enabled:
+                SEARCH_CIRCUIT_BREAKER.record_failure(source, str(error))
             return []
         finally:
             self._record_search_metric(source, "external_calls")
@@ -790,6 +864,14 @@ class SearchHandler:
             )
         if self._stop_requested():
             return []
+        if results is None:
+            if self._search_circuit_breaker_enabled:
+                SEARCH_CIRCUIT_BREAKER.record_failure(source, "查询返回空异常")
+            return []
+
+        if self._search_circuit_breaker_enabled:
+            SEARCH_CIRCUIT_BREAKER.record_success(source)
+
         label = f"[{search_label}][{source.upper()}]"
         if provider.policy.cacheable:
             self._set_cached_results(cache_key, label, results, source=source)
@@ -817,36 +899,26 @@ class SearchHandler:
             force_refresh: bool = False,
             result_limit: Optional[int] = None,
     ) -> Dict[str, List[Dict]]:
-        """并发查询相互独立的来源；各来源内部仍遵守自己的限流和串行约束。"""
+        """并发查询相互独立的来源；各来源内部仍遵守自己的限流和串行约束，并受单渠道超时和熔断器保护。"""
         ordered_sources = list(dict.fromkeys(sources or []))
         search_label = self._search_label(mediainfo, media_type, season)
-        if len(ordered_sources) <= 1 or self._search_concurrency <= 1:
-            return {
-                source: self.search_single_source(
-                    source=source,
-                    mediainfo=mediainfo,
-                    media_type=media_type,
-                    season=season,
-                    target_episodes=target_episodes,
-                    target_episode_air_dates=target_episode_air_dates,
-                    subscribe=subscribe,
-                    apply_platform_rules=apply_platform_rules,
-                    force_refresh=force_refresh,
-                    result_limit=result_limit,
-                )
-                for source in ordered_sources
-            }
-
         results: Dict[str, List[Dict]] = {source: [] for source in ordered_sources}
-        workers = min(self._search_concurrency, len(ordered_sources))
+        if not ordered_sources:
+            return results
+
+        workers = min(max(1, self._search_concurrency), len(ordered_sources))
         executor = ThreadPoolExecutor(
             max_workers=workers,
             thread_name_prefix="cloudsubscribe-search",
         )
         stopped = False
+        has_timeout = False
         try:
-            futures = {
-                executor.submit(
+            futures = {}
+            start_times = {}
+            source_timeouts = {}
+            for source in ordered_sources:
+                future = executor.submit(
                     self.search_single_source,
                     source,
                     mediainfo,
@@ -858,9 +930,11 @@ class SearchHandler:
                     apply_platform_rules,
                     force_refresh,
                     result_limit,
-                ): source
-                for source in ordered_sources
-            }
+                )
+                futures[future] = source
+                start_times[future] = time.monotonic()
+                source_timeouts[future] = self._get_source_search_timeout(source)
+
             pending = set(futures)
             while pending:
                 if self._stop_requested():
@@ -871,17 +945,43 @@ class SearchHandler:
                         f"⏹️ [{search_label}] 已停止等待搜索源，未开始的查询已取消"
                     )
                     break
+
+                now = time.monotonic()
+                timed_out = []
+                for future in list(pending):
+                    elapsed = now - start_times[future]
+                    limit = source_timeouts[future]
+                    if elapsed > limit:
+                        has_timeout = True
+                        source = futures[future]
+                        logger.warning(
+                            f"⏰ [{search_label}] 搜索源 {source.upper()} 响应超时（耗时 {elapsed:.2f}s > {limit:.1f}s），已主动丢弃等待"
+                        )
+                        if self._search_circuit_breaker_enabled:
+                            SEARCH_CIRCUIT_BREAKER.record_failure(
+                                source, f"单次搜索超时(>{limit}s)"
+                            )
+                        future.cancel()
+                        timed_out.append(future)
+
+                for future in timed_out:
+                    pending.discard(future)
+
+                if not pending:
+                    break
+
                 done, pending = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
                 for future in done:
                     source = futures[future]
                     try:
-                        results[source] = future.result()
+                        results[source] = future.result() or []
                     except Exception as error:
                         logger.error(
                             f"[{search_label}] 搜索源 {source} 并发查询失败：{error}"
                         )
         finally:
-            executor.shutdown(wait=not stopped, cancel_futures=stopped)
+            wait_shutdown = not stopped and not has_timeout
+            executor.shutdown(wait=wait_shutdown, cancel_futures=True)
         if not stopped:
             logger.debug(
                 f"[{search_label}] 搜索源查询完成："

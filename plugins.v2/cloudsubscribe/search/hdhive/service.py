@@ -19,6 +19,7 @@ from .web import (
     valid_share_url,
 )
 from ..budget import PointBudgetLedger
+from ..http_client import RequestGateCooldown
 from ...core import OwnerDelegator, SearchQuery, format_search_label
 from ...core.media import tmdb_id_of
 from ...utils.cache import create_platform_ttl_cache
@@ -313,6 +314,15 @@ class HDHiveSearchService(OwnerDelegator):
         try:
             started = time.monotonic()
             resources = self._get_hdhive_web_resources()
+            client = getattr(resources, "client", None)
+            if client and hasattr(client, "cooldown_remaining") and client.cooldown_remaining > 0:
+                logger.warning(
+                    f"{search_prefix} WebAPI 处于风控冷却中（剩余 {client.cooldown_remaining:.1f}s），快速跳过"
+                )
+                raise RequestGateCooldown(
+                    f"HDHive WebAPI 处于风控冷却中，剩余 {client.cooldown_remaining:.1f}s"
+                )
+
             if resource_list_mode:
                 results = resources.search_test_resources(
                     tmdb_id=int(tmdb_id),
@@ -379,6 +389,8 @@ class HDHiveSearchService(OwnerDelegator):
                 )
             return results
 
+        except RequestGateCooldown:
+            raise
         except HDHiveWebError as e:
             message = (
                 f"{locals().get('search_prefix', f'[{mediainfo.title}][HDHIVE]')} "
@@ -389,15 +401,14 @@ class HDHiveSearchService(OwnerDelegator):
                 logger.debug(message)
             else:
                 logger.error(message)
-            return None
+            raise
         except Exception as e:
             logger.error(
                 f"{locals().get('search_prefix', f'[{mediainfo.title}][HDHIVE]')} "
                 f"WebAPI 查询失败：{e}，"
                 f"耗时={time.monotonic() - locals().get('started', time.monotonic()):.2f}s"
             )
-            # 暂态失败不能伪装成正常空结果，否则上层会写入负缓存。
-            return None
+            raise
 
     def _search_openapi(
             self, mediainfo: MediaInfo, hdhive_media_type: str,

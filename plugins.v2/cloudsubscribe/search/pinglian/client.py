@@ -1,9 +1,8 @@
 """盘链网页登录、资源查询与分享链接解析。"""
 
-import re
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from app.log import logger
@@ -17,10 +16,25 @@ from ..http_client import (
     requests,
 )
 from ..types import (
-    SUPPORTED_RESOURCE_TYPES,
     normalize_resource_type,
     resource_type_from_url,
 )
+
+
+def _format_datetime(value: Any) -> str:
+    """将时间字符串格式化为可读时间（YYYY-MM-DD HH:MM:SS），不做二次时区偏移。"""
+    if not value:
+        return ""
+    val_str = str(value).strip()
+    if not val_str:
+        return ""
+    if "T" in val_str:
+        val_str = val_str.replace("T", " ")
+    if val_str.endswith("Z"):
+        val_str = val_str[:-1].strip()
+    if "." in val_str:
+        val_str = val_str.split(".")[0].strip()
+    return val_str
 
 
 class PinglianError(RuntimeError):
@@ -434,34 +448,36 @@ class PinglianClient:
         except Exception as error:
             logger.debug(f"盘链读取配额信息失败：{error}")
 
-        details: Dict[str, str] = {}
+        quota_text = ""
         if isinstance(quota, dict) and quota:
             if quota.get("unlimited"):
-                details["今日解锁配额"] = "不限次数"
+                quota_text = "不限次数"
             elif "limit" in quota and "used" in quota:
-                details["今日解锁配额"] = (
-                    f"{quota.get('used', 0)}/{quota.get('limit', 0)} 次 "
-                    f"(剩余 {quota.get('remaining', 0)} 次)"
-                )
-        if profile.get("vip_expires_at"):
-            details["VIP 到期"] = str(profile.get("vip_expires_at"))
+                quota_text = f"{quota.get('used', 0)}/{quota.get('limit', 0)} 次"
+            elif quota.get("remaining") is not None:
+                quota_text = f"{quota.get('remaining')} 次"
+
+        details: Dict[str, str] = {}
         if profile.get("created_at"):
-            details["注册日期"] = str(profile.get("created_at"))
+            details["注册日期"] = _format_datetime(profile.get("created_at"))
+        if profile.get("vip_expires_at"):
+            details["VIP 到期"] = _format_datetime(profile.get("vip_expires_at"))
         if profile.get("account_count") is not None:
             details["关联网盘数"] = f"{int(profile.get('account_count') or 0)} 个"
 
         remaining_quota = (
             quota.get("remaining") if isinstance(quota, dict) else None
         )
-        points = int(remaining_quota) if remaining_quota is not None else 0
+        points = quota_text or (int(remaining_quota) if remaining_quota is not None else 0)
 
         return {
             "name": name,
             "email": str(profile.get("email") or ""),
             "level": level_str,
             "points": points,
-            "expires_at": str(profile.get("vip_expires_at") or ""),
-            "registered_at": str(profile.get("created_at") or ""),
+            "quota_text": quota_text,
+            "expires_at": _format_datetime(profile.get("vip_expires_at")),
+            "registered_at": _format_datetime(profile.get("created_at")),
             "invite_count": "",
             "details": details,
         }

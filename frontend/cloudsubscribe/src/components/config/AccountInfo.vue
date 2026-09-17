@@ -52,7 +52,7 @@
         <div v-if="account.connected && details.length" class="account-details">
           <div v-for="item in details" :key="`${item.label}-${item.value}`" class="account-detail">
             <span class="account-detail-label">{{ item.label }}</span>
-            <span class="account-detail-value">{{ item.value }}</span>
+            <span class="account-detail-value">{{ formatDetailValue(item.value) }}</span>
           </div>
         </div>
         <div v-if="!account.connected" class="text-caption text-warning account-error">
@@ -107,6 +107,25 @@ const vipText = computed(() => {
   if (user.value.is_forever_vip) return "永久VIP"
   return user.value.vip_expire_date ? `VIP 至 ${user.value.vip_expire_date}` : "VIP"
 })
+
+function formatDetailValue(val) {
+  if (val === null || val === undefined) return "";
+  const text = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(text)) {
+    const d = new Date(text);
+    if (!isNaN(d.getTime())) {
+      const pad = (n) => String(n).padStart(2, "0");
+      const y = d.getFullYear();
+      const m = pad(d.getMonth() + 1);
+      const day = pad(d.getDate());
+      const h = pad(d.getHours());
+      const min = pad(d.getMinutes());
+      const s = pad(d.getSeconds());
+      return `${y}-${m}-${day} ${h}:${min}:${s}`;
+    }
+  }
+  return text;
+}
 </script>
 
 <style scoped>

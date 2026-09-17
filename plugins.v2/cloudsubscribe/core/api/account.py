@@ -43,8 +43,22 @@ class AccountApi(OwnerDelegator):
 
         details = []
 
+        def _format_detail_val(val: Any) -> str:
+            if not val:
+                return ""
+            val_str = str(val).strip()
+            if not val_str:
+                return ""
+            if "T" in val_str:
+                val_str = val_str.replace("T", " ")
+            if val_str.endswith("Z"):
+                val_str = val_str[:-1].strip()
+            if "." in val_str:
+                val_str = val_str.split(".")[0].strip()
+            return val_str
+
         def add_detail(label: str, value: Any) -> None:
-            text = str(value or "").strip()
+            text = _format_detail_val(value)
             if text:
                 details.append({"label": label, "value": text})
 
@@ -74,13 +88,30 @@ class AccountApi(OwnerDelegator):
             )
             add_detail("已解锁", f"{int(info.get('unlock_count') or 0)} 次")
         elif source == "pinglian":
-            add_detail("会员到期", info.get("expires_at"))
             add_detail("注册日期", info.get("registered_at"))
+            add_detail("会员到期", info.get("expires_at"))
             add_detail("邀请用户", info.get("invite_count"))
+            extra_details = info.get("details")
+            if isinstance(extra_details, dict):
+                for k, v in extra_details.items():
+                    if k not in ("会员到期", "VIP 到期", "注册日期", "今日解锁配额"):
+                        add_detail(k, v)
         else:
             add_detail("累计签到", f"{int(info.get('checkin_days') or 0)} 天")
             add_detail("上传资源", f"{int(info.get('upload_count') or 0)} 个")
             add_detail("收藏资源", f"{int(info.get('favorite_count') or 0)} 个")
+
+        points_info = info.get("points")
+        if source == "pinglian":
+            points_label = "今日解锁配额"
+            points_avail = info.get("quota_text") or points_info or 0
+        else:
+            points_label = "可用积分"
+            try:
+                points_avail = max(0, int(points_info or 0))
+            except (TypeError, ValueError):
+                points_avail = points_info or 0
+
         return {
             "connected": True,
             "user": {
@@ -90,8 +121,8 @@ class AccountApi(OwnerDelegator):
                 "badge": badge,
             },
             "points": {
-                "label": "金币余额" if source == "pinglian" else "可用积分",
-                "available": max(0, int(info.get("points") or 0)),
+                "label": points_label,
+                "available": points_avail,
             },
             "details": details,
         }
@@ -101,6 +132,7 @@ class AccountApi(OwnerDelegator):
         from ...search.dian115 import Dian115Client
         from ...search.hdhive import HDHiveClient
         from ...search.juying import JuyingClient
+        from ...search.pinglian import PinglianClient
         source = str(source or "").strip().lower()
         client = None
         close_client = False

@@ -47,11 +47,11 @@ export function createJuyingGroups(options = {}) {
       fields: [
         {
           key: "juying_result_limit",
-          label: "聚影候选上限",
+          label: "候选上限",
           type: "number",
           min: 1,
           max: 20,
-          cols: 6,
+          cols: 4,
         },
         {
           key: "juying_request_interval",
@@ -62,7 +62,17 @@ export function createJuyingGroups(options = {}) {
           max: 10,
           step: 0.5,
           suffix: "秒",
-          cols: 6,
+          cols: 4,
+        },
+        {
+          key: "juying_timeout",
+          label: "搜索超时",
+          hint: "单次搜索最大等待时间，超时自动中断并上报熔断，默认 60 秒",
+          type: "number",
+          min: 5,
+          max: 120,
+          suffix: "秒",
+          cols: 4,
         },
       ],
     },
