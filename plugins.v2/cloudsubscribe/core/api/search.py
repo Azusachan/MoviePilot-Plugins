@@ -19,7 +19,16 @@ from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
 from ..media import apply_media_identity, recognize_media, search_medias
-from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES
+from ...handlers.search import SearchHandler
+from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES, HDHiveOpenAPIClient
+from ...search.juying import JuyingClient
+from ...search.magnet import parse_size_str
+from ...search.matching import extract_resource_tags
+from ...search.online_docs import OnlineDocumentClient
+from ...search.pansou import PanSouClient
+from ...search.pinglian import PinglianClient
+from ...search.piratebay import PirateBayClient
+from ...search.seedhub import SeedHubClient
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
     PREVIEW_RESOURCE_TYPES,
@@ -29,6 +38,7 @@ from ...search.types import (
     resource_type_from_url,
     resource_type_name,
 )
+from ...search.uindex import UIndexClient
 from ...utils import parse_magnet_metadata
 from ...utils.http_client import (
     build_proxy_url,
@@ -61,18 +71,7 @@ class SearchApi(OwnerDelegator):
     @staticmethod
     def _sort_size(value: Any) -> float:
         """将候选资源大小转换为稳定的排序值，兼容带单位的文本。"""
-        if isinstance(value, (int, float)):
-            return float(value)
-        text = str(value or "").strip().replace(",", "")
-        if not text:
-            return 0.0
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|PB)?", text, re.I)
-        if not match:
-            return 0.0
-        number = float(match.group(1))
-        unit = (match.group(2) or "B").upper()
-        multipliers = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4, "PB": 1024 ** 5}
-        return number * multipliers.get(unit, 1)
+        return float(parse_size_str(value))
 
     @staticmethod
     def _display_tags(item: Dict[str, Any]) -> List[str]:
@@ -117,7 +116,8 @@ class SearchApi(OwnerDelegator):
 
         for value in values:
             append_tag(value)
-        return tags
+        title_for_tags = str(item.get("title") or item.get("name") or "").strip()
+        return extract_resource_tags(title_for_tags, tags)
     _SEARCH_TEST_CONFIG_FIELDS = {
         "pansou": frozenset({
             "pansou_url", "pansou_username", "pansou_password",
@@ -129,6 +129,16 @@ class SearchApi(OwnerDelegator):
         "piratebay": frozenset({
             "piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval",
             "piratebay_timeout",
+        }),
+        "mikan": frozenset({
+            "mikan_base_url", "mikan_result_limit", "mikan_request_interval",
+            "mikan_timeout", "mikan_exclude_re", "mikan_no_subs_re",
+            "mikan_chinese_re", "mikan_fansub_order",
+        }),
+        "animegarden": frozenset({
+            "animegarden_base_url", "animegarden_result_limit", "animegarden_request_interval",
+            "animegarden_timeout", "animegarden_fansub_order",
+            "animegarden_exclude_re", "animegarden_no_subs_re", "animegarden_chinese_re",
         }),
         "uindex": frozenset({
             "uindex_base_url", "uindex_result_limit", "uindex_request_interval",
@@ -658,16 +668,6 @@ class SearchApi(OwnerDelegator):
             confirmed_unlock_points: int = 0,
     ):
         """使用当前表单配置创建隔离搜索器，不修改已保存配置或运行中服务。"""
-        from ...handlers.search import SearchHandler
-        from ...search.hdhive import HDHiveOpenAPIClient
-        from ...search.juying import JuyingClient
-        from ...search.pansou import PanSouClient
-        from ...search.pinglian import PinglianClient
-        from ...search.seedhub import SeedHubClient
-        from ...search.online_docs import OnlineDocumentClient
-        from ...search.piratebay import PirateBayClient
-        from ...search.uindex import UIndexClient
-
         def as_list(value: Any) -> list:
             if isinstance(value, list):
                 return list(value)
@@ -711,7 +711,7 @@ class SearchApi(OwnerDelegator):
         # 各渠道仍会自行识别真实资源类型，但不会因目标盘配置而丢弃候选。
         if source in {
             "hdhive", "dian115", "juying", "seedhub",
-            "pinglian", "pansou", "piratebay", "uindex",
+            "pinglian", "pansou", "piratebay", "uindex", "mikan", "animegarden",
         }:
             resource_type_order = [
                 "115", "123", "quark", "guangya", "tianyi", "alipan",
@@ -835,19 +835,11 @@ class SearchApi(OwnerDelegator):
             hdhive_client=hdhive_client,
             seedhub_client=seedhub_client,
             piratebay_client=piratebay_client,
-            piratebay_enabled=source == "piratebay",
             piratebay_result_limit=int(config.get("piratebay_result_limit", 20) or 20),
             uindex_client=uindex_client,
-            uindex_enabled=source == "uindex",
             uindex_result_limit=int(config.get("uindex_result_limit", 20) or 20),
             juying_client=juying_client,
             pinglian_client=pinglian_client,
-            pansou_enabled=source == "pansou",
-            hdhive_enabled=source == "hdhive",
-            dian115_enabled=source == "dian115",
-            seedhub_enabled=source == "seedhub",
-            juying_enabled=source == "juying",
-            pinglian_enabled=source == "pinglian",
             online_docs_client=online_docs_client,
             hdhive_web_client=hdhive_web_client,
             hdhive_web_client_owned=hdhive_web_client_owned,
@@ -918,6 +910,24 @@ class SearchApi(OwnerDelegator):
             should_stop=(
                 (lambda: time.monotonic() >= deadline) if deadline else None
             ),
+            mikan_base_url=str(config.get("mikan_base_url", "https://mikanani.me") or "https://mikanani.me").strip(),
+            mikan_result_limit=int(config.get("mikan_result_limit", 10) or 10),
+            mikan_request_interval=float(config.get("mikan_request_interval", 2.0) or 2.0),
+            mikan_timeout=int(config.get("mikan_timeout", 30) or 30),
+            mikan_fansub_order=config.get("mikan_fansub_order") or [],
+            mikan_exclude_re=str(config.get("mikan_exclude_re", "") or "").strip(),
+            mikan_no_subs_re=str(config.get("mikan_no_subs_re", "") or "").strip(),
+            mikan_chinese_re=str(config.get("mikan_chinese_re", "") or "").strip(),
+            animegarden_base_url=str(
+                config.get("animegarden_base_url", "https://animes.garden/") or "https://animes.garden/").strip(),
+            animegarden_result_limit=int(config.get("animegarden_result_limit", 10) or 10),
+            animegarden_request_interval=float(config.get("animegarden_request_interval", 1.0) or 1.0),
+            animegarden_timeout=int(config.get("animegarden_timeout", 30) or 30),
+            animegarden_fansub_order=config.get("animegarden_fansub_order") or [],
+            animegarden_exclude_re=str(config.get("animegarden_exclude_re", "") or "").strip(),
+            animegarden_no_subs_re=str(config.get("animegarden_no_subs_re", "") or "").strip(),
+            animegarden_chinese_re=str(config.get("animegarden_chinese_re", "") or "").strip(),
+            anime_pack_preferred=bool(config.get("anime_pack_preferred", True)),
         )
         handler.configure_point_storage(self.get_data, self.save_data)
         return handler
@@ -1103,6 +1113,8 @@ class SearchApi(OwnerDelegator):
             "dian115": "Dian115",
             "piratebay": "海盗湾",
             "uindex": "UIndex",
+            "mikan": "Mikan",
+            "animegarden": "AnimeGarden",
             "pansou": "PanSou",
             "juying": "聚影",
             "seedhub": "SeedHub",
@@ -1317,6 +1329,7 @@ class SearchApi(OwnerDelegator):
                 "preview_episodes": item.get("preview_episodes") or {},
                 "pending_resolution": bool(item.get("pending_resolution")),
                 "can_preview": resource_type in PREVIEW_RESOURCE_TYPES,
+                "fansub": str(item.get("fansub") or "").strip(),
             })
             resource_type_counts[resource_type] = (
                     resource_type_counts.get(resource_type, 0) + 1
@@ -1516,11 +1529,14 @@ class SearchApi(OwnerDelegator):
             "seedhub": "SeedHub",
             "piratebay": "海盗湾",
             "uindex": "UIndex",
+            "mikan": "Mikan",
+            "animegarden": "AnimeGarden",
             "online_docs": "在线文档",
         }
         # 优先读取用户配置的优先级顺序，其余按标准顺序排列
         configured_order = getattr(handler, "_search_source_order", []) or []
-        default_pref = ["pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "piratebay", "uindex"]
+        default_pref = ["pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "piratebay", "uindex", "mikan",
+                        "animegarden"]
         merged_order = []
         for s in list(configured_order) + default_pref:
             s_clean = str(s).strip().lower()
@@ -1533,7 +1549,16 @@ class SearchApi(OwnerDelegator):
         req_source = str(data.get("source") or "").strip().lower()
         force_refresh = bool(data.get("force") or data.get("force_refresh"))
         if req_source:
-            sources_to_search = [req_source] if req_source in registered_sources else registered_sources
+            if req_source not in registered_sources:
+                logger.warning(f"[网盘资源嗅探] 请求的搜索渠道 [{req_source}] 未就绪或未注册")
+                return {
+                    "success": True,
+                    "message": f"渠道 {source_display_names.get(req_source, req_source)} 暂不可用",
+                    "data": {"items": [], "sources": [], "available_sources": [
+                        {"key": s, "name": source_display_names.get(s, s)} for s in merged_order
+                    ]},
+                }
+            sources_to_search = [req_source]
         else:
             sources_to_search = merged_order
 

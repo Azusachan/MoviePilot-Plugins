@@ -18,7 +18,11 @@ from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory
 from app.db.models.mediaserver import MediaServerItem
 from app.db.subscribe_oper import SubscribeOper
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
 from sqlalchemy import func, or_

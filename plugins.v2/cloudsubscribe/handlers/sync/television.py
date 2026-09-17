@@ -415,21 +415,22 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                     try:
                         missing_episode_set = set(missing_episodes)
-                        if self._is_offline_url(share_url) or self._is_magnet_url(share_url):
+                        is_offline_resource = self._is_offline_url(share_url) or self._is_magnet_url(share_url)
+                        if is_offline_resource:
                             if self._is_offline_blacklisted(resource, share_url):
-                                logger.info(
-                                    f"🚫 离线任务命中黑名单（1天内失败或超时），跳过该资源并选择其他候选：{resource_title}"
+                                logger.debug(
+                                    f"离线资源命中黑名单跳过：{resource_title}"
                                 )
                                 continue
 
-                        if self._is_magnet_url(share_url):
+                        if is_offline_resource:
                             magnet_title = self._prepare_magnet_resource(
                                 resource, share_url
                             )
                             title_seasons = self._magnet_title_seasons(resource)
                             if title_seasons and season not in title_seasons:
                                 logger.debug(
-                                    f"Magnet 标题预过滤排除：标题季数="
+                                    f"离线资源标题预过滤排除：标题季数="
                                     f"{','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
                                     f"目标季数=S{season:02d}，"
                                     f"标题={magnet_title or resource_title}"
@@ -446,7 +447,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 )
                                 if not target_episode_set:
                                     logger.debug(
-                                        f"Magnet 标题预过滤排除：标题集数="
+                                        f"离线资源标题预过滤排除：标题集数="
                                         f"{self._format_episode_ranges(title_episodes)}，"
                                         f"当前缺集={self._format_episode_ranges(missing_episode_set)}，"
                                         f"标题={magnet_title or resource_title}"
@@ -468,13 +469,13 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                             if not self._validate_resource_url(
                                     share_url,
-                                    resource_label="Magnet 链接",
+                                    resource_label="Magnet 链接" if self._is_magnet_url(share_url) else "离线下载链接",
                                     log_prefix=search_prefix,
                             ):
                                 continue
                             if not target_episodes:
                                 logger.debug(
-                                    f"Magnet 预览集数未覆盖当前缺集：预览="
+                                    f"离线资源预览集数未覆盖当前缺集：预览="
                                     f"{self._format_episode_ranges(preview_episodes)}，"
                                     f"当前缺集={self._format_episode_ranges(missing_episode_set)}，"
                                     f"标题={magnet_title or resource_title}"
@@ -494,6 +495,12 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 continue
                             if discover_manual_episodes:
                                 discovered_manual_episodes.update(target_episodes)
+                            target_ep_set = set(target_episodes)
+                            missing_episodes = [
+                                ep for ep in missing_episodes
+                                if ep not in target_ep_set
+                            ]
+                            missing_episode_set = set(missing_episodes)
                             provider_name = str(
                                 (resource.get("magnet_metadata") or {}).get("display_name")
                                 or resource_title
@@ -510,9 +517,14 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 finalize_key=pending_key,
                             )
                             logger.info(
-                                f"Magnet 已进入下载后真实文件匹配：{provider_name}，"
-                                f"目标 {self._format_episode_ranges(set(target_episodes))}"
+                                f"离线任务已进入下载后真实文件匹配：{provider_name}，"
+                                f"目标 {self._format_episode_ranges(target_ep_set)}"
                             )
+                            if not discover_manual_episodes and not missing_episodes:
+                                logger.debug(
+                                    f"{mediainfo.title_year} S{season:02d} 缺失剧集已齐，提前结束候选遍历"
+                                )
+                                break
                             continue
                         share_files = []
                         for current_url in resource_urls:

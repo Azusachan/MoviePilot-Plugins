@@ -9,6 +9,8 @@ const SOURCE_ITEMS = [
   {title: "SeedHub", value: "seedhub"},
   {title: "海盗湾", value: "piratebay"},
   {title: "UIndex", value: "uindex"},
+  {title: "Mikan", value: "mikan"},
+  {title: "AnimeGarden", value: "animegarden"},
   {title: "在线文档", value: "online_docs"},
 ]
 
@@ -23,19 +25,17 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "search_source_order",
           label: "搜索资源优先级",
-          hint: "已选搜索源按当前顺序查询；留空时不搜索任何渠道。",
-          type: "select",
+          hint: "点击打开配置窗口，通过拖拽卡片调整搜索源查询优先级（排在前面的最高优先）；留空时不限制搜索渠道。",
+          type: "priority-order",
           items: SOURCE_ITEMS,
-          multiple: true,
           cols: 12,
         },
         {
           key: "resource_type_order",
           label: "资源类型优先级",
-          hint: "开启跨盘转存后可选择其他已接入网盘；仅搜索和处理已选类型，并按当前顺序优先匹配。",
-          type: "select",
+          hint: "点击打开配置窗口，通过拖拽卡片调整网盘与资源类型匹配优先级（排在前面的优先选择与下载）。",
+          type: "priority-order",
           items: resourceTypeItems,
-          multiple: true,
           cols: 12,
         },
         {

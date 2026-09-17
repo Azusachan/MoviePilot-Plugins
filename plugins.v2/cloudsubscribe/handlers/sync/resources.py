@@ -167,6 +167,11 @@ class ResourceTransferService(OwnerDelegator):
                     r"(?<![A-Za-z0-9])[Ee][Pp]?\s*0*(\d{1,4})"
                     r"(?:\s*[-~～–—至到]\s*[EePp]?\s*0*(\d{1,4}))?(?!\d)"
                 ),
+                re.compile(
+                    r"\[(?:EP|E)?\s*0*(\d{1,3})\s*[-~～–—至到]\s*(?:EP|E)?\s*0*(\d{1,3})(?:v\d)?"
+                    r"(?:\s*(?:合集|全集|Fin|End|完|话|話|集|\+SP|\+OVA))?[^\]]*\]",
+                    re.IGNORECASE,
+                ),
         ):
             for match in pattern.finditer(unscoped_text):
                 start = int(match.group(1))
@@ -174,6 +179,13 @@ class ResourceTransferService(OwnerDelegator):
                 if end < start or end - start > 999:
                     continue
                 episodes.update(range(start, end + 1))
+
+        # 全集解析如 [全12话], - 全12话, (全12集)
+        for match in re.finditer(r"(?:\[|[\s\-_(（])全\s*0*(\d{1,3})\s*[话話集](?:\]|[\s\-_)）]|$)", unscoped_text,
+                                 re.IGNORECASE):
+            total = int(match.group(1))
+            if 0 < total <= 200:
+                episodes.update(range(1, total + 1))
         return {episode for episode in episodes if episode > 0}
 
     @classmethod

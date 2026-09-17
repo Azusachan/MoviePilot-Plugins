@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, List, Mapping, Optional
 
 from app.core.cache import TTLCache
+from app.log import logger
 
 from .client import P123_AVAILABLE, check_response, is_success
 from ..common import CloudDriveFileServiceBase, create_directory_cache, safe_int
@@ -176,7 +177,8 @@ class P123FileService(CloudDriveFileServiceBase):
             self._invalidate_path_cache()
         if target_name and target_name != item.name:
             if not self.rename_file(save_path, item, target_name):
-                return None
+                logger.warning(f"123网盘文件移入目录后重命名失败，保留原名：{item.name} -> {target_name}")
+                return self.find_file(save_path, item.name)
         return self.find_file(save_path, target_name or item.name)
 
     def delete_file(self, file_id: str) -> bool:

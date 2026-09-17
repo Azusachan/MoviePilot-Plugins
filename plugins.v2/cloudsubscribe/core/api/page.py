@@ -14,6 +14,7 @@ from app.schemas.types import MediaType, NotificationType
 from .. import CloudDriveCapability, OwnerDelegator
 from ..config import UIConfig
 from ..media import call_with_supported_kwargs, recognize_media
+from ...search.matching import is_anime_media
 from ...utils.cache import create_platform_ttl_cache
 
 _UI_OPTIONS_CACHE = create_platform_ttl_cache(
@@ -342,6 +343,7 @@ class PageApi(OwnerDelegator):
                     "success": True,
                     "data": {
                         "defaults": UIConfig.get_default_config(),
+                        "mediaservers": UIConfig.get_media_server_options(),
                         "cloud_drives": [
                             {
                                 "title": provider.name,
@@ -1470,6 +1472,9 @@ class PageApi(OwnerDelegator):
         else:
             detail["seasons"] = []
             detail["library_episodes_total"] = 0
+
+        # 智能判定是否属于动漫类型（调用统一的权威 is_anime_media，日漫番剧/动画电影）
+        detail["is_anime"] = is_anime_media(detail, recognized)
 
         return {"success": True, "data": {"item": detail}}
 

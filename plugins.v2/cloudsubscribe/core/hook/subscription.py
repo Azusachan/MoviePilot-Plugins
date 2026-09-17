@@ -1,7 +1,8 @@
 """订阅与平台搜索钩子。"""
 
+from datetime import datetime, timezone
 from functools import wraps
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from app.chain.subscribe import SubscribeChain
 from app.db.subscribe_oper import SubscribeOper
@@ -27,6 +28,7 @@ class SubscriptionSearchHook(OwnerDelegator):
         if not self._enabled:
             return
         self._install_platform_search_block()
+        self._install_subscribe_chain_takeover()
         try:
             from app.scheduler import Scheduler
 
@@ -59,6 +61,7 @@ class SubscriptionSearchHook(OwnerDelegator):
 
     def _restore_subscribe_search_takeover(self) -> None:
         self._restore_platform_search_block()
+        self._restore_subscribe_chain_takeover()
         originals = dict(self._subscribe_search_originals or {})
         if not originals:
             return
@@ -178,6 +181,150 @@ class SubscriptionSearchHook(OwnerDelegator):
                 self._platform_download_policy == "block"
                 and self._is_takeover_active()
         )
+
+    def _install_subscribe_chain_takeover(self) -> None:
+        """挂接 SubscribeChain 内部的单订阅搜索执行器（适配 MoviePilot v3 持久化队列及单项搜索）。"""
+        try:
+            from app.chain.subscribe import SubscribeChain
+
+            method_name = "_process_search_subscription"
+            current = getattr(SubscribeChain, method_name, None)
+            if not callable(current):
+                return
+            if getattr(current, "__cloudsubscribe_owner__", None) is self:
+                return
+
+            original = getattr(
+                current, "__cloudsubscribe_original__", current
+            )
+            originals = getattr(self, "_subscribe_chain_originals", None)
+            if originals is not None:
+                originals.setdefault(method_name, original)
+            wrapper = self._create_subscribe_chain_wrapper(
+                method_name=method_name,
+                original=original,
+            )
+            setattr(SubscribeChain, method_name, wrapper)
+            logger.debug("已安装订阅执行接管器")
+        except Exception as error:
+            logger.warning(f"安装订阅执行接管器失败：{error}")
+
+    def _restore_subscribe_chain_takeover(self) -> None:
+        """恢复 SubscribeChain 的原始搜索执行方法。"""
+        originals = dict(getattr(self, "_subscribe_chain_originals", None) or {})
+        if not originals:
+            return
+        try:
+            from app.chain.subscribe import SubscribeChain
+
+            for method_name, original in originals.items():
+                current = getattr(SubscribeChain, method_name, None)
+                if getattr(current, "__cloudsubscribe_owner__", None) is self:
+                    setattr(SubscribeChain, method_name, original)
+        except Exception as error:
+            logger.warning(f"恢复订阅执行接管器失败：{error}")
+        finally:
+            if hasattr(self, "_subscribe_chain_originals"):
+                self._subscribe_chain_originals = {}
+
+    def _create_subscribe_chain_wrapper(
+            self,
+            method_name: str,
+            original: Callable,
+    ) -> Callable:
+        owner = self
+
+        @wraps(original)
+        def process_search_subscription_wrapper(
+                chain_self,
+                subscribe,
+                searchchain=None,
+                execution_context=None,
+                *args,
+                **kwargs,
+        ):
+            return owner._dispatch_process_search_subscription(
+                original=original,
+                chain_self=chain_self,
+                subscribe=subscribe,
+                searchchain=searchchain,
+                execution_context=execution_context,
+                *args,
+                **kwargs,
+            )
+
+        process_search_subscription_wrapper.__cloudsubscribe_owner__ = self
+        process_search_subscription_wrapper.__cloudsubscribe_original__ = original
+        return process_search_subscription_wrapper
+
+    def _dispatch_process_search_subscription(
+            self,
+            original: Callable,
+            chain_self: Any,
+            subscribe: Any,
+            searchchain: Any = None,
+            execution_context: Any = None,
+            *args: Any,
+            **kwargs: Any,
+    ) -> Any:
+        if searchchain is None and "searchchain" in kwargs:
+            searchchain = kwargs.pop("searchchain")
+        if execution_context is None and "execution_context" in kwargs:
+            execution_context = kwargs.pop("execution_context")
+
+        subscribe_id = getattr(subscribe, "id", None)
+        subscribe_state = getattr(subscribe, "state", "R")
+        use_plugin = self._is_takeover_active()
+        if subscribe_state == "N" and self._enabled and self._takeover_new_subscribes:
+            use_plugin = True
+        if subscribe_id and self._is_subscribe_excluded(subscribe_id):
+            use_plugin = False
+
+        if not use_plugin:
+            return original(
+                chain_self,
+                subscribe,
+                searchchain=searchchain,
+                execution_context=execution_context,
+                *args,
+                **kwargs,
+            )
+
+        # 平台 v3 订阅搜索接管逻辑：
+        # 1. 尝试更新订阅 last_search 时间戳，保持平台最近搜索事实同步
+        if execution_context is None or not getattr(execution_context, "resuming_sites", False):
+            apply_update = getattr(chain_self, "_SubscribeChain__apply_subscribe_update", None)
+            if callable(apply_update):
+                try:
+                    subscribe = apply_update(
+                        subscribe,
+                        {"last_search": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+                        scene="search",
+                    )
+                except Exception as update_err:
+                    logger.debug(f"更新订阅 last_search 失败（可忽略）：{update_err}")
+
+        # 2. 如果存在 execution_context，通知当前阶段进入 searching
+        if execution_context and hasattr(execution_context, "report_phase"):
+            try:
+                execution_context.report_phase("searching")
+            except Exception:
+                pass
+
+        # 3. 投递到网盘订阅助手搜索队列
+        subscribe_name = getattr(subscribe, "name", "") or getattr(subscribe, "title", "")
+        logger.debug(
+            f"订阅搜索转入网盘任务：id={subscribe_id or 'ALL'}，标题={subscribe_name}"
+        )
+        self.queue_subscribe_search(
+            subscribe_id=subscribe_id,
+            subscribe_state=subscribe_state,
+            progress_callback=None,
+        )
+
+        # 4. 返回 subscribeSnapshot，供 v3 的 SubscriptionSearchTaskRunner
+        # 正常调用 finish_returned_search_task 将原生队列任务标记为 completed 终态。
+        return subscribe
 
     def _dispatch_subscribe_search(
             self,

@@ -14,6 +14,7 @@ from app.log import logger
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator
+from ...search.subs_filter import anime_file_candidates
 from ...utils import MediaFileParser
 
 
@@ -28,6 +29,15 @@ class PostprocessService(OwnerDelegator):
         ("metadata", "刮削元数据"),
         ("commit", "登记完成状态"),
         ("notify", "消息通知"),
+    )
+
+    _FINALIZE_MAX_FAILURES = 5
+    _FINALIZE_DEAD_LOG = "文件后处理连续失败 {} 次，已终止重试：{}"
+    _FINALIZE_DEAD_REASON = "文件后处理连续失败 {} 次，已停止自动重试"
+    _FINALIZE_DEAD_TITLE = "网盘文件后处理失败"
+    _FINALIZE_DEAD_TEXT = (
+        "{}\n\n连续 {} 次后处理失败，已停止自动重试，"
+        "请检查网盘文件与媒体目录状态"
     )
 
     @staticmethod
@@ -666,6 +676,8 @@ class PostprocessService(OwnerDelegator):
                 if is_replacement and not self._delete_upgrade_old_file(
                         item, directory_snapshot
                 ):
+                    if self._finalize_failure(item, pending_key):
+                        return
                     self._schedule_finalize_retry(item, now)
                     return
                 finish_finalized_item(
@@ -845,6 +857,7 @@ class PostprocessService(OwnerDelegator):
             ) -> None:
                 if (
                         media
+                        and getattr(self, "_organize_after_transfer", True)
                         and self._metadata_scraper
                         and self._local_resource_path
                         and (self._nfo_scrape_enabled or self._image_scrape_enabled)
@@ -867,6 +880,20 @@ class PostprocessService(OwnerDelegator):
                 item = pending.get(pending_key)
                 if not item:
                     continue
+                if item.get("finalize_dead"):
+                    fail_count = int(item.get("fail_count") or 0)
+                    reason = self._FINALIZE_DEAD_REASON.format(fail_count)
+                    logger.error(
+                        "{}：{}".format(
+                            reason,
+                            str(item.get("file_name") or pending_key),
+                        )
+                    )
+                    self._mark_offline_history_status(pending_key, "失败", reason)
+                    self._notify_finalize_dead(item, pending_key)
+                    pending.pop(pending_key, None)
+                    failed += 1
+                    continue
                 task_type = str(item.get("task_type") or "share")
                 file_name = str(item.get("file_name") or pending_key)
                 created_at = float(item.get("created_at") or now)
@@ -886,8 +913,9 @@ class PostprocessService(OwnerDelegator):
                         failed += 1
                         continue
                     if not task_done:
+                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
                         if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = "Magnet 离线下载超过 30 分钟未完成，已退出"
+                            reason = f"Magnet 离线下载超过 {timeout_mins} 分钟未完成，已退出"
                             self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._cleanup_failed_offline_task(item, reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
@@ -903,6 +931,8 @@ class PostprocessService(OwnerDelegator):
                         item, pending_key, subscribe_cache=subscribe_cache
                     )
                     if finalized is None:
+                        if self._finalize_failure(item, pending_key):
+                            continue
                         self._schedule_finalize_retry(item, now)
                         continue
                     pending.pop(pending_key, None)
@@ -934,8 +964,9 @@ class PostprocessService(OwnerDelegator):
                         failed += 1
                         continue
                     if task is not None and not task_done:
+                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
                         if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = "115 离线下载超过 30 分钟未完成，已退出"
+                            reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
                             logger.error(f"{reason}：{file_name}")
                             self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
@@ -958,8 +989,9 @@ class PostprocessService(OwnerDelegator):
                             failed += 1
                             continue
                     if not task_done:
+                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
                         if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = "115 离线下载超过 30 分钟未完成，已退出"
+                            reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
                             logger.error(f"{reason}：{file_name}")
                             self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                             self._mark_offline_history_status(pending_key, "失败", reason)
@@ -991,6 +1023,8 @@ class PostprocessService(OwnerDelegator):
                 else:
                     directory_valid, file_index = directory_snapshot(staging_dir)
                     if not directory_valid:
+                        if self._finalize_failure(item, pending_key):
+                            continue
                         self._schedule_finalize_retry(item, now)
                         continue
                 task_name = (
@@ -1075,11 +1109,24 @@ class PostprocessService(OwnerDelegator):
                     target_file = replaced_file
                     already_moved = True
 
+                if not already_moved and not getattr(self, "_organize_after_transfer", True):
+                    # "转存后整理"关闭：文件停在转存目录即视为完成。
+                    item["cloud_dir"] = staging_dir
+                    item["moved_at"] = now
+                    already_moved = True
+                    logger.debug(
+                        f"转存后整理已关闭，保留在转存目录：{staging_dir}/{Path(staging_name).name}"
+                    )
+
                 if not already_moved:
                     update_progress(
                         item, pending_key, "organize", "重命名并移动到媒体目录"
                     )
                     if target_file.name != file_name:
+                        source_suffix = Path(target_file.name).suffix
+                        if source_suffix and not file_name.endswith(source_suffix):
+                            file_name = f"{Path(file_name).stem}{source_suffix}"
+                            item["file_name"] = file_name
                         if not self._cloud_mutations.rename_file(
                                 staging_dir, target_file, file_name
                         ):
@@ -1119,16 +1166,20 @@ class PostprocessService(OwnerDelegator):
                     resolved_key = context_key or self._media_context_key(item)
                     if resolved_key and media:
                         media_context_cache[resolved_key] = (media, media_data)
-                if not self._strm_generate_enabled or not self._strm_generator or not self._local_resource_path:
-                    if item.get("subtitles"):
+                if (
+                        not self._strm_generate_enabled
+                        or not self._strm_generator
+                        or not self._local_resource_path
+                        or not getattr(self, "_organize_after_transfer", True)
+                ):
+                    if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
                         update_progress(
                             item, pending_key, "subtitle", "检查并整理伴随字幕"
                         )
                         if not self._finalize_subtitle_files(
                                 item, directory_snapshot
                         ):
-                            self._schedule_finalize_retry(item, now)
-                            continue
+                            logger.warning(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
                     finalize_after_metadata(
                         item, pending_key, file_name, None, media, media_data
                     )
@@ -1144,15 +1195,14 @@ class PostprocessService(OwnerDelegator):
                     logger.error(f"STRM 生成后文件不存在或为空：{strm_path}")
                     strm_path = None
                 if strm_path:
-                    if item.get("subtitles"):
+                    if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
                         update_progress(
                             item, pending_key, "subtitle", "检查并整理伴随字幕"
                         )
                         if not self._finalize_subtitle_files(
                                 item, directory_snapshot, strm_path=strm_path
                         ):
-                            self._schedule_finalize_retry(item, now)
-                            continue
+                            logger.warning(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
                     if not self._strm_file_ready(strm_path):
                         logger.error(f"洗版后 STRM 文件不存在或为空：{strm_path}")
                         self._schedule_finalize_retry(item, now)
@@ -1328,6 +1378,11 @@ class PostprocessService(OwnerDelegator):
             if MediaFileParser.is_video(str(file_item.get("name") or ""))
         ]
         if not video_files:
+            recovered = self._try_recover_magnet_from_destination(
+                item, pending_key, mediainfo, subscribe
+            )
+            if recovered is not None:
+                return recovered
             logger.debug(f"Magnet 已完成但真实文件树尚未就绪：{item.get('file_name')}")
             return None
 
@@ -1353,13 +1408,26 @@ class PostprocessService(OwnerDelegator):
                     continue
                 if episode > 0:
                     target_episodes.append(episode)
-            episode_files = self._match_episode_files(
-                video_files,
-                mediainfo,
-                subscribe,
-                max(1, int(season or 1)),
-                target_episodes,
-            )
+            resource = item.get("resource") or {}
+            if resource.get("source") in {"mikan", "animegarden"}:
+                candidates = anime_file_candidates(
+                    video_files,
+                    resource.get("title") or "",
+                    max(1, int(season or 1)),
+                    target_episodes,
+                )
+                episode_files = {
+                    episode: self._search_handler.select_file_candidate(files, mediainfo, subscribe)
+                    for episode, files in candidates.items()
+                }
+            else:
+                episode_files = self._match_episode_files(
+                    video_files,
+                    mediainfo,
+                    subscribe,
+                    max(1, int(season or 1)),
+                    target_episodes,
+                )
             matched = [
                 (episode, episode_files[episode][0], episode_files[episode][1])
                 for episode in target_episodes
@@ -1410,7 +1478,11 @@ class PostprocessService(OwnerDelegator):
                 season=max(1, int(season or 1)) if episode else None,
                 episode=episode,
             )
+            source_suffix = Path(source_name).suffix
+            if source_suffix and not target_name.endswith(source_suffix):
+                target_name = f"{Path(target_name).stem}{source_suffix}"
             mode = str(item.get("upgrade_mode") or self._upgrade_mode)
+            organize_enabled = getattr(self, "_organize_after_transfer", True)
             if is_upgrade and mode == "coexist":
                 target_name = self._coexist_target_name(
                     target_name, source_name, source_size, source_file.get("sha1") or ""
@@ -1568,6 +1640,153 @@ class PostprocessService(OwnerDelegator):
         )
         return details
 
+    def _try_recover_magnet_from_destination(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            mediainfo: Any,
+            subscribe: Any,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """当离线暂存目录文件为空时，检查目标媒体库是否已存在匹配文件（自愈机制）。"""
+        season = item.get("season")
+        episodes = []
+        if mediainfo.type == MediaType.TV:
+            for value in item.get("target_episodes") or []:
+                try:
+                    ep = int(str(value or "0"))
+                    if ep > 0:
+                        episodes.append(ep)
+                except ValueError:
+                    continue
+            if not episodes:
+                return None
+        else:
+            episodes = [None]
+
+        recovered_files = []
+        for ep in episodes:
+            cloud_dir, target_name = self._platform_target(
+                self._CLOUD_MEDIA_ROOT,
+                subscribe,
+                mediainfo,
+                item.get("file_name") or mediainfo.title,
+                season=max(1, int(season or 1)) if ep else None,
+                episode=ep,
+            )
+            if not cloud_dir or not target_name:
+                return None
+            dest_file = self._cloud_query.get_cached_file(cloud_dir, target_name)
+            if not dest_file:
+                lookup = self._cloud_directories.resolve_directory(cloud_dir)
+                if lookup.checked and lookup.directory_id is not None:
+                    listing = self._cloud_directories.list_directory(lookup.directory_id)
+                    if listing.checked:
+                        dest_file = next(
+                            (f for f in listing.files if f.name == target_name or (
+                                    MediaFileParser.is_video(f.name) and (
+                                f"E{ep:02d}" in f.name.upper() if ep else True
+                            )
+                            )),
+                            None
+                        )
+            if not dest_file:
+                return None
+            recovered_files.append((ep, dest_file, cloud_dir, dest_file.name or target_name))
+
+        if not recovered_files:
+            return None
+
+        logger.debug(f"离线任务自愈成功：{item.get('file_name')}")
+        history_records = []
+        details = []
+        success_episodes = []
+        share_url = str(item.get("share_url") or "")
+        resource = item.get("resource") or {}
+
+        for ep, target_file, cloud_dir, final_name in recovered_files:
+            self._scrape_metadata(
+                cloud_dir,
+                final_name,
+                mediainfo,
+                season=season,
+                episode=ep,
+            )
+            if self._strm_generate_enabled and self._strm_generator and self._local_resource_path:
+                strm_path = self._generate_strm(
+                    cloud_dir, final_name, target_file=target_file, lookup_target=False
+                )
+                if strm_path:
+                    self._media_server_notifier.notify(
+                        path=strm_path, mediainfo=mediainfo, file_name=final_name
+                    )
+            elif self._local_resource_path:
+                notify_path = self._resolve_resource_season_dir(
+                    self._local_resource_path,
+                    subscribe,
+                    mediainfo,
+                    max(1, int(season or 1)),
+                )
+                if notify_path:
+                    self._media_server_notifier.notify(
+                        path=notify_path, mediainfo=mediainfo, file_name=final_name
+                    )
+            if ep:
+                success_episodes.append(int(ep))
+            else:
+                success_episodes.append(1)
+
+            episode_fields = (
+                {"season": int(season or 1), "episode": int(ep)}
+                if ep else {}
+            )
+            record = self._build_transfer_history_item(
+                mediainfo=mediainfo,
+                subscribe=subscribe,
+                status="成功",
+                share_url=share_url,
+                file_name=final_name,
+                source_file_name=final_name,
+                cloud_dir=cloud_dir,
+                resource=resource,
+                file_size=getattr(target_file, "size", 0) or 0,
+                source_sha1=str(getattr(target_file, "sha1", "") or ""),
+                rule_score=0,
+                upgrade=False,
+                **episode_fields,
+            )
+            history_records.append(record)
+            detail = {
+                "type": record["type"],
+                "title": mediainfo.title,
+                "year": mediainfo.year,
+                "image": mediainfo.get_poster_image(),
+                "file_name": final_name,
+            }
+            if ep:
+                detail.update({"season": int(season or 1), "episodes": [int(ep)]})
+            details.append(detail)
+
+        if not history_records:
+            return None
+
+        persisted_records = [
+            record for record in history_records
+            if not record.get("skip_history")
+        ]
+        with self._offline_pending_lock:
+            history = [
+                record for record in (self._get_data("history") or [])
+                if str(record.get("finalize_key") or "") != pending_key
+            ]
+            history.extend(persisted_records)
+            self._save_data("history", history)
+        self._record_platform_transfer_histories(persisted_records)
+        item["success_episodes"] = (
+            [] if item.get("transient_target") else success_episodes
+        )
+        item["notification_episodes"] = success_episodes if mediainfo.type == MediaType.TV else []
+        return details
+
     def _schedule_finalize_retry(self, item: Dict[str, Any], now: float) -> None:
         check_index = min(
             int(item.get("check_index") or 0) + 1,
@@ -1584,3 +1803,40 @@ class PostprocessService(OwnerDelegator):
             f"文件后处理尚未完成：{item.get('file_name')}，"
             f"{retry_minutes} 分钟后复查"
         )
+
+    def _finalize_failure(self, item: Dict[str, Any], pending_key: str) -> bool:
+        """记录一次后处理实际失败（如重命名/移动/定位缺失）。
+
+        达到连续失败上限后返回 True，并将任务标记为死任务（finalize_dead），
+        由后续监控扫描彻底移出队列并记录失败历史与通知，终止无限重试。
+        """
+        fail_count = int(item.get("fail_count") or 0) + 1
+        item["fail_count"] = fail_count
+        if fail_count < self._FINALIZE_MAX_FAILURES:
+            return False
+        item["finalize_dead"] = True
+        item["next_check_at"] = 0.0
+        logger.error(
+            self._FINALIZE_DEAD_LOG.format(
+                fail_count, str(item.get("file_name") or pending_key)
+            )
+        )
+        return True
+
+    def _notify_finalize_dead(
+            self, item: Dict[str, Any], pending_key: str
+    ) -> None:
+        post_msg = getattr(self, "_post_message", None) or getattr(self, "post_message", None)
+        if not post_msg or not getattr(self, "_notify", False):
+            return
+        try:
+            post_msg(
+                mtype=self._notification_type,
+                title=self._FINALIZE_DEAD_TITLE,
+                text=self._FINALIZE_DEAD_TEXT.format(
+                    str(item.get("file_name") or pending_key),
+                    int(item.get("fail_count") or 0),
+                ),
+            )
+        except Exception as error:
+            logger.warning(f"后处理失败通知发送异常：{error}")

@@ -691,6 +691,8 @@ const sourceNames = {
   seedhub: "SeedHub",
   pinglian: "盘链",
   online_docs: "在线文档",
+  mikan: "Mikan",
+  animegarden: "AnimeGarden",
   manual: "手动添加",
   unknown: "未知",
 }

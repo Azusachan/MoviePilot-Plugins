@@ -8,6 +8,8 @@ import {createPirateBayGroups} from "./piratebay.js";
 import {createUIndexGroups} from "./uindex.js";
 import {createPinglianGroups} from "./pinglian.js";
 import {createOnlineDocsGroups} from "./online_docs.js";
+import {createMikanGroups} from "./mikan.js";
+import {createAnimeGardenGroups} from "./animegarden.js";
 
 export function createSearchSection(resourceTypeItems, options = {}) {
   return {
@@ -24,6 +26,8 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       {value: "seedhub", title: "SeedHub", icon: "mdi-seed-outline"},
       {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},
       {value: "uindex", title: "UIndex", icon: "mdi-magnet"},
+      {value: "mikan", title: "Mikan", icon: "mdi-animation-play-outline"},
+      {value: "animegarden", title: "AnimeGarden", icon: "mdi-flower-tulip-outline"},
       {value: "online_docs", title: "在线文档", icon: "mdi-file-document-outline"},
     ],
     groups: [
@@ -34,6 +38,8 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       ...createSeedhubGroups(),
       ...createPirateBayGroups(),
       ...createUIndexGroups(),
+      ...createMikanGroups(),
+      ...createAnimeGardenGroups(),
       ...createDian115Groups(options),
       ...createPinglianGroups(options),
       ...createOnlineDocsGroups(resourceTypeItems),

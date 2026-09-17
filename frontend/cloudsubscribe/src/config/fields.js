@@ -13,9 +13,9 @@ export function createConfigSections(options, config = {}) {
   const resourceTypeItems = createResourceTypeItems(cloudDriveItems, config);
   return [
     createBasicSection(cloudDriveItems, options),
+    createTransferSection(options),
     createSubscribeSection(options),
     createCheckinSection(),
-    createTransferSection(options),
     createDriveSection(options),
     createSearchSection(resourceTypeItems, options),
     createUpgradeSection(options),

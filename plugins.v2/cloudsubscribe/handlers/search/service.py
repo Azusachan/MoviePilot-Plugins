@@ -28,7 +28,8 @@ from ...core.media import tmdb_id_of
 from ...search.dian115 import Dian115SearchService
 from ...search.hdhive import HDHiveSearchService
 from ...search.juying import JuyingResourceService
-from ...search.matching import positive_ints, unique_texts
+from ...search.matching import is_anime_media, positive_ints, unique_texts
+from ...search.mikan.service import filter_fansubs
 from ...search.pansou import PanSouSearchService
 from ...search.registry import create_search_registry
 from ...search.types import SUPPORTED_RESOURCE_TYPES, normalize_resource_type
@@ -68,12 +69,6 @@ class SearchHandler:
             online_docs_client=None,
             hdhive_web_client=None,
             hdhive_web_client_owned: bool = True,
-            pansou_enabled: bool = False,
-            hdhive_enabled: bool = False,
-            dian115_enabled: bool = False,
-            seedhub_enabled: bool = False,
-            juying_enabled: bool = False,
-            pinglian_enabled: bool = False,
             hdhive_username: str = "",
             hdhive_password: str = "",
             hdhive_query_mode: str = "web",
@@ -97,10 +92,8 @@ class SearchHandler:
             pansou_timeout: int = 30,
             seedhub_result_limit: int = 20,
             piratebay_client: Any = None,
-            piratebay_enabled: bool = False,
             piratebay_result_limit: int = 20,
             uindex_client: Any = None,
-            uindex_enabled: bool = False,
             uindex_result_limit: int = 20,
             juying_result_limit: int = 5,
             pinglian_result_limit: int = 20,
@@ -120,15 +113,63 @@ class SearchHandler:
             enable_cloud_upgrade: bool = False,
             upgrade_subscribe_ids: Optional[List[int]] = None,
             should_stop: Any = None,
+            mikan_base_url: str = "https://mikanani.me",
+            mikan_result_limit: int = 10,
+            mikan_request_interval: float = 2.0,
+            mikan_timeout: int = 30,
+            mikan_fansub_order: Optional[List[Any]] = None,
+            mikan_exclude_re: str = "",
+            mikan_no_subs_re: str = "",
+            mikan_chinese_re: str = "",
+            animegarden_base_url: str = "https://animes.garden/",
+            animegarden_result_limit: int = 10,
+            animegarden_request_interval: float = 1.0,
+            animegarden_timeout: int = 30,
+            animegarden_fansub_order: Optional[List[Any]] = None,
+            animegarden_exclude_re: str = "",
+            animegarden_no_subs_re: str = "",
+            animegarden_chinese_re: str = "",
+            anime_pack_preferred: bool = True,
+            mikan_config: Optional[Dict[str, Any]] = None,
+            animegarden_config: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化搜索处理器
 
         :param pansou_client: PanSou 客户端实例
-        :param pansou_enabled: 是否启用 PanSou
         :param pansou_channels: PanSou 搜索频道
         :param search_source_order: 自定义搜索源优先级列表
         """
+        self._mikan_base_url = str(mikan_base_url or "https://mikanani.me").strip()
+        self._mikan_result_limit = max(1, min(int(mikan_result_limit or 10), 80))
+        self._mikan_request_interval = max(0.5, min(float(mikan_request_interval or 2.0), 10.0))
+        self._mikan_timeout = max(5, min(int(mikan_timeout or 30), 120))
+        self._mikan_fansub_order = list(mikan_fansub_order or [])
+        self._mikan_exclude_re = str(mikan_exclude_re or "").strip()
+        self._mikan_no_subs_re = str(mikan_no_subs_re or "").strip()
+        self._mikan_chinese_re = str(mikan_chinese_re or "").strip()
+
+        self._animegarden_base_url = str(animegarden_base_url or "https://animes.garden/").strip()
+        self._animegarden_result_limit = max(1, min(int(animegarden_result_limit or 10), 80))
+        self._animegarden_request_interval = max(0.2, min(float(animegarden_request_interval or 1.0), 10.0))
+        self._animegarden_timeout = max(5, min(int(animegarden_timeout or 30), 120))
+        self._animegarden_fansub_order = list(animegarden_fansub_order or [])
+        self._animegarden_exclude_re = str(animegarden_exclude_re or "").strip()
+        self._animegarden_no_subs_re = str(animegarden_no_subs_re or "").strip()
+        self._animegarden_chinese_re = str(animegarden_chinese_re or "").strip()
+        self._anime_pack_preferred = bool(anime_pack_preferred)
+
+        # 兼容旧配置传入
+        if mikan_config:
+            if "mikan_fansub_order" in mikan_config and not self._mikan_fansub_order:
+                self._mikan_fansub_order = list(mikan_config.get("mikan_fansub_order") or [])
+            if "mikan_exclude_re" in mikan_config and not self._mikan_exclude_re:
+                self._mikan_exclude_re = str(mikan_config.get("mikan_exclude_re") or "").strip()
+        if animegarden_config:
+            if "animegarden_fansub_order" in animegarden_config and not self._animegarden_fansub_order:
+                self._animegarden_fansub_order = list(animegarden_config.get("animegarden_fansub_order") or [])
+            if "animegarden_exclude_re" in animegarden_config and not self._animegarden_exclude_re:
+                self._animegarden_exclude_re = str(animegarden_config.get("animegarden_exclude_re") or "").strip()
         self._pansou_client = pansou_client
         self._hdhive_client = hdhive_client
         self._seedhub_client = seedhub_client
@@ -140,17 +181,8 @@ class SearchHandler:
         self._juying_resources = (
             JuyingResourceService(juying_client) if juying_client else None
         )
-        self._pansou_enabled = pansou_enabled
-        self._hdhive_enabled = hdhive_enabled
-        self._dian115_enabled = bool(dian115_enabled)
-        self._seedhub_enabled = bool(seedhub_enabled)
-        self._piratebay_enabled = bool(piratebay_enabled)
         self._piratebay_result_limit = int(piratebay_result_limit or 20)
-        self._uindex_enabled = bool(uindex_enabled)
         self._uindex_result_limit = int(uindex_result_limit or 20)
-        self._juying_enabled = bool(juying_enabled)
-        self._pinglian_enabled = bool(pinglian_enabled)
-        self._online_docs_enabled = bool(online_docs_client)
         self._hdhive_username = hdhive_username
         self._hdhive_password = hdhive_password
         self._hdhive_query_mode = str(hdhive_query_mode or "web")
@@ -304,25 +336,16 @@ class SearchHandler:
             logger.warning(f"读取搜索停止状态失败：{error}")
             return False
 
-    def get_enabled_sources(self) -> List[str]:
-        """返回用户选择且当前已启用的搜索渠道（供自动追剧与定时下载使用）。"""
+    def get_enabled_sources(self, media_type: Optional[MediaType] = None) -> List[str]:
+        """返回用户选择且当前可用的搜索渠道（完全由 search_source_order 优先级列表控制）。"""
         available_set = {
             provider.key for provider in self._search_registry.available()
         }
-        enabled_map = {
-            "pansou": getattr(self, "_pansou_enabled", True),
-            "hdhive": getattr(self, "_hdhive_enabled", False),
-            "seedhub": getattr(self, "_seedhub_enabled", False),
-            "piratebay": getattr(self, "_piratebay_enabled", False),
-            "uindex": getattr(self, "_uindex_enabled", False),
-            "juying": getattr(self, "_juying_enabled", False),
-            "pinglian": getattr(self, "_pinglian_enabled", False),
-            "online_docs": getattr(self, "_online_docs_enabled", False),
-            "dian115": True,
-        }
+        anime_only_sources = {"mikan", "animegarden"}
         return [
             source for source in self._search_source_order
-            if source in available_set and enabled_map.get(source, True)
+            if source in available_set
+               and not (media_type == MediaType.MOVIE and source in anime_only_sources)
         ]
 
     def get_all_search_sources(self) -> List[str]:
@@ -613,6 +636,21 @@ class SearchHandler:
             target_episodes: Optional[List[int]],
             apply_platform_rules: bool,
     ) -> List[Dict]:
+        if is_anime_media(mediainfo):
+            before = len(results)
+            prefix = "animegarden" if source == "animegarden" else "mikan"
+            strict_filter = bool(apply_platform_rules)
+            results = filter_fansubs(
+                results,
+                prefix=prefix,
+                strict=strict_filter,
+                fansub_order=getattr(self, f"_{prefix}_fansub_order", None),
+                exclude_re=getattr(self, f"_{prefix}_exclude_re", None),
+                no_subs_re=getattr(self, f"_{prefix}_no_subs_re", None),
+                chinese_re=getattr(self, f"_{prefix}_chinese_re", None),
+            )
+            if before != len(results):
+                logger.debug(f"[{source.upper()}] 字幕与排除过滤（strict={strict_filter}）：{before} -> {len(results)}")
         for result in results:
             result.setdefault("source", source)
         ordered = self._prefilter_resource_order(
@@ -689,6 +727,10 @@ class SearchHandler:
         source = str(source or "").strip().lower()
         if self._stop_requested():
             return []
+        if source in {"mikan", "animegarden"} and not is_anime_media(mediainfo):
+            logger.debug(
+                f"[{self._search_label(mediainfo, media_type, season)}][{source.upper()}] 媒体非动漫类型，跳过检索")
+            return []
         try:
             provider = self._search_registry.get(source)
         except KeyError:
@@ -703,9 +745,12 @@ class SearchHandler:
             self._get_cached_results(cache_key, source, search_label)
             if (provider.policy.cacheable and not force_refresh) else None
         )
+        is_anime_source = source in {"mikan", "animegarden"}
+        is_list_mode = not apply_platform_rules
+        actual_result_limit = None if (is_anime_source and is_list_mode) else result_limit
         if results is not None:
-            if result_limit is not None and len(results) > result_limit:
-                results = results[:result_limit]
+            if actual_result_limit is not None and len(results) > actual_result_limit:
+                results = results[:actual_result_limit]
             return self._prepare_source_results(
                 results,
                 source,
@@ -727,8 +772,8 @@ class SearchHandler:
                 target_episodes,
                 target_episode_air_dates,
                 subscribe,
-                resource_list_mode=not apply_platform_rules,
-                result_limit=result_limit,
+                resource_list_mode=is_list_mode,
+                result_limit=actual_result_limit,
             )
         except Exception as error:
             logger.warning(
@@ -942,13 +987,32 @@ class SearchHandler:
             self._resource_type(resource), len(self._resource_type_order_config)
         )
 
+    def _resource_pack_priority(
+            self, resource: Dict[str, Any], season: Optional[int]
+    ) -> int:
+        """动漫完结合集优先：合集返回 -1，非合集返回 0。"""
+        if not getattr(self, "_anime_pack_preferred", True):
+            return 0
+        if resource.get("is_pack"):
+            return -1
+        title = str(resource.get("title") or resource.get("name") or "")
+        if re.search(r"合集|全集|全\s*\d+\s*[话話集]|\bComplete\b|\bPack\b|\[0*\d+\s*[-~～–—至到]\s*0*\d+[^\]]*\]",
+                     title, re.I):
+            return -1
+        preview = self._resource_preview_episode_set(resource, season)
+        if preview and len(preview) > 1:
+            return -1
+        return 0
+
     def _resource_sort_key(
             self, resource: Dict[str, Any], season: Optional[int], targets: set
     ) -> tuple:
         return (
             self._resource_type_order(resource),
+            self._resource_pack_priority(resource, season),
             self._resource_availability_order(resource),
             resource.get("is_official") is not True,
+            -int(resource.get("fansub_priority") or 0),
             *self._resource_target_coverage(resource, season, targets),
             self._resource_unlock_points(resource.get("unlock_points")),
             -int(resource.get("platform_priority") or 0),
@@ -982,8 +1046,10 @@ class SearchHandler:
                 continue
             sort_key = (
                 type_order,
+                self._resource_pack_priority(item, season),
                 self._resource_availability_order(item),
                 item.get("is_official") is not True,
+                -int(item.get("fansub_priority") or 0),
                 *coverage,
                 self._resource_unlock_points(item.get("unlock_points")),
                 -int(item.get("platform_priority") or 0),

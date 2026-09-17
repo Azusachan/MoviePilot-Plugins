@@ -136,6 +136,7 @@ class SearchQuery:
     subscribe: Any = field(default=None, repr=False, compare=False)
     resource_list_mode: bool = False
     result_limit: Optional[int] = None
+    keyword: Optional[str] = None
 
 
 @dataclass(frozen=True)

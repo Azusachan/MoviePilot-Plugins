@@ -144,8 +144,10 @@ class FormContent:
         "dian115_checkin_mode": [("普通签到", "normal"), ("运气签到", "lucky")],
         "upgrade_mode": [("保留最大文件", "largest"), ("保留最小文件", "smallest"), ("直接替换", "replace"),
                          ("新旧共存", "coexist")],
-        "auto_subscribe_douban_media_type": [("全部", "all"), ("电影", "movie"), ("电视剧", "tv")],
-        "auto_subscribe_maoyan_media_type": [("全部", "all"), ("电影", "movie"), ("电视剧", "tv")],
+        "auto_subscribe_douban_media_type": [("全部", "all"), ("电影", "movie"), ("电视剧", "tv"),
+                                             ("动漫电影", "anime_movie"), ("动漫番剧", "anime_tv")],
+        "auto_subscribe_maoyan_media_type": [("全部", "all"), ("电影", "movie"), ("电视剧", "tv"),
+                                             ("动漫电影", "anime_movie"), ("动漫番剧", "anime_tv")],
         "auto_subscribe_netflix_global_dataset": [("周榜数据", "weekly"), ("全球数据", "global")],
         "auto_subscribe_netflix_global_media_types": [
             ("电影（英文）", "Films (English)"), ("电影（非英文）", "Films (Non-English)"),
@@ -223,7 +225,8 @@ class FormContent:
         if key == "search_source_order":
             return [{"title": title, "value": value} for title, value in (
                 ("HDHive", "hdhive"), ("Dian115", "dian115"), ("PanSou", "pansou"),
-                ("聚影", "juying"), ("SeedHub", "seedhub"),
+                ("聚影", "juying"), ("SeedHub", "seedhub"), ("海盗湾", "piratebay"),
+                ("UIndex", "uindex"), ("Mikan", "mikan"), ("AnimeGarden", "animegarden"),
                 ("盘链", "pinglian"), ("在线文档", "online_docs"),
             )]
         if key == "resource_type_order":
@@ -274,8 +277,8 @@ class FormContent:
             fields.append({"component": component, "props": props})
         groups = {
             "基础设置": [],
-            "订阅与榜单": [],
             "转存与媒体库": [],
+            "订阅与榜单": [],
             "搜索资源": [],
             "通知与高级": [],
         }

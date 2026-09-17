@@ -11,7 +11,10 @@ from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from ..cloudflare import browser_proxy, is_cloudflare_challenge, playwright_snapshot
 from ..http_client import (
-    RequestGate, gated_request, normalize_proxies, requests,
+    RequestGate,
+    gated_request,
+    normalize_proxies,
+    requests,
 )
 from ..matching import extract_year
 from ..types import resource_type_from_url

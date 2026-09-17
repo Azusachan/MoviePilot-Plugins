@@ -115,7 +115,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.3.8"
+    plugin_version = "1.4.2"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -136,6 +136,11 @@ class CloudSubscribe(_PluginBase):
     _show_sidebar_nav: bool = True
     _agent_enabled: bool = True
     _direct_transfer_enabled: bool = True
+    _organize_after_transfer: bool = True
+    _organize_subtitles: bool = True
+    _subtitle_traditional_to_simplified: bool = False
+    _anime_pack_preferred: bool = True
+    _offline_timeout: int = 30
     _cron: str = "0 18-23 * * *"
     _auto_subscribe_enabled: bool = False
     _auto_subscribe_onlyonce: bool = False
@@ -175,7 +180,6 @@ class CloudSubscribe(_PluginBase):
     _alipan_transfer_path: str = "/"
     _alipan_media_path: str = "/"
     _cloud_drive_key: str = "115"
-    _pansou_enabled: bool = True
     _pansou_url: str = "https://so.252035.xyz"
     _pansou_username: str = ""
     _pansou_password: str = ""
@@ -191,28 +195,38 @@ class CloudSubscribe(_PluginBase):
     _pansou_result_limit: int = 10
     _pansou_refresh: bool = True
     _pansou_timeout: int = 30
-    _seedhub_enabled: bool = False
     _seedhub_base_url: str = "https://www.seedhub.cc"
     _seedhub_result_limit: int = 20
     _seedhub_request_interval: float = 1.0
     _seedhub_timeout: int = 20
-    _piratebay_enabled: bool = False
     _piratebay_base_url: str = "https://apibay.org"
     _piratebay_result_limit: int = 20
     _piratebay_request_interval: float = 1.0
     _piratebay_timeout: int = 20
-    _uindex_enabled: bool = False
     _uindex_base_url: str = "https://uindex.org"
     _uindex_result_limit: int = 20
-    _uindex_request_interval: float = 1.0
     _uindex_timeout: int = 20
-    _juying_enabled: bool = False
+    _mikan_base_url: str = "https://mikanani.me"
+    _mikan_result_limit: int = 10
+    _mikan_request_interval: float = 2.0
+    _mikan_timeout: int = 30
+    _mikan_fansub_order: List[Any] = []
+    _mikan_exclude_re: str = ""
+    _mikan_no_subs_re: str = ""
+    _mikan_chinese_re: str = ""
+    _animegarden_base_url: str = "https://animes.garden/"
+    _animegarden_result_limit: int = 10
+    _animegarden_request_interval: float = 1.0
+    _animegarden_timeout: int = 30
+    _animegarden_fansub_order: List[Any] = []
+    _animegarden_exclude_re: str = ""
+    _animegarden_no_subs_re: str = ""
+    _animegarden_chinese_re: str = ""
     _juying_username: str = ""
     _juying_password: str = ""
     _juying_checkin_enabled: bool = False
     _juying_result_limit: int = 5
     _juying_request_interval: float = 1.0
-    _pinglian_enabled: bool = False
     _pinglian_username: str = ""
     _pinglian_password: str = ""
     _pinglian_result_limit: int = 20
@@ -237,7 +251,6 @@ class CloudSubscribe(_PluginBase):
     _checkin_auto_retry: bool = True
     _checkin_retry_count: int = 2
 
-    _dian115_enabled: bool = False
     _dian115_email: str = ""
     _dian115_password: str = ""
     _dian115_checkin_enabled: bool = False
@@ -251,7 +264,6 @@ class CloudSubscribe(_PluginBase):
     _dian115_request_interval: float = 1.0
     _dian115_unlocks_per_minute: int = 6
 
-    _hdhive_enabled: bool = False
     _hdhive_base_url: str = "https://re0.me"
     _hdhive_username: str = ""
     _hdhive_password: str = ""
@@ -362,6 +374,7 @@ class CloudSubscribe(_PluginBase):
     _sync_handler: Optional[SyncHandler] = None
     _webhook_handler: Optional[WebhookHandler] = None
     _subscribe_search_originals: Dict[str, Callable[..., Any]] = {}
+    _subscribe_chain_originals: Dict[str, Callable[..., Any]] = {}
     _platform_search_originals: Dict[str, Callable[..., Any]] = {}
     _stop_event: Optional[ThreadEvent] = None
     _sync_running: bool = False
@@ -643,6 +656,7 @@ class CloudSubscribe(_PluginBase):
                 thread_name_prefix="cloudsubscribe-sync-operation",
             )
             self._subscribe_search_originals = {}
+            self._subscribe_chain_originals = {}
             self._platform_search_originals = {}
         else:
             if self._sync_tasks_lock is None:
@@ -760,7 +774,7 @@ class CloudSubscribe(_PluginBase):
 
             source_names = (
                 "hdhive", "dian115", "pansou", "juying", "seedhub",
-                "pinglian", "piratebay", "uindex", "online_docs",
+                "pinglian", "piratebay", "uindex", "online_docs", "mikan",
             )
             raw_order = config.get("search_source_order", []) or []
             if isinstance(raw_order, str):
@@ -791,7 +805,6 @@ class CloudSubscribe(_PluginBase):
                 logger.error(f"搜索渠道代理配置无效，本次使用直连：{error}")
                 self._search_proxy_address = raw_search_proxy
                 self._search_proxy = ""
-            self._pansou_enabled = "pansou" in selected_sources
             self._pansou_url = config.get("pansou_url", "https://so.252035.xyz/")
             self._dian115_base_url = str(
                 config.get("dian115_base_url", "https://m.dian115.com") or "https://m.dian115.com").strip()
@@ -854,7 +867,6 @@ class CloudSubscribe(_PluginBase):
             self._pansou_timeout = max(
                 5, min(int(config.get("pansou_timeout", 30) or 30), 120)
             )
-            self._seedhub_enabled = "seedhub" in selected_sources
             self._seedhub_base_url = str(
                 config.get("seedhub_base_url", "https://www.seedhub.cc") or "https://www.seedhub.cc").strip()
             self._seedhub_result_limit = max(
@@ -866,7 +878,6 @@ class CloudSubscribe(_PluginBase):
             self._seedhub_timeout = max(
                 5, min(int(config.get("seedhub_timeout", 20) or 20), 60)
             )
-            self._piratebay_enabled = "piratebay" in selected_sources
             self._piratebay_base_url = str(
                 config.get("piratebay_base_url", "https://apibay.org") or "https://apibay.org").strip()
             self._piratebay_result_limit = max(
@@ -878,7 +889,6 @@ class CloudSubscribe(_PluginBase):
             self._piratebay_timeout = max(
                 5, min(int(config.get("piratebay_timeout", 20) or 20), 60)
             )
-            self._uindex_enabled = "uindex" in selected_sources
             self._uindex_base_url = str(
                 config.get("uindex_base_url", "https://uindex.org") or "https://uindex.org").strip()
             self._uindex_result_limit = max(
@@ -890,7 +900,39 @@ class CloudSubscribe(_PluginBase):
             self._uindex_timeout = max(
                 5, min(int(config.get("uindex_timeout", 20) or 20), 60)
             )
-            self._juying_enabled = "juying" in selected_sources
+            self._mikan_base_url = str(
+                config.get("mikan_base_url", "https://mikanani.me") or "https://mikanani.me"
+            ).strip()
+            self._mikan_result_limit = max(
+                1, min(int(config.get("mikan_result_limit", 10) or 10), 80)
+            )
+            self._mikan_request_interval = max(
+                0.5, min(float(config.get("mikan_request_interval", 2.0) or 2.0), 10.0)
+            )
+            self._mikan_timeout = max(
+                5, min(int(config.get("mikan_timeout", 30) or 30), 120)
+            )
+            self._mikan_fansub_order = list(config.get("mikan_fansub_order") or [])
+            self._mikan_exclude_re = str(config.get("mikan_exclude_re", "") or "").strip()
+            self._mikan_no_subs_re = str(config.get("mikan_no_subs_re", "") or "").strip()
+            self._mikan_chinese_re = str(config.get("mikan_chinese_re", "") or "").strip()
+
+            self._animegarden_base_url = str(
+                config.get("animegarden_base_url", "https://animes.garden/") or "https://animes.garden/"
+            ).strip()
+            self._animegarden_result_limit = max(
+                1, min(int(config.get("animegarden_result_limit", 10) or 10), 80)
+            )
+            self._animegarden_request_interval = max(
+                0.2, min(float(config.get("animegarden_request_interval", 1.0) or 1.0), 10.0)
+            )
+            self._animegarden_timeout = max(
+                5, min(int(config.get("animegarden_timeout", 30) or 30), 120)
+            )
+            self._animegarden_fansub_order = list(config.get("animegarden_fansub_order") or [])
+            self._animegarden_exclude_re = str(config.get("animegarden_exclude_re", "") or "").strip()
+            self._animegarden_no_subs_re = str(config.get("animegarden_no_subs_re", "") or "").strip()
+            self._animegarden_chinese_re = str(config.get("animegarden_chinese_re", "") or "").strip()
             self._juying_username = str(
                 config.get("juying_username", "") or ""
             ).strip()
@@ -904,7 +946,6 @@ class CloudSubscribe(_PluginBase):
             self._juying_request_interval = max(
                 0.5, min(float(config.get("juying_request_interval", 1) or 1), 10.0)
             )
-            self._pinglian_enabled = "pinglian" in selected_sources
             self._pinglian_username = str(
                 config.get("pinglian_username", "") or ""
             ).strip()
@@ -937,7 +978,6 @@ class CloudSubscribe(_PluginBase):
                 1,
                 min(10, int(config.get("checkin_retry_count", 2) or 2)),
             )
-            self._dian115_enabled = "dian115" in selected_sources
             self._dian115_email = str(config.get("dian115_email", "") or "").strip()
             self._dian115_password = str(config.get("dian115_password", "") or "")
             self._dian115_checkin_enabled = bool(
@@ -964,7 +1004,6 @@ class CloudSubscribe(_PluginBase):
                 0, int(config.get("dian115_max_points_per_sub", 20) or 0)
             )
 
-            self._hdhive_enabled = "hdhive" in selected_sources
             self._hdhive_base_url = str(
                 config.get("hdhive_base_url", "https://re0.me") or "https://re0.me"
             ).strip()
@@ -1114,6 +1153,13 @@ class CloudSubscribe(_PluginBase):
                 "tianyi": self._tianyi_media_path,
                 "alipan": self._alipan_media_path,
             }.get(self._cloud_drive_key, "/")
+            self._organize_after_transfer = bool(config.get("organize_after_transfer", True))
+            self._organize_subtitles = bool(config.get("organize_subtitles", True))
+            self._subtitle_traditional_to_simplified = bool(
+                config.get("subtitle_traditional_to_simplified", False)
+            )
+            self._anime_pack_preferred = bool(config.get("anime_pack_preferred", True))
+            self._offline_timeout = max(10, min(int(config.get("offline_timeout", 30) or 30), 1440))
             self._strm_generate_enabled = bool(config.get("strm_generate_enabled", True))
             self._nfo_scrape_enabled = bool(config.get("nfo_scrape_enabled", False))
             self._image_scrape_enabled = bool(config.get("image_scrape_enabled", False))
@@ -1356,7 +1402,7 @@ class CloudSubscribe(_PluginBase):
             timeout=self._uindex_timeout,
             request_interval=self._uindex_request_interval,
         )
-        if self._juying_enabled or self._juying_checkin_enabled:
+        if self._juying_checkin_enabled or "juying" in self._search_source_order:
             self._juying_client = JuyingClient(
                 base_url=self._juying_base_url,
                 username=self._juying_username,
@@ -1368,7 +1414,7 @@ class CloudSubscribe(_PluginBase):
             )
             if not self._juying_username or not self._juying_password:
                 logger.warning("聚影已启用但未配置网页登录账号和密码，将无法使用搜索或签到")
-        if self._pinglian_enabled:
+        if "pinglian" in self._search_source_order:
             self._pinglian_client = PinglianClient(
                 base_url=self._pinglian_base_url,
                 username=self._pinglian_username,
@@ -1392,7 +1438,7 @@ class CloudSubscribe(_PluginBase):
             self._init_hdhive_openapi_client(proxy)
         else:
             self._hdhive_client = None
-        if self._hdhive_enabled:
+        if "hdhive" in self._search_source_order:
             if self._hdhive_query_mode == "web" and (not self._hdhive_username or not self._hdhive_password):
                 logger.warning("HDHive WebAPI 已启用但未配置用户名和密码，将无法使用 HDHive 查询功能")
             elif self._hdhive_query_mode == "api" and (not self._hdhive_client or not self._hdhive_client.is_ready):
@@ -1644,7 +1690,7 @@ class CloudSubscribe(_PluginBase):
         self._hdhive_client = client
 
         if not client.app_secret:
-            if self._hdhive_enabled:
+            if "hdhive" in self._search_source_order:
                 logger.warning("HDHive OpenAPI: 缺少应用 Secret；Token 已加载但无法调用官方接口")
             return
 
@@ -1710,20 +1756,12 @@ class CloudSubscribe(_PluginBase):
             hdhive_client=self._hdhive_client,
             seedhub_client=self._seedhub_client,
             piratebay_client=self._piratebay_client,
+            piratebay_result_limit=self._piratebay_result_limit,
             uindex_client=self._uindex_client,
+            uindex_result_limit=self._uindex_result_limit,
             juying_client=self._juying_client,
             pinglian_client=self._pinglian_client,
             online_docs_client=self._online_docs_client,
-            pansou_enabled=self._pansou_enabled,
-            hdhive_enabled=self._hdhive_enabled,
-            dian115_enabled=self._dian115_enabled,
-            seedhub_enabled=self._seedhub_enabled,
-            piratebay_enabled=self._piratebay_enabled,
-            piratebay_result_limit=self._piratebay_result_limit,
-            uindex_enabled=self._uindex_enabled,
-            uindex_result_limit=self._uindex_result_limit,
-            juying_enabled=self._juying_enabled,
-            pinglian_enabled=self._pinglian_enabled,
             hdhive_query_mode=self._hdhive_query_mode,
             hdhive_auto_unlock=self._hdhive_auto_unlock,
             hdhive_max_unlock_points=self._hdhive_max_unlock_points,
@@ -1766,6 +1804,23 @@ class CloudSubscribe(_PluginBase):
             enable_cloud_upgrade=self._enable_cloud_upgrade,
             upgrade_subscribe_ids=self._upgrade_subscribe_ids,
             should_stop=self._stop_requested,
+            mikan_base_url=self._mikan_base_url,
+            mikan_result_limit=self._mikan_result_limit,
+            mikan_request_interval=self._mikan_request_interval,
+            mikan_timeout=self._mikan_timeout,
+            mikan_fansub_order=self._mikan_fansub_order,
+            mikan_exclude_re=self._mikan_exclude_re,
+            mikan_no_subs_re=self._mikan_no_subs_re,
+            mikan_chinese_re=self._mikan_chinese_re,
+            animegarden_base_url=self._animegarden_base_url,
+            animegarden_result_limit=self._animegarden_result_limit,
+            animegarden_request_interval=self._animegarden_request_interval,
+            animegarden_timeout=self._animegarden_timeout,
+            animegarden_fansub_order=self._animegarden_fansub_order,
+            animegarden_exclude_re=self._animegarden_exclude_re,
+            animegarden_no_subs_re=self._animegarden_no_subs_re,
+            animegarden_chinese_re=self._animegarden_chinese_re,
+            anime_pack_preferred=bool(self._anime_pack_preferred),
         )
         # 积分花费属于业务状态，不是可丢弃的搜索缓存。
         self._search_handler.configure_point_storage(
@@ -1811,6 +1866,13 @@ class CloudSubscribe(_PluginBase):
             image_scrape_enabled=self._image_scrape_enabled,
             strm_base_url=self._strm_base_url,
             strm_url_template=self._strm_url_template,
+            organize_after_transfer=bool(self._organize_after_transfer),
+            organize_subtitles=bool(self._organize_subtitles),
+            subtitle_traditional_to_simplified=bool(
+                self._subtitle_traditional_to_simplified
+            ),
+            anime_pack_preferred=bool(self._anime_pack_preferred),
+            offline_timeout=int(self._offline_timeout),
             media_server_refresh_enabled=self._media_server_refresh_enabled,
             media_servers=self._media_servers,
             media_server_path_mappings=self._media_server_path_mappings,

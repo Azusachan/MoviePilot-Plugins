@@ -7,7 +7,11 @@ from urllib.parse import urlsplit, urlunsplit
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
 
@@ -142,6 +146,11 @@ class UIConfig:
             "alipan_refresh_token": "",
             "alipan_request_timeout": 60,
             "cloud_drive": "115",
+            "organize_after_transfer": True,
+            "organize_subtitles": True,
+            "subtitle_traditional_to_simplified": False,
+            "anime_pack_preferred": True,
+            "offline_timeout": 30,
             "strm_generate_enabled": True,
             "nfo_scrape_enabled": False,
             "image_scrape_enabled": False,
@@ -194,6 +203,36 @@ class UIConfig:
             "piratebay_result_limit": 20,
             "piratebay_request_interval": 1.0,
             "piratebay_timeout": 20,
+            "mikan_base_url": "https://mikanani.me",
+            "mikan_result_limit": 10,
+            "mikan_request_interval": 2.0,
+            "mikan_timeout": 30,
+            "mikan_fansub_order": [
+                "LoliHouse",
+                "VCB-Studio",
+                "喵萌奶茶|Nekomoe",
+                "Nix-Raws",
+                r"\bANI\b|ANi",
+            ],
+            "mikan_fansub_exclude": "",
+            "mikan_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
+            "mikan_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
+            "mikan_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
+            "animegarden_base_url": "https://animes.garden/",
+
+            "animegarden_fansub_order": [
+                "LoliHouse",
+                "VCB-Studio",
+                "喵萌奶茶|Nekomoe",
+                "Nix-Raws",
+                r"\bANI\b|ANi",
+            ],
+            "animegarden_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
+            "animegarden_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
+            "animegarden_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
+            "animegarden_result_limit": 10,
+            "animegarden_request_interval": 1.0,
+            "animegarden_timeout": 30,
             "uindex_result_limit": 20,
             "uindex_request_interval": 1.0,
             "uindex_timeout": 20,
@@ -287,6 +326,8 @@ class UIConfig:
             "tianyi_media_path": "/",
             "alipan_media_path": "/",
             "self_heal_interval": 10,
+            "anime_pack_preferred": True,
+            "offline_timeout": 30,
         }
 
     @staticmethod

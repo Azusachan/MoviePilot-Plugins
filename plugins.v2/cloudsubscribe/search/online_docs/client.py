@@ -11,7 +11,14 @@ from urllib.parse import urlparse
 import unicodedata
 from app.log import logger
 
-from ..http_client import normalize_proxies, requests
+from ..http_client import (
+    RequestGate,
+    gated_idempotent_request,
+    gated_request,
+    normalize_proxies,
+    request_error_summary,
+    requests,
+)
 from ..types import resource_type_from_url
 
 _DOC_HOSTS = {"kdocs.cn", "www.kdocs.cn", "docs.qq.com", "docs.weixin.qq.com"}

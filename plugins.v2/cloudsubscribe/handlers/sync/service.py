@@ -8,10 +8,11 @@ import hashlib
 import re
 import threading
 import time
+import traceback
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping
+from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping, Iterable
 
 from app.core.config import global_vars
 from app.core.context import MediaInfo
@@ -224,6 +225,11 @@ class SyncHandler:
             media_server_refresh_delay: int = 0,
             emby_mediainfo_enabled: bool = False,
             platform_transfer_history_enabled: bool = False,
+            organize_after_transfer: bool = True,
+            organize_subtitles: bool = True,
+            subtitle_traditional_to_simplified: bool = False,
+            anime_pack_preferred: bool = True,
+            offline_timeout: int = 30,
             should_stop: Callable[[], bool] = None,
             offline_pending_changed: Callable[[int], None] = None,
             history_changed: Callable[[], None] = None,
@@ -258,6 +264,10 @@ class SyncHandler:
         :param strm_base_url: STRM 模板中的 base_url
         :param strm_url_template: STRM 内容模板
         :param platform_transfer_history_enabled: 是否写入整理历史
+        :param organize_subtitles: 是否开启全局伴随字幕整理
+        :param subtitle_traditional_to_simplified: 是否开启字幕自动繁体转简体
+        :param anime_pack_preferred: 是否优先下载动漫完结合集
+        :param offline_timeout: 离线下载超时时间（分钟）
         :param should_stop: 当前同步任务是否已请求停止
         :param offline_pending_changed: 待后处理任务数量变化回调
         :param file_finalized: 文件真正完成后的通知回调
@@ -265,6 +275,14 @@ class SyncHandler:
         :param task_context: 当前订阅任务标识与停止事件回调
         """
         self._cloud_drive = cloud_drive
+        self._organize_after_transfer = bool(organize_after_transfer)
+        self._organize_subtitles = bool(organize_subtitles)
+        self._subtitle_traditional_to_simplified = bool(
+            subtitle_traditional_to_simplified
+        )
+        self._anime_pack_preferred = bool(anime_pack_preferred)
+        self._offline_timeout = max(10, min(int(offline_timeout or 30), 1440)) * 60
+        self._OFFLINE_TIMEOUT = self._offline_timeout
         self._cross_transfer_enabled = bool(cross_transfer_enabled)
         self._cross_transfer_media_types = {
             self._normalize_cross_transfer_media_type(value)
@@ -1061,7 +1079,7 @@ class SyncHandler:
                 )
 
         if not tmdb_id:
-            logger.debug(
+            logger.warning(
                 f"订阅 TMDB ID 自动修复未找到安全匹配："
                 f"{getattr(subscribe, 'name', '')} "
                 f"({getattr(subscribe, 'year', '')})，"
@@ -1135,6 +1153,7 @@ class SyncHandler:
                         ("vote", "vote_average"),
                         ("release_date", "release_date"),
                         ("media_category", "category"),
+                        ("episode_group", "episode_group"),
                 ):
                     value = (
                         legacy_media_ids(subscribe).get(source_field)
@@ -1172,7 +1191,7 @@ class SyncHandler:
             meta.begin_season = season
         source, media_id = media_identity(subscribe)
         legacy_ids = legacy_media_ids(subscribe)
-        return self._recognize_media_once(
+        recognized = self._recognize_media_once(
             (
                 "subscribe_fallback", media_type.value,
                 source, media_id, title,
@@ -1185,6 +1204,12 @@ class SyncHandler:
             **legacy_ids,
             cache=cache,
         )
+        if recognized and hasattr(subscribe, "episode_group") and getattr(subscribe, "episode_group", None):
+            try:
+                recognized.episode_group = getattr(subscribe, "episode_group")
+            except (AttributeError, TypeError, ValueError):
+                pass
+        return recognized
 
     def _recognize_media_once(self, key: Tuple[Any, ...], **kwargs: Any):
         cache_key = normalize_platform_cache_key(key)
@@ -1785,11 +1810,18 @@ class SyncHandler:
             logger.warning(f"批量元数据刮削失败：{error}")
 
     def _offline_hash(self, share_url: str) -> str:
-        match = re.search(r"\|([0-9A-Fa-f]{32})(?:\|[^|]*)*\|/$", str(share_url or ""))
+        text = str(share_url or "").strip()
+        match = re.search(r"\|([0-9A-Fa-f]{32})(?:\|[^|]*)*\|/$", text)
         if match:
             return match.group(1).upper()
-        magnet = self._offline_download.parse_magnet_link(share_url)
-        return str((magnet or {}).get("hash") or "").upper()
+        if self._offline_download:
+            try:
+                magnet = self._offline_download.parse_magnet_link(text)
+                if (magnet or {}).get("hash"):
+                    return str(magnet.get("hash") or "").upper()
+            except Exception:
+                pass
+        return hashlib.sha1(text.encode("utf-8")).hexdigest().upper() if text else ""
 
     def _resource_log_reference(self, share_url: str) -> str:
         """Magnet 日志仅展示 infoHash，避免输出完整 Tracker 参数。"""
@@ -1850,6 +1882,100 @@ class SyncHandler:
                 return True
         return False
 
+    @classmethod
+    def _is_same_media_target(
+            cls,
+            item: Dict[str, Any],
+            mediainfo: Optional[Any] = None,
+            subscribe: Optional[Any] = None,
+            subscribe_id: Optional[Any] = None,
+    ) -> bool:
+        """多维度判断 pending 中的任务与当前候选是否属于同一媒体。"""
+        # 1. 优先比对权威 TMDB ID（若双方都有，不一致则绝对不是同一媒体，一致则判定为同一媒体）
+        item_tmdb_id = (
+                (item.get("mediainfo") or {}).get("tmdb_id")
+                or (item.get("target_subscribe") or {}).get("tmdbid")
+                or tmdb_id_of(item.get("target_subscribe"))
+        )
+        target_tmdb_id = (
+                getattr(mediainfo, "tmdb_id", None)
+                or (tmdb_id_of(subscribe) if subscribe else None)
+                or (mediainfo.get("tmdb_id") if isinstance(mediainfo, dict) else None)
+        )
+        try:
+            if item_tmdb_id and target_tmdb_id and int(item_tmdb_id) > 0 and int(target_tmdb_id) > 0:
+                if int(item_tmdb_id) != int(target_tmdb_id):
+                    return False
+                return True
+        except (ValueError, TypeError):
+            pass
+
+        # 2. 比对豆瓣 ID
+        item_douban_id = (
+                (item.get("mediainfo") or {}).get("douban_id")
+                or (item.get("target_subscribe") or {}).get("doubanid")
+        )
+        target_douban_id = (
+                getattr(mediainfo, "douban_id", None)
+                or (legacy_media_ids(subscribe).get("doubanid") if subscribe else None)
+                or (mediainfo.get("douban_id") if isinstance(mediainfo, dict) else None)
+        )
+        if item_douban_id and target_douban_id:
+            s_item_douban = str(item_douban_id).strip()
+            s_target_douban = str(target_douban_id).strip()
+            if s_item_douban and s_target_douban:
+                if s_item_douban != s_target_douban:
+                    return False
+                return True
+
+        # 3. 比对 subscribe_id
+        target_sid = str(subscribe_id or (getattr(subscribe, "id", None) if subscribe else "") or "").strip()
+        item_sid = str(item.get("subscribe_id") or "").strip()
+        if target_sid and target_sid != "0" and item_sid and item_sid != "0":
+            if target_sid == item_sid:
+                return True
+
+        # 4. 提取并比对规范化标题 + 年份
+        item_media = item.get("mediainfo") or {}
+        item_title = str(
+            item_media.get("title") or (item.get("target_subscribe") or {}).get("name") or "").strip().lower()
+        target_title = str(getattr(mediainfo, "title", None) or getattr(subscribe, "name", None) or (
+            mediainfo.get("title") if isinstance(mediainfo, dict) else "") or "").strip().lower()
+        if item_title and target_title and item_title == target_title:
+            item_year = str(item_media.get("year") or (item.get("target_subscribe") or {}).get("year") or "").strip()
+            target_year = str(getattr(mediainfo, "year", None) or getattr(subscribe, "year", None) or (
+                mediainfo.get("year") if isinstance(mediainfo, dict) else "") or "").strip()
+            if not item_year or not target_year or item_year == target_year:
+                return True
+
+        return False
+
+    @classmethod
+    def _unreserved_episodes(
+            cls,
+            pending: Dict[str, Any],
+            subscribe_id: Any = None,
+            season: Any = None,
+            targets: Iterable[int] = (),
+            mediainfo: Optional[Any] = None,
+            subscribe: Optional[Any] = None,
+    ) -> List[int]:
+        """过滤掉当前已有未完成离线任务的目标集数，防止并发重复提交下载。"""
+        reserved: Set[int] = set()
+        target_season = str(season or "").strip()
+        for item in (pending or {}).values():
+            item_season = str(item.get("season") or "").strip()
+            if item_season == target_season and not item.get("upgrade"):
+                if cls._is_same_media_target(item, mediainfo=mediainfo, subscribe=subscribe, subscribe_id=subscribe_id):
+                    for value in item.get("target_episodes") or []:
+                        try:
+                            num = int(value)
+                            if num > 0:
+                                reserved.add(num)
+                        except (ValueError, TypeError):
+                            continue
+        return sorted(set(targets or []) - reserved)
+
     def _queue_magnet_package(
             self,
             resource: Dict[str, Any],
@@ -1864,14 +1990,14 @@ class SyncHandler:
             upgrade_baseline: Optional[Dict[str, Any]] = None,
             transient_target: bool = False,
     ) -> str:
-        """提交 Magnet 到隔离目录；下载完成后再按真实文件树匹配。"""
+        """提交离线下载（Magnet/ED2K/直链离线等）到隔离目录；下载完成后再按真实文件树匹配。"""
         info_hash = self._offline_hash(share_url)
         magnet_title = self._prepare_magnet_resource(resource, share_url)
         metadata = resource.get("magnet_metadata") or {}
         title_seasons = self._magnet_title_seasons(resource)
         if season is not None and title_seasons and int(season) not in title_seasons:
             logger.debug(
-                "Magnet 标题预过滤排除，未请求远端内容元数据："
+                "离线资源标题预过滤排除，未请求远端内容元数据："
                 f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
                 f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
             )
@@ -1890,7 +2016,7 @@ class SyncHandler:
             confirmed_targets = target_episode_set & title_episodes
             if not confirmed_targets:
                 logger.debug(
-                    "Magnet 标题预过滤排除，未请求远端内容元数据："
+                    "离线资源标题预过滤排除，未请求远端内容元数据："
                     f"标题集数={self._format_episode_ranges(title_episodes)}，"
                     f"目标集数={self._format_episode_ranges(target_episode_set)}，"
                     f"标题={magnet_title or info_hash}"
@@ -1898,13 +2024,14 @@ class SyncHandler:
                 return ""
             target_episodes[:] = sorted(confirmed_targets)
             logger.debug(
-                "Magnet 标题预过滤命中，跳过远端内容元数据获取："
+                "离线资源标题预过滤命中，跳过远端内容元数据获取："
                 f"标题集数={self._format_episode_ranges(title_episodes)}，"
                 f"目标集数={self._format_episode_ranges(target_episode_set)}，"
                 f"标题={magnet_title or info_hash}"
             )
         if (
-                not title_episodes
+                self._is_magnet_url(share_url)
+                and not title_episodes
                 and not preview_episodes
                 and not metadata.get("torrent_files")
         ):
@@ -1954,24 +2081,25 @@ class SyncHandler:
                 not info_hash
                 or not self._get_data
                 or (
-                not bool(metadata.get("metadata_available"))
+                self._is_magnet_url(share_url)
+                and not bool(metadata.get("metadata_available"))
                 and not bool(title_episodes)
                 and not bool(preview_episodes)
         )
         ):
             logger.debug(
-                "Magnet 标题和远端内容元数据均未提供可确认内容，已跳过："
+                "离线资源标题和元数据均未提供可确认内容，已跳过："
                 f"{magnet_title or info_hash}"
             )
             return ""
-        if season is not None and target_episodes:
+        if season is not None and target_episodes and preview_episodes:
             target_episode_set = {
                 int(value) for value in target_episodes if int(value) > 0
             }
             confirmed_targets = target_episode_set & preview_episodes
             if not confirmed_targets:
                 logger.debug(
-                    "Magnet 内容确认未覆盖目标集数，已跳过网盘离线下载候选："
+                    "离线资源内容确认未覆盖目标集数，已跳过网盘离线下载候选："
                     f"内容集数={self._format_episode_ranges(preview_episodes)}，"
                     f"目标集数={self._format_episode_ranges(target_episode_set)}，"
                     f"标题={magnet_title or info_hash}"
@@ -1979,21 +2107,70 @@ class SyncHandler:
                 return ""
             target_episodes[:] = sorted(confirmed_targets)
         subscribe_id = int(getattr(subscribe, "id", 0) or 0)
-        pending_key = f"magnet:{info_hash}:{subscribe_id}"
+        prefix = "magnet" if self._is_magnet_url(share_url) else "offline"
+        pending_key = f"{prefix}:{info_hash}:{subscribe_id}"
         staging_dir = f"{self._cloud_transfer_path.rstrip('/')}"
+
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
-            if pending_key in pending:
+            existing = pending.get(pending_key)
+            if existing and existing.get("status") != "submitting":
                 return pending_key
-        if not self._offline_download.add_offline_download(share_url, staging_dir):
+            if season and target_episodes and not upgrade:
+                target_episodes[:] = self._unreserved_episodes(
+                    pending,
+                    subscribe_id=subscribe_id,
+                    season=season,
+                    targets=target_episodes,
+                    mediainfo=mediainfo,
+                    subscribe=subscribe,
+                )
+                if not target_episodes:
+                    logger.debug(f"跳过同集重复离线：S{int(season):02d}")
+                    return ""
+
+            # 写入占位（In-Flight 状态，防止并发穿透同集提交）
+            pending[pending_key] = {
+                "pending_key": pending_key,
+                "task_type": prefix,
+                "status": "submitting",
+                "subscribe_id": subscribe_id,
+                "season": season,
+                "target_episodes": sorted({int(value) for value in target_episodes if int(value) > 0}),
+                "mediainfo": self._serialize_mediainfo(mediainfo),
+                "target_subscribe": {
+                    "tmdbid": tmdb_id_of(subscribe) if subscribe else None,
+                    "name": str(getattr(subscribe, "name", "") or ""),
+                } if subscribe else {},
+                "created_at": time.time(),
+            }
+            self._save_offline_pending(pending)
+
+        # 实际调用网盘离线下载接口
+        submit_ok = False
+        try:
+            submit_ok = bool(self._offline_download.add_offline_download(share_url, staging_dir))
+        except Exception as err:
+            logger.error(f"提交网盘离线下载接口异常：{err}")
+            submit_ok = False
+
+        if not submit_ok:
+            # 失败回滚清理临时占位
+            with self._offline_pending_lock:
+                pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
+                if pending_key in pending and pending[pending_key].get("status") == "submitting":
+                    pending.pop(pending_key, None)
+                    self._save_offline_pending(pending)
             self._add_offline_blacklist(share_url, "提交离线下载失败")
             return ""
+
+        # 成功转为正式任务记录并持久化
         now = time.time()
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             pending[pending_key] = {
                 "pending_key": pending_key,
-                "task_type": "magnet",
+                "task_type": prefix,
                 "task_id": info_hash,
                 "share_url": share_url,
                 "cloud_dir": staging_dir,
@@ -2037,7 +2214,7 @@ class SyncHandler:
             pending_count = len(pending)
         self._notify_offline_pending_changed(pending_count)
         logger.info(
-            f"⏳ Magnet 已提交115隔离目录，完成后按真实文件匹配：{pending[pending_key]['file_name']}"
+            f"离线任务已提交：{pending[pending_key]['file_name']}"
         )
         return pending_key
 
@@ -2746,6 +2923,16 @@ class SyncHandler:
             )
             if classified_root:
                 resolved = Path(classified_root)
+        if resolved is None:
+            # 平台未配置媒体分类目录时，按 MoviePilot 标准分类兜底：<媒体库>/电影|电视剧，避免落到根目录。
+            media_type_value = getattr(
+                getattr(mediainfo, "type", None), "value", None
+            )
+            if media_type_value in {
+                MediaType.MOVIE.value,
+                MediaType.TV.value,
+            }:
+                resolved = Path(str(root_path or "/")) / media_type_value
 
         with self._platform_root_lock:
             self._platform_root_cache.set(cache_key, resolved)
@@ -2767,7 +2954,11 @@ class SyncHandler:
         )
         if not classified_root:
             return None
-        meta = MetaInfo(source_name)
+        custom_words_list = None
+        if subscribe and getattr(subscribe, "custom_words", None):
+            cw = subscribe.custom_words
+            custom_words_list = [w for w in (cw.split("\n") if isinstance(cw, str) else list(cw)) if w.strip()]
+        meta = MetaInfo(source_name, custom_words=custom_words_list)
         meta.type = effective_media.type
         meta.year = getattr(subscribe, "year", None) or effective_media.year
         if season is not None:
@@ -2776,8 +2967,31 @@ class SyncHandler:
             meta.begin_episode = episode
         relative_name = FileManagerModule.recommend_name(meta, effective_media)
         if not relative_name:
-            return None
+            clean_title = effective_media.title or getattr(subscribe, "name", "") or "Unknown"
+            clean_year = getattr(subscribe, "year", None) or effective_media.year or ""
+            year_part = f" ({clean_year})" if clean_year else ""
+            source_suffix = Path(source_name).suffix or ".mp4"
+            if effective_media.type == MediaType.TV:
+                s_num = max(1, int(season or 1))
+                e_num = max(1, int(episode or 1))
+                relative_name = f"{clean_title}{year_part}/Season {s_num}/{clean_title} - S{s_num:02d}E{e_num:02d}{source_suffix}"
+            else:
+                relative_name = f"{clean_title}{year_part}/{clean_title}{year_part}{source_suffix}"
         return classified_root / Path(relative_name)
+
+    def _platform_target_file(
+            self,
+            root_path: str,
+            subscribe,
+            mediainfo: MediaInfo,
+            source_name: str,
+            season: int = None,
+            episode: int = None,
+    ) -> Optional[Path]:
+        """生成平台目标文件路径。"""
+        return self._platform_rename_path(
+            root_path, subscribe, mediainfo, source_name, season, episode
+        )
 
     def _platform_target(
             self,
@@ -2789,12 +3003,15 @@ class SyncHandler:
             episode: int = None,
     ) -> Tuple[str, str]:
         """生成平台分类后的目标目录和规范文件名。"""
-        target_path = self._platform_rename_path(
+        full_path = self._platform_target_file(
             root_path, subscribe, mediainfo, source_name, season, episode
         )
-        if not target_path:
-            raise ValueError(f"MoviePilot 未生成目标路径：{mediainfo.title_year}")
-        return target_path.parent.as_posix(), target_path.name
+        if not full_path:
+            return "", ""
+        parent_posix = full_path.parent.as_posix()
+        if not parent_posix.startswith("/"):
+            parent_posix = "/" + parent_posix.lstrip("/")
+        return parent_posix, full_path.name
 
     @staticmethod
     def _effective_mediainfo(subscribe, mediainfo: MediaInfo) -> MediaInfo:
@@ -2900,6 +3117,7 @@ class SyncHandler:
             season=season,
             start_episode=start_episode,
             total_episode=total_episode,
+            subscribe=subscribe,
         )
 
         if found_episodes:
@@ -2915,11 +3133,17 @@ class SyncHandler:
             season: int,
             start_episode: Optional[int] = None,
             total_episode: Optional[int] = None,
+            subscribe: Any = None,
     ) -> Set[int]:
-        """使用元数据解析器从文件名提取目标季集数。"""
+        """使用元数据解析器从文件名提取目标季集数，支持订阅卡片的自定义词与偏移规则。"""
         found_episodes = set()
+        custom_words_list = None
+        if subscribe and getattr(subscribe, "custom_words", None):
+            cw = subscribe.custom_words
+            custom_words_list = [w for w in (cw.split("\n") if isinstance(cw, str) else list(cw)) if w.strip()]
+
         for file_name in file_names:
-            file_meta = MetaInfo(Path(str(file_name)).stem)
+            file_meta = MetaInfo(Path(str(file_name)).stem, custom_words=custom_words_list)
             file_season = file_meta.begin_season or season
             if file_season != season:
                 continue
@@ -2966,7 +3190,7 @@ class SyncHandler:
             if not MediaFileParser.is_video(name):
                 continue
             episodes = self._parse_resource_episode_names(
-                [name], season, start_episode, total_episode
+                [name], season, start_episode, total_episode, subscribe=subscribe
             )
             for episode in episodes:
                 current = episode_files.get(episode)
@@ -3415,9 +3639,6 @@ class SyncHandler:
         :param all_subs: 所有订阅列表（SubscribeOper().list() 结果）
         :return: 本次完成的订阅数（新增的 lack_episode=0 的个数）
         """
-        from app.db.subscribe_oper import SubscribeOper
-        from app.schemas.types import MediaType
-
         completed_count = 0
 
         for subscribe in all_subs:
@@ -3462,7 +3683,6 @@ class SyncHandler:
 
             except Exception as e:
                 logger.warning(f"订阅完结检查异常 {getattr(subscribe, 'name', '?')}：{e}")
-                import traceback
                 logger.debug(traceback.format_exc())
 
         return completed_count

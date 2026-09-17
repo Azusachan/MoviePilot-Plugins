@@ -78,7 +78,6 @@
       :get-source-name="getSourceName"
       :search-channel="searchChannel"
       :res-key="resKey"
-      :get-extracted-tags="getExtractedTags"
       :get-tag-color-class="getTagColorClass"
       :get-resource-size="getResourceSize"
       :open-unlock-dialog="openUnlockDialog"
@@ -258,7 +257,14 @@ function getMediaGenresList(item) {
     const list = item.genre_ids.map((id) => TMDB_GENRES[id] || id).filter(Boolean);
     if (list.length) return list;
   }
-  if (Array.isArray(item.tags)) return item.tags;
+  if (Array.isArray(item.tags)) {
+    return item.tags.filter((t) => {
+      const s = String(t || "").trim();
+      if (!s) return false;
+      if (/^\d{4}(\.\d+)?$/.test(s)) return false;
+      return true;
+    });
+  }
   return [];
 }
 
@@ -569,6 +575,7 @@ function getSourceColor(source) {
     hdhive: "amber-darken-1",
     piratebay: "teal",
     uindex: "blue",
+    mikan: "pink",
     seedhub: "deep-purple",
     pansou: "indigo",
     juying: "orange",
@@ -588,6 +595,8 @@ function getSourceName(source) {
     pinglian: "盘链",
     piratebay: "海盗湾",
     uindex: "UIndex",
+    mikan: "Mikan",
+    animegarden: "AnimeGarden",
     online_docs: "在线文档",
   };
   return map[String(source).toLowerCase()] || source || "未知";
@@ -722,39 +731,6 @@ async function confirmCrossTransfer() {
   }
 }
 
-function getExtractedTags(res) {
-  const specs = [];
-  const rawTitle = String(res.title || "");
-  const title = rawTitle.toUpperCase();
-  if (/(?:\b|\[|\.)(?:4K|2160P|UHD)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("4K");
-  } else if (/(?:\b|\[|\.)(?:1080P|1080I|FHD)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("1080P");
-  } else if (/(?:\b|\[|\.)(?:720P)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("720P");
-  }
-  if (/\.ISO\b/i.test(title) || /\[\d+(?:\.\d+)?GB\]\.ISO/i.test(title)) {
-    specs.push("原盘ISO");
-  } else if (/REMUX/i.test(title)) {
-    specs.push("REMUX");
-  } else if (/(?:\b|\[|\.)(?:BDMV|BLURAY|BLU-RAY)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("BluRay");
-  } else if (/WEB-DL|WEBDL|WEB-RIP/i.test(title)) {
-    specs.push("WEB-DL");
-  }
-  if (/DV|DOLBY\s*VISION|杜比视界/i.test(title)) specs.push("杜比视界");
-  if (/HDR10\+/i.test(title)) specs.push("HDR10+");
-  else if (/(?:\b|\[|\.)HDR10?(?:\b|\]|\.)/i.test(title)) specs.push("HDR");
-  if (/60FPS|60帧/i.test(title)) specs.push("60帧");
-  else if (/120FPS|120帧/i.test(title)) specs.push("120帧");
-  const languageTag = title.match(/内封(?:简繁英|简繁中英|简繁|简中|繁中|中文|英语|英文)/i);
-  if (languageTag) specs.push(languageTag[0]);
-  else if (/中字|内嵌|简繁|双语|中英|\bCHS\b|\bCHT\b/i.test(title)) specs.push("中字");
-  if (/国语|国配|国粤/i.test(title)) specs.push("国语");
-  if (/粤语/i.test(title)) specs.push("粤语");
-  if (/ATMOS|全景声/i.test(title)) specs.push("杜比全景声");
-  return specs;
-}
 
 function metadataLabels(value) {
   if (Array.isArray(value)) {

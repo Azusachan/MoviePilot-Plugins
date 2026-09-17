@@ -84,8 +84,7 @@ class Dian115SearchService(OwnerDelegator):
     @property
     def available(self) -> bool:
         return bool(
-            self._dian115_enabled
-            and self._dian115_email
+            self._dian115_email
             and self._dian115_password
         )
 

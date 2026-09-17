@@ -2,7 +2,6 @@ import {computed, ref, watch} from "vue";
 import {
   DEFAULT_CHANNELS,
   getChannelDefaultIcon,
-  getExtractedTags,
   getNormalizedResourceType,
   getResourceTabIcon,
   getResourceTypeName,
@@ -25,14 +24,62 @@ function getMediaCacheKey(media) {
   return `${type}:${id}:${title}:${year}`;
 }
 
+
 /** 管理详情弹窗的数据补全、并发取消和生命周期。 */
 export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const detailVisible = ref(false);
   const detailLoading = ref(false);
   const activeMedia = ref(null);
   const activeDetailSeason = ref(1);
+
+  function isAnimeMedia(media) {
+    if (!media) return false;
+    if (Boolean(media.is_anime)) return true;
+    if (media.type === "anime" || media.category === "anime") return true;
+    if (Array.isArray(media.genre_ids) && media.genre_ids.includes(16)) return true;
+    const genres = Array.isArray(media.genres) ? media.genres : [];
+    return genres.some((g) => {
+      const name = typeof g === "object" ? (g.name || "") : String(g);
+      return /动画|動漫|动漫|animation|anime/i.test(name);
+    });
+  }
+
   const configuredChannels = ref([...DEFAULT_CHANNELS]);
-  const availableChannels = computed(() => configuredChannels.value.filter((channel) => isChannelConfigured(channel.key)));
+  const availableChannels = computed(() => {
+    const config = pluginConfig?.value || {};
+    const sourceOrder = Array.isArray(config.search_source_order) ? config.search_source_order : [];
+    const list = configuredChannels.value.filter((channel) => isChannelConfigured(channel.key));
+
+    if (isAnimeMedia(activeMedia.value)) {
+      const animeSourceOrder = ["mikan", "animegarden"];
+      return [...list].sort((a, b) => {
+        const aAnime = animeSourceOrder.indexOf(a.key);
+        const bAnime = animeSourceOrder.indexOf(b.key);
+        if (aAnime !== -1 && bAnime !== -1) return aAnime - bAnime;
+        if (aAnime !== -1) return -1;
+        if (bAnime !== -1) return 1;
+        const aIndex = sourceOrder.indexOf(a.key);
+        const bIndex = sourceOrder.indexOf(b.key);
+        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+        if (aIndex !== -1) return -1;
+        if (bIndex !== -1) return 1;
+        return 0;
+      });
+    }
+
+    if (sourceOrder.length > 0) {
+      return [...list].sort((a, b) => {
+        const aIndex = sourceOrder.indexOf(a.key);
+        const bIndex = sourceOrder.indexOf(b.key);
+        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+        if (aIndex !== -1) return -1;
+        if (bIndex !== -1) return 1;
+        return 0;
+      });
+    }
+
+    return list;
+  });
   const availableDrives = ref([
     {key: "115", name: "115网盘"},
     {key: "quark", name: "夸克网盘"},
@@ -53,28 +100,77 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
 
   function isChannelConfigured(channelKey) {
     const config = pluginConfig?.value || {};
-    if (channelKey === "pansou") return Boolean(config.pansou_enabled ?? true);
-    if (channelKey === "seedhub") return Boolean(config.seedhub_enabled ?? true);
-    if (channelKey === "juying") return Boolean(config.juying_enabled ?? true);
-    if (channelKey === "pinglian") return Boolean(config.pinglian_enabled ?? true);
+    const sourceOrder = Array.isArray(config.search_source_order) ? config.search_source_order : [];
+    if (sourceOrder.length > 0 && !sourceOrder.includes(channelKey)) {
+      return false;
+    }
+
+    if (channelKey === "pansou" || channelKey === "seedhub" || channelKey === "piratebay" || channelKey === "uindex") {
+      return true;
+    }
+    if (channelKey === "juying") {
+      return Boolean(config.juying_username && config.juying_password);
+    }
+    if (channelKey === "pinglian") {
+      return Boolean(config.pinglian_username && config.pinglian_password);
+    }
     if (channelKey === "hdhive") {
-      if (!(config.hdhive_enabled ?? true)) return false;
-      return Boolean(config.hdhive_token || config.search_accounts?.hdhive?.connected);
+      const mode = config.hdhive_query_mode || "web";
+      if (mode === "open_api") {
+        return Boolean(config.hdhive_api_key);
+      }
+      return Boolean(config.hdhive_token || config.hdhive_auth_code || config.search_accounts?.hdhive?.connected);
     }
     if (channelKey === "dian115") {
-      if (!(config.dian115_enabled ?? true)) return false;
       return Boolean((config.dian115_email && config.dian115_password) || config.search_accounts?.dian115?.connected);
     }
-    if (channelKey === "piratebay") return Boolean(config.piratebay_enabled ?? true);
-    if (channelKey === "uindex") return Boolean(config.uindex_enabled ?? true);
-    if (channelKey === "online_docs") return Boolean(config.online_docs_enabled ?? true);
+    if (channelKey === "mikan" || channelKey === "animegarden") {
+      return isAnimeMedia(activeMedia.value);
+    }
+
+    if (channelKey === "online_docs") return true;
     return false;
+  }
+
+  function getItemFansub(item) {
+    if (item?.fansub) return String(item.fansub).trim();
+    const title = String(item?.title || "").trim();
+    const match = title.match(/^[\[【]([^\]】]+)[\]】]/);
+    return match ? match[1].trim() : "其他";
   }
 
   const currentChannelResources = computed(() => channelResults.value[activeChannelTab.value] || []);
   const currentChannelResourceTabs = computed(() => {
+    const list = currentChannelResources.value;
+    const channel = String(activeChannelTab.value || "").toLowerCase();
+    const isAnimeBtChannel = channel === "mikan" || channel === "animegarden";
+
+    if (isAnimeBtChannel) {
+      if (!list.length) return [];
+      const counts = {};
+      for (const item of list) {
+        const fs = getItemFansub(item);
+        counts[fs] = (counts[fs] || 0) + 1;
+      }
+      const sorted = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+      return [
+        {
+          value: "all",
+          title: "全部",
+          count: list.length,
+          icon: "mdi-account-group-outline",
+        },
+        ...sorted.map((fs) => ({
+          value: fs,
+          title: fs,
+          count: counts[fs],
+          icon: "mdi-subtitles-outline",
+        })),
+      ];
+    }
+
     const counts = {};
-    for (const item of currentChannelResources.value) {
+    for (const item of list) {
       const type = getNormalizedResourceType(item);
       counts[type] = (counts[type] || 0) + 1;
     }
@@ -129,9 +225,20 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     const effectiveSelected = availableTabs.some((tab) => tab.value === selected)
       ? selected
       : (availableTabs[0]?.value || "");
-    const tabFiltered = !effectiveSelected
-      ? list
-      : list.filter((item) => getNormalizedResourceType(item) === effectiveSelected);
+
+    const channel = String(activeChannelTab.value || "").toLowerCase();
+    const isAnimeBtChannel = channel === "mikan" || channel === "animegarden";
+
+    let tabFiltered = list;
+    if (isAnimeBtChannel) {
+      if (effectiveSelected && effectiveSelected !== "all") {
+        tabFiltered = list.filter((item) => getItemFansub(item) === effectiveSelected);
+      }
+    } else {
+      tabFiltered = !effectiveSelected
+        ? list
+        : list.filter((item) => getNormalizedResourceType(item) === effectiveSelected);
+    }
 
     // 2. 搜索当前子 tab 列表的文本
     const query = String(resourceSearchQuery.value || "").trim().toLowerCase();
@@ -142,8 +249,8 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
         const desc = String(item?.description || "").toLowerCase();
         const fileName = String(item?.file_name || "").toLowerCase();
         const tags = (item?.tags || []).map((t) => String(t || "").toLowerCase()).join(" ");
-        const extracted = (getExtractedTags(item) || []).map((t) => String(t || "").toLowerCase()).join(" ");
-        return title.includes(query) || desc.includes(query) || fileName.includes(query) || tags.includes(query) || extracted.includes(query);
+        const fansub = String(item?.fansub || "").toLowerCase();
+        return title.includes(query) || desc.includes(query) || fileName.includes(query) || tags.includes(query) || fansub.includes(query);
       });
     }
 
@@ -151,10 +258,7 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     const specs = selectedResourceSpecs.value || [];
     if (specs.length > 0) {
       searched = searched.filter((item) => {
-        const itemTags = [
-          ...(item?.tags || []),
-          ...(getExtractedTags(item) || []),
-        ].map((t) => String(t).toUpperCase());
+        const itemTags = (item?.tags || []).map((t) => String(t).toUpperCase());
         const titleUpper = String(item?.title || "").toUpperCase();
 
         return specs.every((spec) => {
@@ -191,9 +295,7 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   });
 
   function resourceTagCount(resource) {
-    const extracted = getExtractedTags(resource) || [];
-    const raw = Array.isArray(resource?.tags) ? resource.tags : [];
-    return new Set([...extracted, ...raw.map((tag) => String(tag || "").trim()).filter(Boolean)]).size;
+    return Array.isArray(resource?.tags) ? resource.tags.length : 0;
   }
 
   async function loadMediaDetail(item, token = requestToken) {

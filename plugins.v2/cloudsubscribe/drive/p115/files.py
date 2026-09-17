@@ -12,7 +12,7 @@ from app.log import logger
 
 from ..common import create_directory_cache, normalize_path, safe_int
 from ...core import OwnerDelegator
-from ...core.cloud import CloudFile, DirectoryListing, DirectoryLookup
+from ...core.cloud import CloudFile, DirectoryListing, DirectoryLookup, native_dict
 from ...core.transfer import HttpFileDownloadService
 
 try:
@@ -159,12 +159,16 @@ class P115FileMutation:
         return self.manager.rename_file_by_sha1(path, checksum, target_name, **kwargs)
 
     def rename_file(self, path: str, item: CloudFile, target_name: str) -> bool:
-        return self.manager.rename_file_item(path, item.native, item.name, target_name)
+        return self.manager.rename_file_item(
+            path, native_dict(item), item.name, target_name
+        )
 
     def move_file(
             self, item: CloudFile, save_path: str, target_name: str
     ) -> CloudFile | None:
-        return cloud_file(self.manager.move_and_rename_file(item.native, save_path, target_name))
+        return cloud_file(
+            self.manager.move_and_rename_file(native_dict(item), save_path, target_name)
+        )
 
     def delete_file(self, file_id: str) -> bool:
         return self.manager.delete_file(file_id)
@@ -176,7 +180,7 @@ class P115BatchFileMutation:
 
     def rename_files(self, path: str, items: dict) -> dict[str, CloudFile]:
         native_items = {
-            str(key): {**dict(value), "item": value["item"].native}
+            str(key): {**dict(value), "item": native_dict(value["item"])}
             for key, value in items.items()
         }
         renamed = self.manager.rename_file_items_batch(path, native_items)
@@ -189,7 +193,7 @@ class P115BatchFileMutation:
             self, items: dict[str, CloudFile], save_path: str
     ) -> dict[str, CloudFile]:
         moved = self.manager.move_file_items_batch(
-            {str(key): item.native for key, item in items.items()}, save_path
+            {str(key): native_dict(item) for key, item in items.items()}, save_path
         )
         return {
             str(key): file for key, item in (moved or {}).items()
@@ -599,6 +603,13 @@ class P115FileService(OwnerDelegator):
         file_id = item.get("fid") or item.get("id")
         if not file_id:
             return False
+        if current_name == target_name:
+            return True
+        curr_suffix = Path(current_name).suffix
+        if curr_suffix and not target_name.endswith(curr_suffix):
+            target_name = f"{Path(target_name).stem}{curr_suffix}"
+            if current_name == target_name:
+                return True
         try:
             if str(file_id) not in self._rename_items([(file_id, target_name)]):
                 logger.warning(
@@ -795,22 +806,53 @@ class P115FileService(OwnerDelegator):
         if target_pid == -1:
             return None
         source_name = str(item.get("name") or item.get("n") or "").strip()
+        source_suffix = Path(source_name).suffix
+        if source_suffix and not target_name.endswith(source_suffix):
+            target_name = f"{Path(target_name).stem}{source_suffix}"
+
+        moved = dict(item)
+        moved["fid"] = file_id
+
+        # 优先在移动前尝试在源目录完成重命名
+        renamed_success = (source_name == target_name)
+        if not renamed_success:
+            if str(file_id) in self._rename_items([(file_id, target_name)]):
+                renamed_success = True
+                source_name = target_name
+                moved.update({"name": target_name, "n": target_name})
+
+        # 执行移动至目标目录
         try:
             if str(item.get("_parent_cid") or "") != str(target_pid):
                 self._move_items([file_id], target_pid)
-            moved = dict(item)
-            moved["fid"] = file_id
-            if source_name != target_name:
-                if not self.rename_file_item(save_path, moved, source_name, target_name):
-                    return None
-            moved.update({"name": target_name, "n": target_name})
-            self._cache_target_file(save_path, target_name, moved)
-            if item.get("is_dir"):
-                self.path_cache.clear()
-            return moved
+            moved["_parent_cid"] = str(target_pid)
         except Exception as error:
             logger.error(f"移动离线文件失败：{source_name} -> {save_path}/{target_name}，{error}")
             return None
+
+        # 若移动前未改名成功，移入目标目录后再次尝试改名
+        if not renamed_success and source_name != target_name:
+            if str(file_id) in self._rename_items([(file_id, target_name)]):
+                renamed_success = True
+                moved.update({"name": target_name, "n": target_name})
+            else:
+                logger.warning(
+                    f"115 文件已移入目标目录但改名失败，将保持当前文件名继续：{source_name} -> {target_name}"
+                )
+
+        final_name = target_name if renamed_success else source_name
+        moved.update({"name": final_name, "n": final_name})
+        pickcode = (
+                moved.get("pick_code")
+                or moved.get("pickcode")
+                or moved.get("pc")
+        )
+        if pickcode:
+            moved["pickcode"] = str(pickcode)
+        self._cache_target_file(save_path, final_name, moved)
+        if item.get("is_dir"):
+            self.path_cache.clear()
+        return moved
 
     def move_file_items_batch(
             self, items: Dict[str, Dict[str, Any]], save_path: str

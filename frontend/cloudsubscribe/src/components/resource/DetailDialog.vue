@@ -148,10 +148,17 @@
                   <v-icon v-if="activeMedia.tmdb_id || activeMedia.imdb_id" icon="mdi-open-in-new" size="10" class="rating-ext-icon ml-0.5" />
                 </div>
                 <span
-                  v-for="genre in getMediaGenresList(activeMedia)"
+                  v-for="genre in displayedGenres"
                   :key="genre"
                   class="meta-tag-pill meta-tag-pill--genre">
                   {{ genre }}
+                </span>
+                <span
+                  v-if="extraGenresCount > 0"
+                  class="meta-tag-pill meta-tag-pill--genre meta-tag-pill--more cursor-pointer"
+                  :title="isGenresExpanded ? '点击收起标签' : `点击展开剩余 ${extraGenresCount} 个标签`"
+                  @click="isGenresExpanded = !isGenresExpanded">
+                  {{ isGenresExpanded ? "收起" : `+${extraGenresCount}` }}
                 </span>
               </div>
             </div>
@@ -295,7 +302,7 @@
             </v-menu>
 
             <!-- 子 tab 胶囊按钮列表 -->
-            <div class="category-pill-track d-flex align-center ga-1.5">
+            <div class="category-pill-track d-flex align-center ga-1.5 flex-wrap">
               <button
                 v-for="tab in currentChannelResourceTabs"
                 :key="tab.value"
@@ -334,13 +341,14 @@
           </v-btn>
         </div>
 
-        <div v-else-if="!currentChannelFilteredResources.length" class="resource-empty">
+        <div v-else-if="!displayedResources.length" class="resource-empty">
           <template v-if="isFilterActive && currentChannelResources.length > 0">
             <v-icon icon="mdi-filter-remove-outline" size="52" color="medium-emphasis" />
             <p class="mt-2 text-body-2 font-weight-medium text-high-emphasis">
               在【{{ currentSubTabLabel }}】中未找到符合筛选条件的资源
             </p>
-            <p class="text-caption text-medium-emphasis mt-1">当前已生效关键词或规格过滤，您可以点击下方一键清空</p>
+            <p class="text-caption text-medium-emphasis mt-1">
+              当前已生效关键词、规格或字幕组过滤，您可以点击下方一键清空</p>
             <v-btn
               color="primary"
               variant="tonal"
@@ -372,7 +380,7 @@
         </div>
 
         <div v-else class="resource-list d-flex flex-column ga-1.5">
-          <div v-for="(res, idx) in currentChannelFilteredResources" :key="resKey(res, idx)" class="resource-row-item">
+          <div v-for="(res, idx) in displayedResources" :key="resKey(res, idx)" class="resource-row-item">
             <div class="resource-row-header d-flex align-center justify-space-between ga-2">
               <div class="resource-title-box min-w-0 flex-grow-1 d-flex align-center ga-1.5">
                 <span class="resource-title-text min-w-0 flex-grow-1" :title="res.title">
@@ -475,6 +483,13 @@
                 {{ Number(res.unlock_points || 0) }} 积分
               </span>
               <span
+                v-if="res.fansub"
+                class="quality-tag-pill tag-fansub font-weight-medium"
+                :title="`字幕组: ${res.fansub}`">
+                <v-icon icon="mdi-account-group-outline" size="11" class="mr-0.5" />
+                {{ res.fansub }}
+              </span>
+              <span
                 v-else-if="isPointUnlockResource(res) && Number(res.unlock_points || 0) === 0"
                 class="quality-tag-pill tag-free">
                 免费
@@ -501,7 +516,6 @@ import {
   canPreviewResource as defaultCanPreviewResource,
   copyToClipboard as defaultCopyToClipboard,
   getBackdropStyle as defaultGetBackdropStyle,
-  getExtractedTags as defaultGetExtractedTags,
   getLibrarySummary as defaultGetLibrarySummary,
   getMediaGenresList as defaultGetMediaGenresList,
   getMediaRatingInfo as defaultGetMediaRatingInfo,
@@ -557,7 +571,6 @@ const props = defineProps({
   getSourceName: {type: Function, default: null},
   searchChannel: {type: Function, default: null},
   resKey: {type: Function, default: null},
-  getExtractedTags: {type: Function, default: null},
   getTagColorClass: {type: Function, default: null},
   getResourceSize: {type: Function, default: null},
   openUnlockDialog: {type: Function, default: null},
@@ -585,12 +598,32 @@ const emit = defineEmits([
 const model = computed({get: () => props.modelValue, set: (value) => emit("update:modelValue", value)});
 
 const isOverviewExpanded = ref(false);
+const isGenresExpanded = ref(false);
 watch(
   () => props.activeMedia,
   () => {
     isOverviewExpanded.value = false;
+    isGenresExpanded.value = false;
   }
 );
+
+const MAX_VISIBLE_GENRES = 6;
+const allGenresList = computed(() => {
+  return (props.getMediaGenresList ? props.getMediaGenresList(props.activeMedia) : []) || [];
+});
+
+const displayedGenres = computed(() => {
+  const list = allGenresList.value;
+  if (isGenresExpanded.value || list.length <= MAX_VISIBLE_GENRES) {
+    return list;
+  }
+  return list.slice(0, MAX_VISIBLE_GENRES);
+});
+
+const extraGenresCount = computed(() => {
+  const list = allGenresList.value;
+  return Math.max(0, list.length - MAX_VISIBLE_GENRES);
+});
 
 const channelModel = computed({
   get: () => props.activeChannelTab,
@@ -598,13 +631,11 @@ const channelModel = computed({
 });
 const isPointUnlockResource = (res) => defaultIsPointUnlockResource(res);
 
+const displayedResources = computed(() => props.currentChannelFilteredResources || []);
+
 const currentSubTabLabel = computed(() => {
   const found = (props.currentChannelResourceTabs || []).find((t) => t.value === props.activeResourceTab);
-  if (found) return found.title;
-  if (props.currentChannelResourceTabs && props.currentChannelResourceTabs.length > 0) {
-    return props.currentChannelResourceTabs[0].title;
-  }
-  return props.activeResourceTab || "资源列表";
+  return found ? found.title : (props.currentChannelResourceTabs?.[0]?.title || props.activeResourceTab || "资源列表");
 });
 
 const isFilterActive = computed(() => {
@@ -643,6 +674,7 @@ function toggleSpec(specKey) {
 function handleResetFilters() {
   emit("update:resource-search-query", "");
   emit("update:selected-resource-specs", []);
+  selectedFansubTab.value = "";
   if (props.resetResourceFilters) {
     props.resetResourceFilters();
   }
@@ -663,7 +695,6 @@ const getMediaGenresList = (media) =>
   props.getMediaGenresList ? props.getMediaGenresList(media) : defaultGetMediaGenresList(media);
 const getSourceName = (source) => (props.getSourceName ? props.getSourceName(source) : defaultGetSourceName(source));
 const resKey = (res, idx) => (props.resKey ? props.resKey(res, idx) : defaultResKey(res, idx));
-const getExtractedTags = (res) => (props.getExtractedTags ? props.getExtractedTags(res) : defaultGetExtractedTags(res));
 const getTagColorClass = (tag) => (props.getTagColorClass ? props.getTagColorClass(tag) : defaultGetTagColorClass(tag));
 const getResourceSize = (res) => (props.getResourceSize ? props.getResourceSize(res) : defaultGetResourceSize(res));
 const canPreviewResource = (res) =>
@@ -676,90 +707,7 @@ const copyToClipboard = (text) => (props.copyToClipboard ? props.copyToClipboard
 const RAW_ICONS = props.rawIcons && Object.keys(props.rawIcons).length ? props.rawIcons : DEFAULT_RAW_ICONS;
 
 function getMergedResourceTags(res) {
-  if (!res) return [];
-  // 1. 提取标准化规格标签（4K, HDR, 中字, 杜比视界, 杜比全景声等）
-  const tags = [...(getExtractedTags(res) || [])];
-  const set = new Set(tags.map((t) => String(t).toUpperCase()));
-
-  // 2. 收集资源标题及影视剧相关标题，用于过滤重复标题/片名标签
-  const resTitle = String(res.title || "").toLowerCase();
-  const media = props.activeMedia;
-  const mediaTitles = [
-    media?.title,
-    media?.cn_title,
-    media?.name,
-    media?.original_title,
-    media?.original_name,
-    media?.en_name,
-  ]
-    .filter(Boolean)
-    .map((t) => String(t).trim().toLowerCase());
-
-  const trashWords = [
-    "盘酱酱", "PANWEB", "国产剧", "美剧", "日韩剧", "韩剧", "日剧", "泰剧",
-    "动漫", "电影", "电视剧", "全集", "合集", "更新", "更新至", "最新",
-    "分享", "免费", "链接", "未删减", "超清", "高清", "热播", "完结",
-    "首发", "独家", "推荐", "资源",
-  ];
-
-  // 3. 处理渠道原生 tags（过滤掉与标题、片名、剧集信息重复的冗余标签）
-  if (Array.isArray(res.tags)) {
-    for (const t of res.tags) {
-      if (!t) continue;
-      const parts = String(t).split(/[\s,，;；|/]+/);
-      for (const rawPart of parts) {
-        const clean = rawPart.replace(/^#+/, "").trim();
-        if (!clean || clean.length < 2 || clean.length > 10) continue;
-        const cleanLower = clean.toLowerCase();
-        const cleanUpper = clean.toUpperCase();
-
-        // 垃圾词过滤
-        if (trashWords.some((w) => cleanLower.includes(w.toLowerCase()))) continue;
-
-        // 季/集/年份词过滤（如 S01, E09, 第1季, 2026）
-        if (/^(s\d+|e\d+|ep\d+|第[0-9一二三四五六七八九十]+[季期集]|19\d\d|20\d\d)$/i.test(clean)) continue;
-
-        // 核心过滤：不应该重复显示标题的标签
-        // (1) 资源标题中已经包含该标签词（如“末日地堡”在“末日地堡/羊毛战记...”中已存在）
-        if (resTitle && resTitle.includes(cleanLower)) continue;
-
-        // (2) 媒体本身的名字包含该标签，或者该标签包含媒体名
-        if (mediaTitles.some((mTitle) => mTitle && (mTitle === cleanLower || mTitle.includes(cleanLower) || cleanLower.includes(mTitle)))) {
-          continue;
-        }
-
-        const driveType = defaultGetNormalizedResourceType(res);
-        const driveLabel = driveType && driveType !== "other" ? defaultGetResourceTypeName(driveType).toLowerCase() : "";
-        if (driveType && cleanLower === driveType) continue;
-        if (driveLabel && (cleanLower === driveLabel || cleanLower.includes(driveLabel) || driveLabel.includes(cleanLower))) continue;
-
-        // 避免重复规格或重复tag
-        if (!set.has(cleanUpper)) {
-          set.add(cleanUpper);
-          tags.push(clean);
-          if (tags.length >= 6) break;
-        }
-      }
-      if (tags.length >= 6) break;
-    }
-  }
-
-  const standardSpecs = [
-    "4K", "1080P", "720P", "原盘ISO", "REMUX", "BLURAY", "WEB-DL",
-    "杜比视界", "HDR", "HDR10+", "HDR10", "60帧", "120帧", "中字", "国语", "粤语", "杜比全景声",
-  ];
-  return tags.filter((tag) => {
-    const tagUpper = String(tag).toUpperCase();
-    if (standardSpecs.some((s) => s.toUpperCase() === tagUpper)) return true;
-    const tagLower = String(tag).toLowerCase();
-    if (resTitle && resTitle.includes(tagLower)) return false;
-    if (mediaTitles.some((mTitle) => mTitle && (mTitle === tagLower || mTitle.includes(tagLower) || tagLower.includes(mTitle)))) return false;
-    const driveType = defaultGetNormalizedResourceType(res);
-    const driveLabel = driveType && driveType !== "other" ? defaultGetResourceTypeName(driveType).toLowerCase() : "";
-    if (driveType && tagLower === driveType) return false;
-    if (driveLabel && (tagLower === driveLabel || tagLower.includes(driveLabel) || driveLabel.includes(tagLower))) return false;
-    return true;
-  });
+  return Array.isArray(res?.tags) ? res.tags : [];
 }
 
 function copyIdText(type, id) {
@@ -1206,6 +1154,19 @@ const closeMediaDetail = () => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
 }
 
+.meta-tag-pill--more {
+  background: rgba(var(--v-theme-primary), 0.2) !important;
+  border-color: rgba(var(--v-theme-primary), 0.4) !important;
+  color: #fff !important;
+  cursor: pointer !important;
+}
+
+.meta-tag-pill--more:hover {
+  background: rgba(var(--v-theme-primary), 0.35) !important;
+  border-color: rgba(var(--v-theme-primary), 0.6) !important;
+  transform: translateY(-1px) !important;
+}
+
 .meta-tag-pill--clickable:active {
   transform: translateY(0) !important;
 }
@@ -1639,6 +1600,45 @@ const closeMediaDetail = () => {
   color: rgb(var(--v-theme-primary)) !important;
 }
 
+.fansub-pill-track {
+  width: 100%;
+}
+
+.fansub-pill-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid rgba(var(--v-border-color), 0.14);
+  outline: none;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.78);
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.fansub-pill-btn:hover {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.fansub-pill-btn--active {
+  background: rgba(var(--v-theme-secondary), 0.15) !important;
+  color: rgb(var(--v-theme-secondary)) !important;
+  border-color: rgba(var(--v-theme-secondary), 0.5) !important;
+  font-weight: 600 !important;
+}
+
+.fansub-pill-btn--active .pill-badge {
+  background: rgb(var(--v-theme-secondary)) !important;
+  color: #ffffff !important;
+}
+
 .pill-badge {
   display: inline-flex;
   align-items: center;
@@ -1871,6 +1871,12 @@ const closeMediaDetail = () => {
   color: #9333ea !important;
   border-color: rgba(147, 51, 234, 0.45) !important;
   background: rgba(147, 51, 234, 0.12) !important;
+}
+
+.tag-fansub {
+  color: #7c3aed !important;
+  border-color: rgba(124, 58, 237, 0.4) !important;
+  background: rgba(124, 58, 237, 0.1) !important;
 }
 
 .tag-hdr {

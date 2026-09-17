@@ -36,6 +36,7 @@ from ..media import (
     recognize_media,
     tmdb_id_of,
 )
+from ...search.matching import is_anime_media
 from ...utils.http_client import (
     build_proxy_url,
     normalize_proxies,
@@ -171,14 +172,24 @@ class AutoSubscribeService:
                 continue
             options = self._provider_options(config, candidate.source)
             if not self._post_filter(result, options, config):
+                selected_types = self._parse_selected_media_types(options)
+                is_anime = self.is_anime_media(result.mediainfo, result.candidate)
+                type_accepted, type_reason = self._is_media_type_accepted(
+                    item_media_type=result.identity.media_type,
+                    is_anime=is_anime,
+                    selected_types=selected_types,
+                    source=result.candidate.source,
+                )
+                filter_reason = type_reason if not type_accepted else "未通过评分、年份或季过滤"
                 outcomes.append(SubscribeOutcome(
                     SubscribeStatus.FILTERED,
                     candidate,
-                    reason="未通过评分、类型或季过滤",
+                    reason=filter_reason,
                     identity=result.identity,
                     mediainfo=result.mediainfo,
                 ))
                 continue
+
             resolved.append(result)
 
         groups = self._merge_resolved(resolved)
@@ -444,26 +455,86 @@ class AutoSubscribeService:
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def is_anime_media(media: Any, candidate: Optional[MediaCandidate] = None) -> bool:
+        """精确判断媒体是否属于日本动漫（日漫番剧/动画电影）。"""
+        return is_anime_media(media, candidate)
+
+    @classmethod
+    def _parse_selected_media_types(cls, options: dict[str, Any]) -> set[str]:
+        """从榜单配置中解析出用户选中的媒体类型集合（全小写）。"""
+        raw = options.get("media_type")
+        if raw is None:
+            raw = options.get("media_types")
+        if not raw:
+            return set()
+        if isinstance(raw, (list, tuple, set)):
+            items = raw
+        elif isinstance(raw, str):
+            items = [item.strip() for item in raw.split(",") if item.strip()]
+        else:
+            items = [str(raw).strip()]
+        return {str(item).strip().lower() for item in items if str(item).strip()}
+
+    def _is_media_type_accepted(
+            self,
+            item_media_type: Optional[str],
+            is_anime: bool,
+            selected_types: set[str],
+            source: str,
+    ) -> tuple[bool, str]:
+        """判定媒体类型是否符合榜单筛选要求。
+
+        支持多选：all（全部）、movie（电影）、tv（电视剧）、anime_movie（动漫电影）、anime_tv（动漫番剧）。
+        留空或勾选 all 默认选择全部类型。
+        """
+        if source == "mikan":
+            return True, ""
+
+        # 留空或勾选全部(all)，默认全部接受
+        if not selected_types or "all" in selected_types:
+            return True, ""
+
+        norm_type = str(item_media_type or "").strip().lower()
+
+        # 动漫类型
+        if is_anime:
+            if norm_type == "movie":
+                if "anime_movie" in selected_types:
+                    return True, ""
+                return False, "未勾选动漫电影类型"
+            else:
+                if "anime_tv" in selected_types:
+                    return True, ""
+                return False, "未勾选动漫番剧类型"
+
+        # 普通影视类型
+        if norm_type not in selected_types:
+            return False, f"未勾选该媒体类型：{norm_type or '未知'}"
+
+        return True, ""
+
+
     def _pre_filter(
             self, candidate: MediaCandidate, options: dict[str, Any], config: dict[str, Any]
     ) -> bool:
+        selected_types = self._parse_selected_media_types(options)
+        is_anime = self.is_anime_media(None, candidate)
+        accepted, reason = self._is_media_type_accepted(
+            item_media_type=candidate.media_type,
+            is_anime=is_anime,
+            selected_types=selected_types,
+            source=candidate.source,
+        )
+        if not accepted:
+            logger.debug(f"[{candidate.source}] 预过滤排除候选：{candidate.title}（{reason}）")
+            return False
+
         minimum_year = self._as_int(options.get("min_year"))
         candidate_year = self._as_int(candidate.year)
         if minimum_year and candidate_year and candidate_year < minimum_year:
             return False
-        media_type = str(options.get("media_type") or "").strip().lower()
-        legacy_media_types = options.get("media_types") or []
-        media_types = (
-            {media_type}
-            if media_type and media_type != "all"
-            else {
-                str(value or "").strip().lower()
-                for value in legacy_media_types
-                if str(value or "").strip().lower() != "all"
-            }
-        )
-        if media_types and candidate.media_type and candidate.media_type not in media_types:
-            return False
+
         if candidate.media_type == "tv" and config.get("auto_subscribe_skip_season_zero", True):
             if int(1 if candidate.season is None else candidate.season) == 0:
                 return False
@@ -472,6 +543,20 @@ class AutoSubscribeService:
     def _post_filter(
             self, resolved: _ResolvedMedia, options: dict[str, Any], config: dict[str, Any]
     ) -> bool:
+        selected_types = self._parse_selected_media_types(options)
+        is_anime = self.is_anime_media(resolved.mediainfo, resolved.candidate)
+        accepted, reason = self._is_media_type_accepted(
+            item_media_type=resolved.identity.media_type,
+            is_anime=is_anime,
+            selected_types=selected_types,
+            source=resolved.candidate.source,
+        )
+        if not accepted:
+            logger.debug(
+                f"[{resolved.candidate.source}] 排除：{resolved.candidate.title}（{reason}）"
+            )
+            return False
+
         minimum_vote = float(options.get("min_vote") or 0)
         vote = float(getattr(resolved.mediainfo, "vote_average", 0) or 0)
         if minimum_vote and vote < minimum_vote:

@@ -193,12 +193,6 @@ class SyncExecutionService(OwnerDelegator):
             )
             if not repaired:
                 unresolved_count += 1
-                logger.debug(
-                    "订阅缺少 TMDB ID 且自动修复失败，任务创建前跳过："
-                    f"#{getattr(subscribe, 'id', '')} "
-                    f"{getattr(subscribe, 'name', '')} "
-                    f"({getattr(subscribe, 'year', '')})"
-                )
                 continue
 
             is_tv = getattr(subscribe, "type", "") == MediaType.TV.value

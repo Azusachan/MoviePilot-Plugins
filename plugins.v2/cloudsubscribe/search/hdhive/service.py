@@ -9,6 +9,7 @@ from app.log import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
+from .open import HDHiveOpenAPIError
 from .web import (
     HDHIVE_DETAIL_RESOURCE_TYPES,
     HDHIVE_RESOURCE_TYPES,
@@ -50,18 +51,18 @@ class HDHiveSearchService(OwnerDelegator):
 
     @property
     def available(self) -> bool:
-        return bool(self._hdhive_enabled and (
-                (
-                        self._hdhive_query_mode == "web"
-                        and self._hdhive_username
-                        and self._hdhive_password
-                )
-                or (
-                        self._hdhive_query_mode == "api"
-                        and self._hdhive_client
-                        and self._hdhive_client.is_ready
-                )
-        ))
+        return bool(
+            (
+                    self._hdhive_query_mode == "web"
+                    and self._hdhive_username
+                    and self._hdhive_password
+            )
+            or (
+                    self._hdhive_query_mode == "api"
+                    and self._hdhive_client
+                    and self._hdhive_client.is_ready
+            )
+        )
 
     @property
     def resource_types(self):
@@ -408,7 +409,6 @@ class HDHiveSearchService(OwnerDelegator):
         使用 API 模式查询 HDHive 资源
         需要应用 Secret + 用户授权（OpenAPI 客户端）
         """
-        from .open import HDHiveOpenAPIError
         search_label = format_search_label(
             mediainfo,
             MediaType.MOVIE if hdhive_media_type == "movie" else MediaType.TV,
@@ -800,7 +800,6 @@ class HDHiveSearchService(OwnerDelegator):
                     )
                     return None
             else:
-                from .open import HDHiveOpenAPIError
                 if not self._hdhive_client or not self._hdhive_client.is_ready:
                     logger.warning("HDHive API 模式需要应用 Secret 和有效用户 Token 才能解锁")
                     return None

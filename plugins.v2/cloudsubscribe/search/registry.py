@@ -2,11 +2,13 @@
 
 from typing import Any
 
+from .animegarden import AnimeGardenClient, AnimeGardenSearchService, create_animegarden_provider
 from .dian115 import create_dian115_provider
 from .hdhive import create_hdhive_provider
 from .juying import JuyingSearchService, create_juying_provider
+from .mikan import MikanClient, MikanSearchService, create_mikan_provider
 from .online_docs import create_online_docs_provider
-from .pansou import create_pansou_provider
+from .pansou import PanSouSearchService, create_pansou_provider
 from .pinglian import PinglianSearchService, create_pinglian_provider
 from .piratebay import PirateBaySearchService, create_piratebay_provider
 from .seedhub import SeedHubSearchService, create_seedhub_provider
@@ -112,5 +114,35 @@ def create_search_registry(
         registry.register(create_online_docs_provider(
             owner._online_docs_client,
             resource_types,
+        ))
+    if "mikan" in getattr(owner, "_search_source_order", ()):
+        base_url = str(getattr(owner, "_mikan_base_url", "https://mikanani.me") or "https://mikanani.me")
+        timeout = int(getattr(owner, "_mikan_timeout", 30) or 30)
+        interval = float(getattr(owner, "_mikan_request_interval", 2.0) or 2.0)
+        limit = int(getattr(owner, "_mikan_result_limit", 10) or 10)
+        mikan_client = MikanClient(
+            base_url=base_url,
+            timeout=timeout,
+            interval=interval,
+            proxy=getattr(owner, "_search_proxy", None),
+        )
+        registry.register(create_mikan_provider(
+            MikanSearchService(mikan_client, result_limit=limit),
+            {"base_url": mikan_client.base_url, "limit": limit},
+        ))
+    if "animegarden" in getattr(owner, "_search_source_order", ()):
+        ag_base_url = str(getattr(owner, "_animegarden_base_url", "https://animes.garden/") or "https://animes.garden/")
+        ag_timeout = int(getattr(owner, "_animegarden_timeout", 30) or 30)
+        ag_interval = float(getattr(owner, "_animegarden_request_interval", 1.0) or 1.0)
+        ag_limit = int(getattr(owner, "_animegarden_result_limit", 10) or 10)
+        ag_client = AnimeGardenClient(
+            base_url=ag_base_url,
+            timeout=ag_timeout,
+            interval=ag_interval,
+            proxy=getattr(owner, "_search_proxy", None),
+        )
+        registry.register(create_animegarden_provider(
+            AnimeGardenSearchService(ag_client, result_limit=ag_limit),
+            {"base_url": ag_client.base_url, "limit": ag_limit},
         ))
     return registry

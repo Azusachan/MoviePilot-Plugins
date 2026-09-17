@@ -147,7 +147,7 @@
                   :config="config"
                   @result="emit('checkin-result', $event)" />
                 <RegionMediaMapField
-                  v-else-if="field.type === 'region-media-map'"
+                  v-else-if="field.type === 'region-media-map' || field.type === 'priority-order'"
                   v-model="config[field.key]"
                   :field="field" />
                 <VCronField
@@ -206,20 +206,22 @@
                       @click="removeOnlineDocument(field.key, documentIndex)" />
                   </div>
                 </div>
+                <MultiSelectDialogField
+                  v-else-if="(field.type === 'select' || field.type === 'multi-select') && field.multiple"
+                  v-model="config[field.key]"
+                  :field="field"
+                  :disabled="Boolean(field.disabled?.(config))" />
                 <v-autocomplete
                   v-else-if="field.type === 'select' && field.searchable"
                   v-model="config[field.key]"
                   v-model:search="selectSearch[field.key]"
                   :label="field.label"
                   :items="filteredSelectItems(field)"
-                  :multiple="field.multiple"
                   :hint="field.hint"
                   :persistent-hint="Boolean(field.hint)"
                   :disabled="Boolean(field.disabled?.(config))"
                   :no-filter="true"
                   no-data-text="没有匹配的订阅"
-                  chips
-                  closable-chips
                   density="compact"
                   variant="outlined"
                   hide-details="auto" />
@@ -228,12 +230,9 @@
                   v-model="config[field.key]"
                   :label="field.label"
                   :items="field.items"
-                  :multiple="field.multiple"
                   :hint="field.hint"
                   :persistent-hint="Boolean(field.hint)"
                   :disabled="Boolean(field.disabled?.(config))"
-                  chips
-                  closable-chips
                   density="compact"
                   variant="outlined"
                   hide-details="auto" />
@@ -390,6 +389,7 @@ import {computed, ref} from "vue";
 import AccountInfo from "./AccountInfo.vue";
 import CheckinTimeline from "./CheckinTimeline.vue";
 import RegionMediaMapField from "./RegionMediaMapField.vue";
+import MultiSelectDialogField from "./MultiSelectDialogField.vue";
 
 const props = defineProps({
   section: { type: Object, required: true },

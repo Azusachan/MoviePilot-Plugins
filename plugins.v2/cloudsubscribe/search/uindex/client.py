@@ -1,9 +1,10 @@
+import asyncio
 import html
 import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from app.log import logger
 
@@ -11,36 +12,17 @@ from ..cloudflare import click_challenge_frame, is_cloudflare_challenge, launch_
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
+    gated_request,
     normalize_proxies,
     request_error_summary,
     requests,
 )
+from ..magnet import _HASH_REGEX, _MAGNET_REGEX, parse_size_str
 from ...utils.cache import create_platform_ttl_cache
 
 
 class UIndexError(RuntimeError):
     """UIndex 请求或解析失败。"""
-
-
-_SIZE_REGEX = re.compile(r"(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|B)", re.IGNORECASE)
-_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>]*", re.IGNORECASE)
-_HASH_REGEX = re.compile(r"urn:btih:([a-zA-Z0-9]{32,40})", re.IGNORECASE)
-
-
-def parse_size_str(size_text: str) -> int:
-    """解析字符串大小为字节数。"""
-    match = _SIZE_REGEX.search(size_text or "")
-    if not match:
-        return 0
-    val, unit = float(match.group(1)), match.group(2).upper()
-    units = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024 ** 2,
-        "GB": 1024 ** 3,
-        "TB": 1024 ** 4,
-    }
-    return int(val * units.get(unit, 1))
 
 
 class UIndexClient:
@@ -123,7 +105,6 @@ class UIndexClient:
         """按需在独立纯净线程中通过 CloakBrowser 穿透 Cloudflare 盾并获取搜索页面 HTML。"""
 
         def _worker() -> str:
-            import asyncio
             try:
                 asyncio.set_event_loop(None)
             except Exception:
@@ -271,7 +252,6 @@ class UIndexClient:
                 # 尝试从 magnet 的 dn 参数提取
                 dn_match = re.search(r"dn=([^&]+)", magnet_url)
                 if dn_match:
-                    from urllib.parse import unquote
                     title = unquote(dn_match.group(1))
 
             if not title:

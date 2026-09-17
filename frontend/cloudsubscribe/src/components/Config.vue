@@ -210,6 +210,25 @@
                   <v-badge inline :content="resourceType.count" color="primary" class="ml-2" />
                 </v-tab>
               </v-tabs>
+              <v-tabs
+                v-if="testFansubs.length > 1"
+                v-model="selectedTestFansub"
+                color="secondary"
+                density="compact"
+                show-arrows
+                class="source-test-tabs source-test-fansub-tabs mt-1">
+                <v-tab value="">
+                  全部字幕组
+                  <v-badge inline :content="testResult.items?.length || 0" color="secondary" class="ml-2" />
+                </v-tab>
+                <v-tab
+                  v-for="fansub in testFansubs"
+                  :key="fansub.value"
+                  :value="fansub.value">
+                  {{ fansub.title }}
+                  <v-badge inline :content="fansub.count" color="secondary" class="ml-2" />
+                </v-tab>
+              </v-tabs>
               <div class="source-test-result-scroll">
                 <v-list v-if="filteredTestItems.length" density="compact" class="source-test-result-list">
                   <v-list-item
@@ -232,6 +251,14 @@
                         </v-chip>
                         <v-chip size="x-small" variant="tonal">
                           {{ item.resource_type_name || item.resource_type || "未知类型" }}
+                        </v-chip>
+                        <v-chip
+                          v-if="item.fansub"
+                          size="x-small"
+                          variant="tonal"
+                          color="secondary"
+                          class="font-weight-medium">
+                          {{ item.fansub }}
                         </v-chip>
                         <v-chip
                           v-if="testItemStatus(item)"
@@ -531,6 +558,24 @@ function normalizeAutoSubscribeYears(target) {
     const value = String(target.auto_subscribe_mikan_base_urls || "").trim();
     target.auto_subscribe_mikan_base_urls = value ? [value] : ["https://mikanani.me", "https://mikanime.tv"];
   }
+  const defaultFansubOrder = ["LoliHouse", "VCB-Studio", "喵萌奶茶|Nekomoe", "Nix-Raws", "\\bANI\\b|ANi"];
+  if (!Array.isArray(target.mikan_fansub_order) || target.mikan_fansub_order.length === 0) {
+    target.mikan_fansub_order = [...defaultFansubOrder];
+  }
+  if (!Array.isArray(target.animegarden_fansub_order) || target.animegarden_fansub_order.length === 0) {
+    target.animegarden_fansub_order = [...defaultFansubOrder];
+  }
+  const defaultNoSubsRe = "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b";
+  const defaultChineseRe = "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)";
+  const defaultExcludeRe = "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b";
+
+  if (!target.mikan_no_subs_re) target.mikan_no_subs_re = defaultNoSubsRe;
+  if (!target.mikan_chinese_re) target.mikan_chinese_re = defaultChineseRe;
+  if (!target.mikan_exclude_re) target.mikan_exclude_re = defaultExcludeRe;
+
+  if (!target.animegarden_no_subs_re) target.animegarden_no_subs_re = defaultNoSubsRe;
+  if (!target.animegarden_chinese_re) target.animegarden_chinese_re = defaultChineseRe;
+  if (!target.animegarden_exclude_re) target.animegarden_exclude_re = defaultExcludeRe;
 }
 
 normalizeAutoSubscribeYears(config);
@@ -584,6 +629,7 @@ const qrVisible = ref(false),
   selectedTmdbId = ref(0),
   testResult = ref({}),
   selectedTestResourceType = ref(""),
+  selectedTestFansub = ref(""),
   sourceTestVisible = ref(false),
   testSubmitted = ref(false),
   testError = ref(""),
@@ -646,6 +692,24 @@ watch(testResourceTypes, (types) => {
     selectedTestResourceType.value = types[0]?.value || "";
   }
 }, {immediate: true});
+const testFansubs = computed(() => {
+  const items = Array.isArray(testResult.value?.items) ? testResult.value.items : [];
+  const counts = new Map();
+  items.forEach((item) => {
+    const fansub = String(item?.fansub || "").trim();
+    if (fansub) {
+      const current = counts.get(fansub) || {value: fansub, title: fansub, count: 0};
+      current.count += 1;
+      counts.set(fansub, current);
+    }
+  });
+  return [...counts.values()].sort((a, b) => b.count - a.count);
+});
+watch(testFansubs, (fansubs) => {
+  if (selectedTestFansub.value && !fansubs.some((item) => item.value === selectedTestFansub.value)) {
+    selectedTestFansub.value = "";
+  }
+});
 const filteredTestItems = computed(() => {
   const items = Array.isArray(testResult.value?.items) ? testResult.value.items : []
   let allItems = items;
@@ -679,8 +743,14 @@ const filteredTestItems = computed(() => {
       });
     });
   }
-  if (!selectedTestResourceType.value) return allItems;
-  return allItems.filter((item) => String(item?.resource_type || "unknown").toLowerCase() === selectedTestResourceType.value);
+  let result = allItems;
+  if (selectedTestResourceType.value) {
+    result = result.filter((item) => String(item?.resource_type || "unknown").toLowerCase() === selectedTestResourceType.value);
+  }
+  if (selectedTestFansub.value) {
+    result = result.filter((item) => String(item?.fansub || "").trim() === selectedTestFansub.value);
+  }
+  return result;
 })
 const sourceNames = {
   hdhive: "HDHive",
@@ -692,6 +762,8 @@ const sourceNames = {
   online_docs: "在线文档",
   piratebay: "海盗湾",
   uindex: "UIndex",
+  mikan: "Mikan",
+  animegarden: "AnimeGarden",
 }
 const autoSubscribeProviderNames = {
   douban: "豆瓣榜单",
@@ -761,6 +833,7 @@ const sourceTestConfigKeys = {
   online_docs: ["online_docs"],
   piratebay: ["piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval", "piratebay_timeout"],
   uindex: ["uindex_base_url", "uindex_result_limit", "uindex_request_interval", "uindex_timeout"],
+  mikan: ["mikan_base_url", "mikan_result_limit", "mikan_request_interval", "mikan_timeout"],
 }
 const sourceTest = reactive({
   source: "",
@@ -1448,6 +1521,7 @@ function openSourceTest(source) {
   selectedTmdbId.value = 0
   testResult.value = {}
   selectedTestResourceType.value = "";
+  selectedTestFansub.value = "";
   testSubmitted.value = false
   testError.value = ""
   testElapsed.value = null
@@ -1467,6 +1541,7 @@ async function searchTmdbCandidates() {
   selectedTmdbId.value = 0
   testResult.value = {}
   selectedTestResourceType.value = "";
+  selectedTestFansub.value = "";
   testSubmitted.value = false
   testError.value = ""
   try {

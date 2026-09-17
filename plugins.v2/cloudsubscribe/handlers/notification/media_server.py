@@ -8,7 +8,11 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
 from app.chain.mediaserver import MediaServerChain
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas import MediaInfo, RefreshMediaItem
 from app.schemas.types import MediaType
@@ -480,7 +484,9 @@ class MediaServerNotifier:
                 service.instance.refresh_library_by_items, items
             )
         try:
-            success = bool(future.result(timeout=self._REFRESH_TIMEOUT_SECONDS))
+            result = future.result(timeout=self._REFRESH_TIMEOUT_SECONDS)
+            # MoviePilot Plex refresh 在提交 HTTP 请求后返回 None，属于正常确认
+            success = bool(result) or (service.type == "plex" and result is None)
         except FutureTimeoutError:
             future.cancel()
             logger.error(
