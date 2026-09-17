@@ -480,15 +480,22 @@ class PageApi(OwnerDelegator):
                     for value in health.get("channels", [])
                 ],
             })
+        available_sources = []
+        search_handler = getattr(self, "_search_handler", None)
+        if search_handler and hasattr(search_handler, "get_available_sources_meta"):
+            available_sources = search_handler.get_available_sources_meta()
+
         result = {
             "success": True,
             "data": {
                 "search_accounts": search_accounts,
                 "pansou": pansou_options,
+                "available_sources": available_sources,
             },
         }
         _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
         return result
+
 
     def api_vue_cloud_directories(
             self, path: str = "/", provider: str = "", refresh: bool = False

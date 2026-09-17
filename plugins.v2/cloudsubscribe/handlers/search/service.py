@@ -410,6 +410,69 @@ class SearchHandler:
         """返回所有当前已注册的搜索渠道（供网盘资源列表实时嗅探使用，无需手动启用即可搜索）。"""
         return [provider.key for provider in self._search_registry.available()]
 
+    def get_available_sources_meta(
+            self,
+            mediainfo: Optional[Any] = None,
+            media_type: Optional[MediaType] = None,
+            is_anime: Optional[bool] = None,
+    ) -> List[Dict[str, str]]:
+        """返回规范有序的渠道列表（供前端详情页/弹窗直接渲染Tab），统一由后端控制显示与排序。"""
+        registered = {provider.key: provider.name for provider in self._search_registry.available()}
+        if not registered:
+            return []
+
+        # 优先读取用户配置的优先级顺序，其余按标准偏好排列
+        configured_order = getattr(self, "_search_source_order", []) or []
+        default_pref = [
+            "pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub",
+            "piratebay", "uindex", "mikan", "animegarden", "online_docs"
+        ]
+
+        merged_order: List[str] = []
+        for s in list(configured_order) + default_pref:
+            s_clean = str(s).strip().lower()
+            if s_clean in registered and s_clean not in merged_order:
+                merged_order.append(s_clean)
+        for s in registered:
+            if s not in merged_order:
+                merged_order.append(s)
+
+        anime_sources = ["mikan", "animegarden"]
+        if is_anime is None and mediainfo:
+            is_anime = is_anime_media(mediainfo)
+
+        if is_anime:
+            # 动漫番剧优先展示动漫源
+            anime_part = [s for s in anime_sources if s in merged_order]
+            other_part = [s for s in merged_order if s not in anime_sources]
+            merged_order = anime_part + other_part
+        elif media_type == MediaType.MOVIE:
+            # 非动漫电影剔除纯番剧更新源
+            merged_order = [s for s in merged_order if s not in anime_sources]
+
+        source_display_names = {
+            "pansou": "PanSou",
+            "hdhive": "HDHive",
+            "dian115": "Dian115",
+            "juying": "聚影",
+            "pinglian": "盘链",
+            "seedhub": "SeedHub",
+            "piratebay": "海盗湾",
+            "uindex": "UIndex",
+            "mikan": "Mikan",
+            "animegarden": "AnimeGarden",
+            "online_docs": "在线文档",
+        }
+
+        return [
+            {
+                "key": src_key,
+                "name": registered.get(src_key) or source_display_names.get(src_key, src_key),
+            }
+            for src_key in merged_order
+        ]
+
+
     @property
     def source_concurrency_enabled(self) -> bool:
         return self._search_concurrency > 1

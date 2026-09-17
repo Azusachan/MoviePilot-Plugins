@@ -347,6 +347,7 @@ const {
   onChannelTabChange,
   getChannelCount,
   closeMediaDetail,
+  syncAvailableChannels,
 } = useMediaDetail({
   api: resourceApi,
   pluginId: resourcePluginId,
@@ -1064,6 +1065,9 @@ async function loadPluginConfig() {
       const optionData = options?.data?.data || options?.data || options || {};
       if (optionData?.search_accounts) {
         config = {...config, search_accounts: optionData.search_accounts};
+      }
+      if (Array.isArray(optionData?.available_sources) && optionData.available_sources.length > 0) {
+        syncAvailableChannels(optionData.available_sources);
       }
     } catch (_) {
     }

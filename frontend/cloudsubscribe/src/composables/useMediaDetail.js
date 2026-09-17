@@ -32,54 +32,19 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const activeMedia = ref(null);
   const activeDetailSeason = ref(1);
 
-  function isAnimeMedia(media) {
-    if (!media) return false;
-    if (Boolean(media.is_anime)) return true;
-    if (media.type === "anime" || media.category === "anime") return true;
-    if (Array.isArray(media.genre_ids) && media.genre_ids.includes(16)) return true;
-    const genres = Array.isArray(media.genres) ? media.genres : [];
-    return genres.some((g) => {
-      const name = typeof g === "object" ? (g.name || "") : String(g);
-      return /动画|動漫|动漫|animation|anime/i.test(name);
-    });
+  function normalizeChannels(sources) {
+    if (!Array.isArray(sources)) return [];
+    return sources
+      .map((source) => {
+        const key = (typeof source === "object" && source?.key ? source.key : String(source)).toLowerCase();
+        const name = typeof source === "object" && source?.name ? source.name : getSourceName(key);
+        const icon = (typeof source === "object" && source?.icon) ? source.icon : getChannelDefaultIcon(key);
+        return { key, name, icon };
+      })
+      .filter((channel) => Boolean(channel.key));
   }
 
-  const configuredChannels = ref([...DEFAULT_CHANNELS]);
-  const availableChannels = computed(() => {
-    const config = pluginConfig?.value || {};
-    const sourceOrder = Array.isArray(config.search_source_order) ? config.search_source_order : [];
-    const list = configuredChannels.value.filter((channel) => isChannelConfigured(channel.key));
-
-    if (isAnimeMedia(activeMedia.value)) {
-      const animeSourceOrder = ["mikan", "animegarden"];
-      return [...list].sort((a, b) => {
-        const aAnime = animeSourceOrder.indexOf(a.key);
-        const bAnime = animeSourceOrder.indexOf(b.key);
-        if (aAnime !== -1 && bAnime !== -1) return aAnime - bAnime;
-        if (aAnime !== -1) return -1;
-        if (bAnime !== -1) return 1;
-        const aIndex = sourceOrder.indexOf(a.key);
-        const bIndex = sourceOrder.indexOf(b.key);
-        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-        if (aIndex !== -1) return -1;
-        if (bIndex !== -1) return 1;
-        return 0;
-      });
-    }
-
-    if (sourceOrder.length > 0) {
-      return [...list].sort((a, b) => {
-        const aIndex = sourceOrder.indexOf(a.key);
-        const bIndex = sourceOrder.indexOf(b.key);
-        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-        if (aIndex !== -1) return -1;
-        if (bIndex !== -1) return 1;
-        return 0;
-      });
-    }
-
-    return list;
-  });
+  const availableChannels = ref(normalizeChannels(DEFAULT_CHANNELS));
   const availableDrives = ref([
     {key: "115", name: "115网盘"},
     {key: "quark", name: "夸克网盘"},
@@ -98,39 +63,6 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const channelElapsed = ref({});
   let requestToken = 0;
 
-  function isChannelConfigured(channelKey) {
-    const config = pluginConfig?.value || {};
-    const sourceOrder = Array.isArray(config.search_source_order) ? config.search_source_order : [];
-    if (sourceOrder.length > 0 && !sourceOrder.includes(channelKey)) {
-      return false;
-    }
-
-    if (channelKey === "pansou" || channelKey === "seedhub" || channelKey === "piratebay" || channelKey === "uindex") {
-      return true;
-    }
-    if (channelKey === "juying") {
-      return Boolean(config.juying_username && config.juying_password);
-    }
-    if (channelKey === "pinglian") {
-      return Boolean(config.pinglian_username && config.pinglian_password);
-    }
-    if (channelKey === "hdhive") {
-      const mode = config.hdhive_query_mode || "web";
-      if (mode === "open_api") {
-        return Boolean(config.hdhive_api_key);
-      }
-      return Boolean(config.hdhive_token || config.hdhive_auth_code || config.search_accounts?.hdhive?.connected);
-    }
-    if (channelKey === "dian115") {
-      return Boolean((config.dian115_email && config.dian115_password) || config.search_accounts?.dian115?.connected);
-    }
-    if (channelKey === "mikan" || channelKey === "animegarden") {
-      return isAnimeMedia(activeMedia.value);
-    }
-
-    if (channelKey === "online_docs") return true;
-    return false;
-  }
 
   function getItemFansub(item) {
     if (item?.fansub) return String(item.fansub).trim();
@@ -334,18 +266,13 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   }
 
   function syncAvailableChannels(sources) {
-    if (!Array.isArray(sources)) return;
-    for (const source of sources) {
-      const key = (typeof source === "object" && source?.key ? source.key : String(source)).toLowerCase();
-      const name = typeof source === "object" && source?.name ? source.name : getSourceName(key);
-      const existing = configuredChannels.value.find((channel) => channel.key === key);
-      if (!existing) configuredChannels.value.push({key, name, icon: getChannelDefaultIcon(key)});
-      else if (name) existing.name = name;
-    }
+    const list = normalizeChannels(sources);
+    if (!list.length) return;
+    availableChannels.value = list;
   }
 
   async function searchChannel(channelKey, force = false) {
-    if (!channelKey || !isChannelConfigured(channelKey) || !activeMedia.value || (!force && channelSearched.value[channelKey])) return;
+    if (!channelKey || !activeMedia.value || (!force && channelSearched.value[channelKey])) return;
     if (force) {
       const mKey = getMediaCacheKey(activeMedia.value);
       if (mKey && mediaSearchMemoryCache.has(mKey)) {
@@ -521,5 +448,6 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     onChannelTabChange,
     getChannelCount,
     closeMediaDetail,
+    syncAvailableChannels,
   };
 }

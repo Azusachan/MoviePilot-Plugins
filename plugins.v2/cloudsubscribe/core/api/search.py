@@ -1512,39 +1512,16 @@ class SearchApi(OwnerDelegator):
         if not handler:
             return {"success": False, "message": "搜索服务未就绪", "data": {"items": [], "sources": []}}
 
-        # 获取所有已注册的搜索渠道，无需用户在设置中开启
-        registered_sources = handler.get_all_search_sources()
-        if not registered_sources:
+        available_channels_meta = handler.get_available_sources_meta(
+            mediainfo=mediainfo, media_type=media_type
+        )
+        if not available_channels_meta:
             logger.warning("[网盘资源嗅探] 当前无可用的已注册搜索渠道")
             return {"success": True, "message": "暂无可用搜索渠道",
                     "data": {"items": [], "sources": [], "available_sources": []}}
 
-        # 权威渠道命名与顺序定义
-        source_display_names = {
-            "pansou": "PanSou",
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "juying": "聚影",
-            "pinglian": "盘链",
-            "seedhub": "SeedHub",
-            "piratebay": "海盗湾",
-            "uindex": "UIndex",
-            "mikan": "Mikan",
-            "animegarden": "AnimeGarden",
-            "online_docs": "在线文档",
-        }
-        # 优先读取用户配置的优先级顺序，其余按标准顺序排列
-        configured_order = getattr(handler, "_search_source_order", []) or []
-        default_pref = ["pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "piratebay", "uindex", "mikan",
-                        "animegarden"]
-        merged_order = []
-        for s in list(configured_order) + default_pref:
-            s_clean = str(s).strip().lower()
-            if s_clean in registered_sources and s_clean not in merged_order:
-                merged_order.append(s_clean)
-        for s in registered_sources:
-            if s not in merged_order:
-                merged_order.append(s)
+        registered_sources = [s["key"] for s in available_channels_meta]
+        source_display_names = {s["key"]: s["name"] for s in available_channels_meta}
 
         req_source = str(data.get("source") or "").strip().lower()
         force_refresh = bool(data.get("force") or data.get("force_refresh"))
@@ -1554,13 +1531,12 @@ class SearchApi(OwnerDelegator):
                 return {
                     "success": True,
                     "message": f"渠道 {source_display_names.get(req_source, req_source)} 暂不可用",
-                    "data": {"items": [], "sources": [], "available_sources": [
-                        {"key": s, "name": source_display_names.get(s, s)} for s in merged_order
-                    ]},
+                    "data": {"items": [], "sources": [], "available_sources": available_channels_meta},
                 }
             sources_to_search = [req_source]
         else:
-            sources_to_search = merged_order
+            sources_to_search = registered_sources
+
 
         logger.debug(
             f"🔍 [网盘资源嗅探] 开始检索媒体《{title}》"
@@ -1639,15 +1615,6 @@ class SearchApi(OwnerDelegator):
                 key=lambda x: x[1],
                 reverse=True,
             )
-        ]
-
-        # 构造规范有序的渠道列表供前端渲染Tab
-        available_channels_meta = [
-            {
-                "key": src_key,
-                "name": source_display_names.get(src_key, src_key),
-            }
-            for src_key in merged_order
         ]
 
         # 构造当前系统可用且支持的目标网盘列表供跨盘转存选择
