@@ -23,11 +23,11 @@ export function createSearchSection(resourceTypeItems, options = {}) {
       {value: "dian115", title: "Dian115", icon: "mdi-cloud-search"},
       {value: "juying", title: "聚影", icon: "mdi-movie-search-outline"},
       {value: "pinglian", title: "盘链", icon: "mdi-link-variant"},
+      {value: "mikan", title: "Mikan", icon: "mdi-animation-play-outline"},
+      {value: "animegarden", title: "AnimeGarden", icon: "mdi-flower-tulip-outline"},
       {value: "seedhub", title: "SeedHub", icon: "mdi-seed-outline"},
       {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},
       {value: "uindex", title: "UIndex", icon: "mdi-magnet"},
-      {value: "mikan", title: "Mikan", icon: "mdi-animation-play-outline"},
-      {value: "animegarden", title: "AnimeGarden", icon: "mdi-flower-tulip-outline"},
       {value: "online_docs", title: "在线文档", icon: "mdi-file-document-outline"},
     ],
     groups: [

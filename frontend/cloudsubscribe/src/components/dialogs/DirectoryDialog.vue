@@ -1,19 +1,36 @@
 <template>
   <v-dialog v-model="visible" :max-width="providerItems.length > 1 ? 760 : 560">
-    <v-card class="directory-card">
-      <v-card-title class="directory-title px-3 py-2 bg-primary-lighten-5">
-        <v-icon icon="mdi-folder-network" color="primary" class="mr-2" />
-        <span>{{ title }}</span>
-      </v-card-title>
-      <v-card-text class="px-3 py-2">
+    <v-card class="directory-card rounded-xl overflow-hidden">
+      <!-- 美化后的弹窗顶部 Header -->
+      <div class="dialog-header d-flex align-center px-4 py-3 border-b">
+        <div class="dialog-header-icon mr-2">
+          <v-icon :icon="isLocalMode ? 'mdi-folder-cog-outline' : 'mdi-folder-network'" color="primary" size="20" />
+        </div>
+        <div class="flex-grow-1 overflow-hidden">
+          <div class="text-subtitle-1 font-weight-bold text-truncate">{{ dialogTitle }}</div>
+          <div class="text-caption text-medium-emphasis text-truncate">
+            {{ isLocalMode ? "支持浏览本地存储并可直接新建子文件夹" : "支持浏览当前网盘转存目录并可新建文件夹" }}
+          </div>
+        </div>
+        <v-btn
+          icon="mdi-close"
+          variant="text"
+          size="small"
+          class="dialog-close-btn ml-1 flex-shrink-0"
+          title="关闭"
+          @click="visible = false" />
+      </div>
+
+      <v-card-text class="px-4 py-3">
         <div class="directory-browser" :class="{ 'has-providers': providerItems.length > 1 }">
-          <v-list v-if="providerItems.length > 1" nav density="compact" class="provider-list border rounded">
-            <v-list-subheader>网盘</v-list-subheader>
+          <v-list v-if="providerItems.length > 1" nav density="compact" class="provider-list border rounded-lg">
+            <v-list-subheader class="text-caption font-weight-bold">网盘服务商</v-list-subheader>
             <v-list-item
               v-for="item in providerItems"
               :key="item.value"
               :active="selectedProvider === item.value"
               color="primary"
+              rounded="md"
               :disabled="loading"
               @click="selectProvider(item.value)">
               <template #prepend>
@@ -35,11 +52,12 @@
               hide-details
               :disabled="loading"
               @keyup.enter="loadDirectories(currentPath)" />
-            <div class="directory-actions mb-2">
+            <div class="directory-actions d-flex align-center ga-2 mb-2">
               <v-btn
                 v-if="allowCreate"
-                prepend-icon="mdi-folder-plus"
+                prepend-icon="mdi-folder-plus-outline"
                 variant="tonal"
+                color="primary"
                 size="small"
                 :disabled="loading || createLoading"
                 @click="openCreateDirectoryDialog">
@@ -57,8 +75,8 @@
             <div v-if="loading && !treeRoot.loaded" class="directory-loading">
               <v-progress-circular indeterminate color="primary" />
             </div>
-            <div v-else class="directory-list border rounded">
-              <CloudDirectoryTreeNode
+            <div v-else class="directory-list border rounded-lg">
+              <DirectoryTreeNode
                 :node="treeRoot"
                 :selected-path="currentPath"
                 :disabled="loading || createLoading"
@@ -71,20 +89,28 @@
           {{ errorMessage }}
         </v-alert>
       </v-card-text>
-      <v-card-actions class="px-3 py-2">
+      <v-card-actions class="px-4 py-3 border-t bg-surface-variant-opacity">
+        <span class="text-caption text-medium-emphasis text-truncate mr-2">
+          选中：{{ currentPath }}
+        </span>
         <v-spacer />
-        <v-btn color="primary" variant="text" size="small" :disabled="!currentPath || loading" @click="selectDirectory">
-          选择当前目录
-        </v-btn>
         <v-btn color="grey" variant="text" size="small" @click="visible = false">取消</v-btn>
+        <v-btn color="primary" variant="flat" size="small" :disabled="!currentPath || loading" @click="selectDirectory">
+          选择此目录
+        </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
 
   <v-dialog v-model="createDirectoryVisible" max-width="420" persistent>
-    <v-card rounded="lg">
-      <v-card-title class="text-subtitle-1">新建文件夹</v-card-title>
-      <v-card-text>
+    <v-card rounded="xl">
+      <div class="dialog-header d-flex align-center px-4 py-3 border-b">
+        <div class="dialog-header-icon mr-2">
+          <v-icon icon="mdi-folder-plus-outline" color="primary" size="18" />
+        </div>
+        <div class="text-subtitle-1 font-weight-bold">新建文件夹</div>
+      </div>
+      <v-card-text class="pt-4">
         <v-text-field
           v-model="newDirectoryName"
           label="文件夹名称"
@@ -99,7 +125,8 @@
       <v-card-actions class="px-4 pb-3">
         <v-spacer />
         <v-btn variant="text" :disabled="createLoading" @click="closeCreateDirectoryDialog">取消</v-btn>
-        <v-btn color="primary" :loading="createLoading" :disabled="!newDirectoryName.trim()" @click="createDirectory">
+        <v-btn color="primary" variant="flat" :loading="createLoading" :disabled="!newDirectoryName.trim()"
+               @click="createDirectory">
           创建
         </v-btn>
       </v-card-actions>
@@ -109,20 +136,26 @@
 
 <script setup>
 import {computed, ref, watch} from "vue";
-import CloudDirectoryTreeNode from "./CloudDirectoryTreeNode.vue";
+import DirectoryTreeNode from "./DirectoryTreeNode.vue";
 
 const props = defineProps({
   modelValue: {type: Boolean, default: false},
   api: {type: [Object, Function], required: true},
+  mode: {type: String, default: "cloud"}, // "cloud" 或 "local"
   provider: {type: String, default: ""},
   targetProvider: {type: String, default: ""},
   initialPath: {type: String, default: "/"},
   pluginId: {type: String, default: "CloudSubscribe"},
-  title: {type: String, default: "选择网盘转存路径"},
+  title: {type: String, default: ""},
   allowCreate: {type: Boolean, default: true},
   providers: {type: Array, default: () => []},
 })
 const emit = defineEmits(["update:modelValue", "select"]);
+const isLocalMode = computed(() => props.mode === "local");
+const dialogTitle = computed(() => {
+  if (props.title) return props.title;
+  return isLocalMode.value ? "选择本地存储目录" : "选择网盘转存路径";
+});
 const currentPath = ref("/");
 const selectedProvider = ref("");
 const loading = ref(false);
@@ -133,9 +166,10 @@ const createDirectoryError = ref("");
 const createLoading = ref(false);
 
 function directoryNode(source = {}, fallbackPath = "/") {
+  const rootLabel = isLocalMode.value ? "本地根目录" : "网盘根目录";
   return {
     id: String(source.id || source.path || fallbackPath),
-    name: String(source.name || (fallbackPath === "/" ? "根目录" : fallbackPath.split("/").pop())),
+    name: String(source.name || (fallbackPath === "/" ? rootLabel : fallbackPath.split("/").pop())),
     path: String(source.path || fallbackPath),
     children: [],
     expanded: fallbackPath === "/",
@@ -151,6 +185,7 @@ const visible = computed({
   set: (value) => emit("update:modelValue", value),
 })
 const providerItems = computed(() => {
+  if (isLocalMode.value) return [];
   if (Array.isArray(props.providers) && props.providers.length) return props.providers;
   return props.provider ? [{title: props.provider, value: props.provider}] : [];
 })
@@ -203,10 +238,13 @@ async function loadTreeNode(node, force = false) {
   try {
     const query = new URLSearchParams({
       path: node.path,
-      provider: selectedProvider.value || props.provider || "",
     })
+    if (!isLocalMode.value) {
+      query.set("provider", selectedProvider.value || props.provider || "");
+    }
     if (force) query.set("refresh", "true");
-    const response = unwrap(await props.api.get(`plugin/${props.pluginId}/cloud/directories?${query}`));
+    const endpoint = isLocalMode.value ? "local/directories" : "cloud/directories";
+    const response = unwrap(await props.api.get(`plugin/${props.pluginId}/${endpoint}?${query}`));
     if (response.success === false) throw new Error(response.message || "读取目录失败");
     const data = response.data?.data || response.data || response;
     const previous = new Map(node.children.map((item) => [item.path, item]));
@@ -282,12 +320,16 @@ async function createDirectory() {
   createDirectoryError.value = "";
   const directoryPath = currentPath.value || "/";
   try {
+    const endpoint = isLocalMode.value ? "local/directories/create" : "cloud/directories/create";
+    const payload = {
+      path: directoryPath,
+      name: folderName,
+    };
+    if (!isLocalMode.value) {
+      payload.provider = selectedProvider.value || props.provider || "";
+    }
     const response = unwrap(
-      await props.api.post(`plugin/${props.pluginId}/cloud/directories/create`, {
-        path: directoryPath,
-        name: folderName,
-        provider: selectedProvider.value || props.provider || "",
-      }),
+      await props.api.post(`plugin/${props.pluginId}/${endpoint}`, payload),
     )
     if (response.success === false) throw new Error(response.message || "创建文件夹失败");
     createDirectoryVisible.value = false;
@@ -323,60 +365,69 @@ watch(
 </script>
 
 <style scoped>
-.directory-title {
+/* 美化弹窗顶部 Header */
+.dialog-header {
+  background: linear-gradient(180deg, rgba(var(--v-theme-primary), 0.05) 0%, rgba(var(--v-theme-surface), 0.8) 100%);
+  min-height: 56px;
+}
+
+.dialog-header-icon {
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-primary), 0.1);
+  box-shadow: 0 1px 3px rgba(var(--v-theme-primary), 0.1);
+  flex-shrink: 0;
 }
 
-.directory-card {
-  min-height: min(560px, 72vh);
+.dialog-close-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  min-width: 30px !important;
+  border-radius: 50% !important;
+  color: rgba(var(--v-theme-on-surface), 0.55) !important;
+  transition: all 0.2s ease !important;
 }
 
-.directory-list {
-  height: min(390px, calc(72vh - 168px));
-  overflow-y: auto;
+.dialog-close-btn:hover {
+  color: rgba(var(--v-theme-on-surface), 0.95) !important;
+  background-color: rgba(var(--v-theme-on-surface), 0.08) !important;
+  transform: rotate(90deg);
 }
 
 .directory-browser {
-  display: grid;
-  min-width: 0;
-}
-
-.directory-browser.has-providers {
-  grid-template-columns: 180px minmax(0, 1fr);
+  display: flex;
   gap: 12px;
+  min-height: 340px;
 }
 
-.provider-list,
 .directory-pane {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .provider-list {
-  height: min(446px, calc(72vh - 112px));
+  width: 140px;
+  flex: 0 0 140px;
   overflow-y: auto;
 }
 
-.directory-actions {
-  display: flex;
-  gap: 8px;
+.directory-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px 4px;
 }
 
 .directory-loading {
   display: flex;
-  min-height: min(390px, calc(72vh - 168px));
-  align-items: center;
   justify-content: center;
-}
-
-@media (max-width: 600px) {
-  .directory-browser.has-providers {
-    grid-template-columns: 132px minmax(0, 1fr);
-    gap: 8px;
-  }
-
-  .provider-list :deep(.v-list-item) {
-    padding-inline: 8px;
-  }
+  align-items: center;
+  min-height: 200px;
 }
 </style>

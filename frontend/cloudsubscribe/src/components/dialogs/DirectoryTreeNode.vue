@@ -22,7 +22,7 @@
       <span class="tree-label">{{ node.name }}</span>
     </div>
     <template v-if="node.expanded">
-      <CloudDirectoryTreeNode
+      <DirectoryTreeNode
         v-for="child in node.children"
         :key="child.id || child.path"
         :node="child"

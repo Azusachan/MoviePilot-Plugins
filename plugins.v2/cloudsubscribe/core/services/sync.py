@@ -1003,9 +1003,6 @@ class SyncExecutionService(OwnerDelegator):
                 "phase": "保存结果与发送通知",
             },
         )
-        logger.info(
-            f"网盘订阅同步完成，共{action_name} {transferred_count} 个文件"
-        )
         pending_finalize_count = 0
         if self._sync_handler:
             pending_finalize_tasks = self._sync_handler.get_pending_finalize_tasks()
@@ -1019,11 +1016,28 @@ class SyncExecutionService(OwnerDelegator):
             self._sync_context["pending_finalize"] = pending_finalize_count
             self._sync_context["offline_pending"] = offline_pending_count
             self._sync_context["cloud_pending"] = cloud_pending_count
-            if pending_finalize_count:
-                logger.debug(
-                    f"本次仍有 {pending_finalize_count} 个文件等待网盘文件就绪，"
-                    "暂不发送完成确认"
+
+        if pending_finalize_count:
+            if offline_pending_count and cloud_pending_count:
+                logger.info(
+                    f"网盘订阅同步已提交：{offline_pending_count} 个离线下载任务、"
+                    f"{cloud_pending_count} 个网盘文件等待就绪，后台完成后将自动整理并通知"
                 )
+            elif offline_pending_count:
+                logger.info(
+                    f"网盘订阅同步已提交：{offline_pending_count} 个离线下载任务，"
+                    "等待网盘下载完成后自动整理"
+                )
+            else:
+                logger.info(
+                    f"网盘订阅同步进行中：{cloud_pending_count} 个网盘文件等待就绪，"
+                    "等待后台后处理完成"
+                )
+        else:
+            logger.info(
+                f"网盘订阅同步完成，共{action_name} {transferred_count} 个文件"
+            )
+
         if self._sync_handler:
             sync_metrics = self._sync_handler.get_sync_metrics()
             if sync_metrics:
@@ -1046,7 +1060,7 @@ class SyncExecutionService(OwnerDelegator):
                 ]
                 logger.debug(f"搜索性能汇总：{'；'.join(summary)}")
 
-        if self._notify and transferred_count == 0 and not manual_resources:
+        if self._notify and transferred_count == 0 and not manual_resources and not pending_finalize_count:
             self.post_message(
                 mtype=self._notification_type,
                 title="【网盘订阅助手】执行完成",
@@ -1241,7 +1255,7 @@ class SyncExecutionService(OwnerDelegator):
                     )
                 elif not success:
                     message = "订阅搜索执行失败"
-                elif transferred and run_context.get("pending_finalize"):
+                elif run_context.get("pending_finalize"):
                     pending_count = int(run_context["pending_finalize"] or 0)
                     offline_count = int(run_context.get("offline_pending") or 0)
                     cloud_count = int(run_context.get("cloud_pending") or 0)
@@ -1254,11 +1268,18 @@ class SyncExecutionService(OwnerDelegator):
                         pending_text = f"其中 {offline_count} 个离线文件等待下载，"
                     else:
                         pending_text = f"其中 {pending_count} 个网盘文件等待就绪，"
-                    message = (
-                        f"订阅搜索已提交{action_name} {transferred} 个文件，"
-                        f"{pending_text}"
-                        "完成后将再通知"
-                    )
+                    if transferred:
+                        message = (
+                            f"订阅搜索已提交{action_name} {transferred} 个文件，"
+                            f"{pending_text}"
+                            "完成后将再通知"
+                        )
+                    else:
+                        message = (
+                            f"订阅搜索已提交网盘任务，"
+                            f"{pending_text}"
+                            "后台完成后将自动整理并通知"
+                        )
                 elif transferred:
                     message = (
                         f"订阅搜索完成，共{action_name} {transferred} 个文件"

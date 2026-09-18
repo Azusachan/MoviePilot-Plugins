@@ -170,6 +170,20 @@ class MoviePilotRegistration(OwnerDelegator):
                 "summary": "创建网盘目录",
             },
             {
+                "path": "/local/directories",
+                "endpoint": self.api_vue_local_directories,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "浏览本地存储目录",
+            },
+            {
+                "path": "/local/directories/create",
+                "endpoint": self.api_vue_create_local_directory,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "创建本地存储目录",
+            },
+            {
                 "path": "/search/tmdb",
                 "endpoint": self.api_vue_search_tmdb_candidates,
                 "methods": ["POST"],

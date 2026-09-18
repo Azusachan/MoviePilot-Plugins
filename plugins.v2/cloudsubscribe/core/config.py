@@ -307,7 +307,7 @@ class UIConfig:
             "transfer_task_batch_size": 50,
             "cross_transfer_enabled": False,
             "cross_transfer_media_types": ["movie", "tv"],
-            "cross_transfer_download_path": "",
+            "cross_transfer_download_path": "/tmp",
             "cross_transfer_download_threads": 5,
             "cross_transfer_max_concurrent": 2,
             "subscription_concurrency": 2,

@@ -949,6 +949,15 @@ class SearchHandler:
             apply_platform_rules,
         )
 
+    def _recycle_source_provider(self, source: str) -> None:
+        """快速回收关闭指定搜索渠道的底层连接，打断可能挂起的网络请求。"""
+        try:
+            provider = self._search_registry.get(source)
+            if provider and hasattr(provider, "close"):
+                provider.close()
+        except Exception as error:
+            logger.debug(f"快速回收搜索渠道 {source} 连接失败：{error}")
+
     def search_sources(
             self,
             sources: List[str],
@@ -962,7 +971,7 @@ class SearchHandler:
             force_refresh: bool = False,
             result_limit: Optional[int] = None,
     ) -> Dict[str, List[Dict]]:
-        """并发查询相互独立的来源；各来源内部仍遵守自己的限流和串行约束，并受单渠道超时和熔断器保护。"""
+        """并发查询相互独立的来源；各来源内部仍遵守限流与熔断，支持精准超时与未完成渠道快速回收关闭。"""
         ordered_sources = list(dict.fromkeys(sources or []))
         search_label = self._search_label(mediainfo, media_type, season)
         results: Dict[str, List[Dict]] = {source: [] for source in ordered_sources}
@@ -975,11 +984,12 @@ class SearchHandler:
             thread_name_prefix="cloudsubscribe-search",
         )
         stopped = False
-        has_timeout = False
+        futures = {}
+        deadlines = {}
+        abandoned_sources = set()
+
         try:
-            futures = {}
-            start_times = {}
-            source_timeouts = {}
+            now = time.monotonic()
             for source in ordered_sources:
                 future = executor.submit(
                     self.search_single_source,
@@ -995,56 +1005,65 @@ class SearchHandler:
                     result_limit,
                 )
                 futures[future] = source
-                start_times[future] = time.monotonic()
-                source_timeouts[future] = self._get_source_search_timeout(source)
+                deadlines[future] = now + self._get_source_search_timeout(source)
 
             pending = set(futures)
             while pending:
                 if self._stop_requested():
                     stopped = True
-                    for future in pending:
-                        future.cancel()
-                    logger.info(
-                        f"⏹️ [{search_label}] 已停止等待搜索源，未开始的查询已取消"
-                    )
                     break
 
                 now = time.monotonic()
-                timed_out = []
-                for future in list(pending):
-                    elapsed = now - start_times[future]
-                    limit = source_timeouts[future]
-                    if elapsed > limit:
-                        has_timeout = True
-                        source = futures[future]
-                        logger.warning(
-                            f"⏰ [{search_label}] 搜索源 {source.upper()} 响应超时（耗时 {elapsed:.2f}s > {limit:.1f}s），已主动丢弃等待"
+                # 检查超时任务并快速丢弃
+                timed_out_futures = [f for f in pending if now > deadlines[f]]
+                for f in timed_out_futures:
+                    source = futures[f]
+                    abandoned_sources.add(source)
+                    logger.warning(
+                        f"⏰ [{search_label}] 搜索渠道 {source.upper()} 响应超时，已主动丢弃等待并回收"
+                    )
+                    if self._search_circuit_breaker_enabled:
+                        limit = self._get_source_search_timeout(source)
+                        SEARCH_CIRCUIT_BREAKER.record_failure(
+                            source, f"单次搜索超时(>{limit:.1f}s)"
                         )
-                        if self._search_circuit_breaker_enabled:
-                            SEARCH_CIRCUIT_BREAKER.record_failure(
-                                source, f"单次搜索超时(>{limit}s)"
-                            )
-                        future.cancel()
-                        timed_out.append(future)
-
-                for future in timed_out:
-                    pending.discard(future)
+                    f.cancel()
+                    self._recycle_source_provider(source)
+                    pending.discard(f)
 
                 if not pending:
                     break
 
-                done, pending = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
-                for future in done:
-                    source = futures[future]
+                # 动态计算到下一个最近超时的等待时长，避免固定盲轮询
+                min_remaining = min(max(0.05, deadlines[f] - now) for f in pending)
+                wait_step = min(0.3, min_remaining)
+
+                done, pending = wait(pending, timeout=wait_step, return_when=FIRST_COMPLETED)
+                for f in done:
+                    source = futures[f]
                     try:
-                        results[source] = future.result() or []
+                        results[source] = f.result() or []
                     except Exception as error:
                         logger.error(
                             f"[{search_label}] 搜索源 {source} 并发查询失败：{error}"
                         )
         finally:
-            wait_shutdown = not stopped and not has_timeout
-            executor.shutdown(wait=wait_shutdown, cancel_futures=True)
+            # 搜索完成或提前终止：若存在仍然在搜索的渠道，快速回收关闭底层连接
+            if pending or stopped:
+                for f in pending:
+                    source = futures.get(f)
+                    if source:
+                        abandoned_sources.add(source)
+                    f.cancel()
+                    if source:
+                        self._recycle_source_provider(source)
+                if abandoned_sources:
+                    logger.info(
+                        f"⏹️ [{search_label}] 搜索流程结束，已快速回收并关闭未完成的渠道：{', '.join(sorted(s.upper() for s in abandoned_sources))}"
+                    )
+            # 绝不阻塞主线程等待后台慢任务，立即释放
+            executor.shutdown(wait=False, cancel_futures=True)
+
         if not stopped:
             logger.debug(
                 f"[{search_label}] 搜索源查询完成："

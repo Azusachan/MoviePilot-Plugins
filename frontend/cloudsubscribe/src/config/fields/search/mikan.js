@@ -37,7 +37,7 @@ export function createMikanGroups() {
         {
           key: "mikan_base_url",
           label: "接口/镜像地址",
-          hint: "默认 https://mikanani.me，备用如 https://mikanime.tv 等可用镜像。",
+          hint: "默认官方地址，支持自定义镜像",
           cols: 12,
         },
         {
@@ -48,14 +48,14 @@ export function createMikanGroups() {
           items: fansubPresets,
           allowCustom: true,
           default: ["LoliHouse", "VCB-Studio", "喵萌奶茶|Nekomoe", "Nix-Raws", "\\bANI\\b|ANi"],
-          hint: "点击打开配置窗口，通过拖拽卡片调整字幕组优先级（排在最前面的最高优先，可从预设选择或自由输入并添加）。",
+          hint: "按优先级排序字幕组，支持拖拽调序",
         },
         {
           key: "mikan_exclude_re",
           label: "动漫排除正则",
           type: "text",
           placeholder: "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
-          hint: "过滤不需要的动漫资源（如 720p、特别篇、集数跨度等），留空使用系统默认排除规则。",
+          hint: "过滤不需要的动漫资源，留空使用默认",
           cols: 12,
         },
         {
@@ -63,7 +63,7 @@ export function createMikanGroups() {
           label: "生肉/无字幕排除正则",
           type: "text",
           placeholder: "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
-          hint: "留空时使用系统默认生肉排除规则。",
+          hint: "生肉排除正则，留空使用默认",
           cols: 12,
         },
         {
@@ -71,7 +71,7 @@ export function createMikanGroups() {
           label: "中文字幕匹配正则",
           type: "text",
           placeholder: "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
-          hint: "留空时使用系统默认中文字幕匹配规则。",
+          hint: "中文字幕匹配正则，留空使用默认",
           cols: 12,
         },
 

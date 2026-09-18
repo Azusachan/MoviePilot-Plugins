@@ -1,72 +1,73 @@
 <template>
   <div class="multi-select-dialog-field">
-    <div v-if="field.hint" class="text-caption text-medium-emphasis mb-2">{{ field.hint }}</div>
-
-    <!-- 表单外层触发器输入框 -->
-    <div
-      class="trigger-field d-flex align-center px-3 py-2 rounded-lg"
-      :class="{ 'is-disabled': disabled, 'has-values': selectedList.length > 0 }"
+    <!-- 表单外层触发器输入框：与 Vuetify 原生 compact outlined 输入框外观、高度、浮动Label、Notch、Hint 100% 像素级对齐 -->
+    <v-text-field
+      :model-value="selectedList.length > 0 ? ' ' : ''"
+      :label="field.label"
+      :hint="field.hint"
+      :persistent-hint="Boolean(field.hint)"
+      :placeholder="selectedList.length === 0 ? (field.placeholder || '点击选择...') : ''"
+      :disabled="disabled"
+      readonly
+      density="compact"
+      variant="outlined"
+      hide-details="auto"
+      class="multi-select-custom-field"
+      :class="{ 'has-selected': selectedList.length > 0 }"
+      :prepend-inner-icon="field.icon || 'mdi-checkbox-multiple-marked-outline'"
       @click="openDialog">
-      <v-icon
-        :icon="field.icon || 'mdi-checkbox-multiple-marked-outline'"
-        size="18"
-        class="mr-2 text-medium-emphasis flex-shrink-0" />
-
-      <div class="trigger-content flex-grow-1 overflow-hidden">
-        <div class="text-caption text-medium-emphasis trigger-label">{{ field.label }}</div>
-
-        <!-- 未选中任何项 -->
-        <div v-if="selectedList.length === 0" class="text-body-2 text-disabled text-truncate">
-          {{ field.placeholder || "点击选择..." }}
-        </div>
-
-        <!-- 已选中的选项胶囊展示（紧凑优雅，最多展示前3项，超出的以 +N 项徽章汇总） -->
-        <div v-else class="d-flex align-center flex-wrap ga-1 mt-1">
+      <!-- 左侧已选项目胶囊预览（展示前 3 项，不再显示混淆的 +N 剩余项） -->
+      <template v-if="selectedList.length > 0" #default>
+        <div class="d-flex align-center flex-wrap ga-1 trigger-chips-wrapper" @click.stop="openDialog">
           <v-chip
             v-for="item in visibleChips"
             :key="item.value"
             size="x-small"
             variant="tonal"
             color="primary"
-            class="font-weight-medium">
+            class="font-weight-medium my-0">
             {{ item.title }}
           </v-chip>
-          <v-chip
-            v-if="remainingCount > 0"
-            size="x-small"
-            variant="flat"
-            color="primary"
-            class="font-weight-bold">
-            +{{ remainingCount }} 项
-          </v-chip>
         </div>
-      </div>
+      </template>
 
-      <!-- 右侧操作图标 -->
-      <div class="trigger-actions d-flex align-center ga-1 ml-2 flex-shrink-0">
-        <v-btn
-          v-if="selectedList.length > 0 && !disabled"
-          icon="mdi-close-circle"
-          variant="text"
-          size="x-small"
-          density="compact"
-          color="medium-emphasis"
-          title="清空已选项"
-          class="clear-trigger-btn"
-          @click.stop="clearSelection" />
-        <v-icon icon="mdi-chevron-down" size="18" class="text-medium-emphasis" />
-      </div>
-    </div>
+      <!-- 右侧统一对齐展示：【清空 x 按钮】+【总数量徽标】+【下拉指示箭头】 -->
+      <template #append-inner>
+        <div class="d-flex align-center ga-1 trigger-append-actions">
+          <!-- 清空 x 按钮 -->
+          <button
+            v-if="selectedList.length > 0 && !disabled"
+            type="button"
+            class="echo-clear-trigger"
+            title="清空已选项"
+            @click.stop="clearSelection">
+            <v-icon icon="mdi-close" size="13" />
+          </button>
+
+          <!-- 总数量徽标 -->
+          <span v-if="selectedList.length > 0" class="echo-count-pill">
+            {{ selectedList.length }} 项
+          </span>
+
+          <!-- 下拉小箭头 -->
+          <v-icon
+            icon="mdi-chevron-down"
+            size="16"
+            class="echo-chevron-icon"
+            :class="{ 'echo-chevron-icon--open': dialogVisible }" />
+        </div>
+      </template>
+    </v-text-field>
 
     <!-- 弹窗多选选择器 -->
     <v-dialog v-model="dialogVisible" max-width="580" scrollable>
-      <v-card class="multi-select-dialog rounded-xl">
-        <!-- 头部导航 -->
-        <div class="dialog-header d-flex align-center px-4 py-3">
-          <div class="dialog-header-icon mr-2">
+      <v-card class="multi-select-dialog rounded-xl overflow-hidden">
+        <!-- 美化后的弹窗顶部 Header：高光渐变顶板、微阴影凸起图标底座、药丸徽标与细腻关闭按钮 -->
+        <div class="dialog-header d-flex align-center px-4 py-3 border-b">
+          <div class="dialog-header-icon mr-3">
             <v-icon
               :icon="field.icon || 'mdi-checkbox-multiple-marked-outline'"
-              size="20"
+              size="18"
               color="primary" />
           </div>
           <div class="flex-grow-1 overflow-hidden">
@@ -77,7 +78,8 @@
               {{ field.hint || "支持多选，点击卡片直接勾选或取消" }}
             </div>
           </div>
-          <v-chip size="small" variant="tonal" color="primary" class="font-weight-medium px-2 mr-1 flex-shrink-0">
+          <v-chip size="small" variant="tonal" color="primary"
+                  class="font-weight-medium px-2 mr-1 flex-shrink-0 dialog-count-badge">
             已选择 {{ tempSelection.length }} / {{ normalizedItems.length }} 项
           </v-chip>
           <v-btn
@@ -257,6 +259,11 @@ const selectedList = computed(() => {
   return current.map((val) => map.get(String(val)) || {title: String(val), value: val});
 });
 
+const displaySummaryText = computed(() => {
+  if (selectedList.value.length === 0) return "";
+  return selectedList.value.map((i) => i.title).join(", ");
+});
+
 // 触发器中最多展示前 3 个 Chip
 const visibleChips = computed(() => selectedList.value.slice(0, 3));
 const remainingCount = computed(() => Math.max(0, selectedList.value.length - 3));
@@ -354,53 +361,128 @@ function clearSelection() {
 }
 
 /* 触发器输入框样式：类似 Vuetify outlined 紧凑输入框 */
-.trigger-field {
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  background-color: rgb(var(--v-theme-surface));
-  min-height: 48px;
+/* 触发器输入框样式：继承 Vuetify 统一规范 */
+.multi-select-custom-field {
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
-  user-select: none;
 }
 
-.trigger-field:hover:not(.is-disabled) {
-  border-color: rgba(var(--v-theme-primary), 0.65);
-  background-color: rgba(var(--v-theme-primary), 0.02);
+.multi-select-custom-field :deep(.v-field) {
+  cursor: pointer !important;
 }
 
-.trigger-field.is-disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.multi-select-custom-field :deep(input) {
+  cursor: pointer !important;
+}
+
+.multi-select-custom-field.has-selected :deep(input) {
+  display: none !important;
+  width: 0 !important;
+  opacity: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+.trigger-chips-wrapper {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
   pointer-events: none;
+  line-height: 1;
+  padding-top: 1px;
 }
 
-.trigger-label {
-  line-height: 1.1;
+.trigger-append-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 2px;
 }
 
-.clear-trigger-btn {
-  opacity: 0.7;
-  transition: opacity 0.2s;
+.echo-clear-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background-color: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.36);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
 }
 
-.clear-trigger-btn:hover {
-  opacity: 1;
+.echo-clear-trigger:hover {
+  color: rgb(var(--v-theme-error));
+  background-color: rgba(var(--v-theme-error), 0.12);
+  transform: scale(1.15);
 }
 
-/* 弹窗头部与高颜值关闭按钮 */
+.echo-clear-trigger:active {
+  transform: scale(0.92);
+}
+
+.echo-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  background-color: rgba(var(--v-theme-primary), 0.08);
+  border: 1px solid rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-primary));
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  user-select: none;
+  line-height: 1;
+}
+
+.echo-chevron-icon {
+  color: rgba(var(--v-theme-on-surface), 0.35);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease;
+}
+
+.echo-chevron-icon--open {
+  transform: rotate(180deg);
+  color: rgb(var(--v-theme-primary));
+}
+
+/* 弹窗头部 Header 美化 */
 .dialog-header {
-  min-height: 52px;
+  background: linear-gradient(180deg, rgba(var(--v-theme-primary), 0.05) 0%, rgba(var(--v-theme-surface), 0.8) 100%);
+  min-height: 56px;
+}
+
+.dialog-header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-primary), 0.1);
+  box-shadow: 0 1px 3px rgba(var(--v-theme-primary), 0.1);
+  flex-shrink: 0;
+}
+
+.dialog-count-badge {
+  border-radius: 12px !important;
 }
 
 .dialog-close-btn {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 32px !important;
-  height: 32px !important;
-  min-width: 32px !important;
+  width: 30px !important;
+  height: 30px !important;
+  min-width: 30px !important;
   border-radius: 50% !important;
-  color: rgba(var(--v-theme-on-surface), 0.6) !important;
+  color: rgba(var(--v-theme-on-surface), 0.55) !important;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 

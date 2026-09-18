@@ -109,7 +109,6 @@ export function createHdhiveGroups(options = {}) {
       tab: "hdhive",
       title: "HDHive 积分解锁",
       icon: "mdi-ticket-confirmation-outline",
-      hint: "默认不解锁收费资源；开启后仅在候选被实际采用且双重预算充足时扣费。",
       fields: [
         {
           key: "hdhive_auto_unlock",
@@ -120,7 +119,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_max_unlock_points",
           label: "单次积分总预算",
-          hint: "限制一次同步任务内 HDHive 的累计解锁积分。",
+          hint: "单次同步最大解锁积分",
           type: "number",
           min: 0,
           cols: 4,
@@ -129,7 +128,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_max_points_per_sub",
           label: "单订阅解锁预算",
-          hint: "按订阅累计并持久化；订阅完成后清除对应积分账本。",
+          hint: "单订阅累计解锁预算",
           type: "number",
           min: 0,
           cols: 4,
@@ -141,12 +140,11 @@ export function createHdhiveGroups(options = {}) {
       tab: "hdhive",
       title: "搜索与风控",
       icon: "mdi-shield-search",
-      hint: "资源缓存减少重复访问；WebAPI 每分钟最多请求 10 次，异常页面会触发 10 分钟保护冷却。",
       fields: [
         {
           key: "hdhive_candidate_limit",
           label: "候选上限",
-          hint: "按平台规则排序后再截取",
+          hint: "最大保留候选数量",
           type: "number",
           min: 1,
           max: 20,
@@ -155,7 +153,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_timeout",
           label: "搜索超时",
-          hint: "单次搜索最大等待时间，超时自动中断并上报熔断，默认 60 秒",
+          hint: "单次搜索超时秒数，默认 60 秒",
           type: "number",
           min: 5,
           max: 120,
@@ -165,7 +163,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_request_interval",
           label: "请求访问间隔",
-          hint: "OpenAPI 与 WebAPI 的认证、查询和解锁共用统一限速，并自动加入随机抖动",
+          hint: "接口请求基础间隔秒数",
           type: "number",
           min: 2,
           max: 10,
@@ -176,7 +174,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_unlocks_per_minute",
           label: "每分钟解锁次数",
-          hint: "仅限制 WebAPI 受保护接口，默认 2 次；按账户使用滚动窗口、首次等待和随机间隔",
+          hint: "WebAPI 解锁频次限制，默认 2 次",
           type: "number",
           min: 1,
           max: 5,
@@ -188,7 +186,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_torrentclaw_enabled",
           label: "获取 TorrentClaw Magnet",
-          hint: "仅在资源类型优先级中选择 Magnet 时生效。",
+          hint: "按优先级获取磁力资源",
           type: "switch",
           cols: 12,
           show: (config) => config.hdhive_query_mode === "web",
@@ -196,7 +194,7 @@ export function createHdhiveGroups(options = {}) {
         {
           key: "hdhive_torrentclaw_subtitle_languages",
           label: "Magnet字幕语言筛选",
-          hint: "按选择顺序优先匹配，默认中文。存在匹配项时过滤其他资源，无匹配时回退全部。",
+          hint: "优先匹配所选字幕语言，默认中文",
           type: "select",
           items: [
             { title: "中文", value: "zh" },

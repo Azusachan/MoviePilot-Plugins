@@ -1,96 +1,201 @@
 <template>
   <div class="cloud-subscribe-config">
-    <v-card flat class="border rounded config-shell">
-      <v-card-title class="config-header d-flex align-center ga-1 px-3 py-2 bg-primary-lighten-5">
-        <v-icon icon="mdi-cloud-cog-outline" color="primary" size="small" class="mr-1" />
-        <span class="config-title text-subtitle-1">网盘订阅助手</span>
-        <v-spacer />
-        <v-btn
-          v-if="showSwitch"
-          class="config-header-action"
-          variant="text"
-          size="small"
-          prepend-icon="mdi-arrow-left"
-          title="返回详情"
-          @click="emit('switch')">
-          返回详情
-        </v-btn>
-        <v-btn
-          class="config-header-action"
-          variant="text"
-          size="small"
-          prepend-icon="mdi-close"
-          title="关闭"
-          @click="emit('close')">
-          关闭
-        </v-btn>
-      </v-card-title>
-      <v-card-text class="pa-0 config-body">
-        <v-tabs v-model="activeTab" color="primary" density="compact" show-arrows class="config-tabs border-b">
-          <v-tab v-for="section in sections" :key="section.value" :value="section.value">
-            <v-icon :icon="section.icon" size="small" class="mr-2" />
-            {{ section.title }}
-          </v-tab>
-        </v-tabs>
-        <div class="config-content-scroll">
-          <div class="config-window">
-            <section
+    <v-card flat class="border rounded-lg config-shell">
+      <div class="config-layout">
+        <!-- 左侧通顶侧边栏：融合品牌标题，无灰色背景，无分割线切碎 -->
+        <aside class="config-sidebar">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-main">
+              <v-icon icon="mdi-cloud-cog-outline" color="primary" size="20" class="sidebar-brand-icon" />
+              <span class="sidebar-brand-title">网盘订阅助手</span>
+            </div>
+            <!-- 手机端顶部右侧操作栏（位置正确且直接置顶） -->
+            <div class="sidebar-mobile-actions d-md-none">
+              <v-btn
+                v-if="showSwitch"
+                class="mobile-header-btn"
+                variant="text"
+                size="small"
+                density="compact"
+                prepend-icon="mdi-arrow-left"
+                title="返回详情"
+                @click="emit('switch')">
+                返回
+              </v-btn>
+              <v-btn
+                class="mobile-header-btn"
+                variant="text"
+                size="small"
+                density="compact"
+                icon="mdi-close"
+                title="关闭"
+                @click="emit('close')" />
+            </div>
+          </div>
+          <nav class="sidebar-nav" aria-label="配置导航">
+            <button
               v-for="section in sections"
               :key="section.value"
-              v-show="activeTab === section.value"
-              class="config-window-section">
-              <ConfigSection
-                :section="section"
-                :config="config"
-                :api="api"
-                :refreshing-accounts="refreshingAccounts"
-                :testing-source="testingSource"
-                :testing-auto-subscribe="testingAutoSubscribe"
-                :testing-proxy="testingProxy"
-                :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
-                :hdhive-oauth-action="hdhiveOauthAction"
-                @scan="openQrCode"
-                @browse-directory="openDirectoryPicker"
-                @test-source="openSourceTest"
-                @test-auto-subscribe="testAutoSubscribe"
-                @test-proxy="testSearchProxy"
-                @test-auto-subscribe-proxy="testAutoSubscribeProxy"
-                @refresh-account="refreshAccount"
-                @hdhive-oauth-start="startHdhiveOAuth"
-                @hdhive-oauth-exchange="exchangeHdhiveOAuth"
-                @checkin-result="handleCheckinResult"
-                @copy-text="copyText" />
-            </section>
+              type="button"
+              class="sidebar-nav-item"
+              :class="{ 'sidebar-nav-item--active': activeTab === section.value }"
+              @click="onNavClick(section.value, $event)">
+              <v-icon :icon="section.icon" size="16" class="sidebar-nav-icon" />
+              <span class="sidebar-nav-title">{{ section.title }}</span>
+              <v-icon
+                v-if="activeTab === section.value"
+                icon="mdi-chevron-right"
+                size="14"
+                class="sidebar-active-indicator" />
+            </button>
+          </nav>
+          <!-- 电脑端左下角全高状态看板卡片（占满下方空白，设计饱满高级） -->
+          <div class="sidebar-footer">
+            <div class="sidebar-status-panel">
+              <!-- 顶部：运行状态与版本 -->
+              <div class="status-panel-top">
+                <div class="status-live-badge">
+                  <span class="status-live-dot"></span>
+                  <span class="status-live-text">运行中</span>
+                </div>
+                <span class="status-version-tag">v{{ pluginVersion }}</span>
+              </div>
+
+              <!-- 中部：系统环境指标卡片网格 -->
+              <div class="status-info-grid">
+                <div class="status-info-row">
+                  <span class="status-info-label">提交</span>
+                  <span class="status-info-value font-mono">#{{ buildId }}</span>
+                </div>
+                <div class="status-info-row">
+                  <span class="status-info-label">构建</span>
+                  <span class="status-info-value">{{ buildDate }}</span>
+                </div>
+              </div>
+
+              <!-- 底部：开源社区链接与支持 -->
+              <div class="status-panel-links">
+                <a
+                  :href="repoUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="status-action-link"
+                  title="访问 GitHub 开源仓库">
+                  <v-icon icon="mdi-github" size="13" class="mr-1" />
+                  <span>{{ pluginAuthor }}</span>
+                  <v-icon icon="mdi-open-in-new" size="10" class="ml-auto opacity-50" />
+                </a>
+                <a
+                  :href="repoUrl + '/issues'"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="status-action-link"
+                  title="提交问题反馈或功能建议">
+                  <v-icon icon="mdi-help-circle-outline" size="13" class="mr-1" />
+                  <span>反馈支持</span>
+                  <v-icon icon="mdi-chevron-right" size="12" class="ml-auto opacity-50" />
+                </a>
+              </div>
+            </div>
           </div>
-        </div>
-      </v-card-text>
-      <v-divider />
-      <v-card-actions class="config-actions px-4 py-3">
-        <v-progress-linear v-if="saving" class="save-progress" color="primary" indeterminate />
-        <v-slide-y-transition>
-          <div v-if="saving" class="save-state" aria-live="polite">
-            <v-progress-circular indeterminate size="16" width="2" color="primary" />
-            正在保存配置
+        </aside>
+
+        <!-- 右侧主界面 -->
+        <main class="config-main">
+          <!-- 电脑端极简顶栏：展示当前模块名称，右侧放置返回/关闭操作；手机端已置顶整合 -->
+          <header class="config-main-header d-none d-md-flex">
+            <div class="config-main-title">
+              <v-icon
+                v-if="currentSection?.icon"
+                :icon="currentSection.icon"
+                size="20"
+                color="primary"
+                class="mr-2 flex-shrink-0" />
+              <span>{{ currentSectionTitle }}</span>
+            </div>
+            <div class="config-header-actions">
+              <v-btn
+                v-if="showSwitch"
+                class="config-header-btn"
+                variant="text"
+                size="small"
+                prepend-icon="mdi-arrow-left"
+                title="返回详情"
+                @click="emit('switch')">
+                返回详情
+              </v-btn>
+              <v-btn
+                class="config-header-btn"
+                variant="text"
+                size="small"
+                prepend-icon="mdi-close"
+                title="关闭"
+                @click="emit('close')">
+                关闭
+              </v-btn>
+            </div>
+          </header>
+
+          <!-- 内容展示容器：带丝滑淡入过渡动画，仅渲染当前激活的 section -->
+          <div class="config-main-body">
+            <transition name="fade-slide" mode="out-in">
+              <div :key="activeTab" class="config-window-section">
+                <ConfigSection
+                  v-if="currentSection"
+                  :section="currentSection"
+                  :config="config"
+                  :api="api"
+                  :refreshing-accounts="refreshingAccounts"
+                  :testing-source="testingSource"
+                  :testing-auto-subscribe="testingAutoSubscribe"
+                  :testing-proxy="testingProxy"
+                  :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
+                  :hdhive-oauth-action="hdhiveOauthAction"
+                  @scan="openQrCode"
+                  @browse-directory="openDirectoryPicker"
+                  @test-source="openSourceTest"
+                  @test-auto-subscribe="testAutoSubscribe"
+                  @test-proxy="testSearchProxy"
+                  @test-auto-subscribe-proxy="testAutoSubscribeProxy"
+                  @refresh-account="refreshAccount"
+                  @hdhive-oauth-start="startHdhiveOAuth"
+                  @hdhive-oauth-exchange="exchangeHdhiveOAuth"
+                  @checkin-result="handleCheckinResult"
+                  @copy-text="copyText" />
+              </div>
+            </transition>
           </div>
-        </v-slide-y-transition>
-        <v-spacer />
-        <v-btn
-          color="primary"
-          class="save-config-button"
-          variant="flat"
-          elevation="2"
-          prepend-icon="mdi-content-save-check-outline"
-          :loading="saving"
-          @click="save">
-          保存配置
-        </v-btn>
-      </v-card-actions>
+
+          <!-- 底部操作栏 -->
+          <footer class="config-actions">
+            <v-progress-linear v-if="saving" class="save-progress" color="primary" indeterminate />
+            <v-slide-y-transition>
+              <div v-if="saving" class="save-state" aria-live="polite">
+                <v-progress-circular indeterminate size="16" width="2" color="primary" />
+                正在保存配置
+              </div>
+            </v-slide-y-transition>
+            <div class="actions-spacer"></div>
+            <v-btn
+              color="primary"
+              class="save-config-button"
+              variant="flat"
+              elevation="1"
+              prepend-icon="mdi-content-save-check-outline"
+              :loading="saving"
+              @click="save">
+              保存配置
+            </v-btn>
+          </footer>
+        </main>
+      </div>
     </v-card>
     <QrCodeDialog v-show="qrVisible" v-model="qrVisible" :api="api" :provider="qrProvider" @success="handleQrSuccess" />
-    <CloudDirectoryDialog
+    <DirectoryDialog
       v-show="directoryVisible"
       v-model="directoryVisible"
       :api="api"
+      :mode="directoryMode"
       :provider="directoryProvider"
       :initial-path="directoryInitialPath"
       @select="selectDirectory" />
@@ -519,12 +624,21 @@
 
 <script setup>
 import {computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch} from "vue";
+import {useDisplay} from "vuetify";
 import ConfigSection from "./config/ConfigSection.vue";
 import {createConfigSections} from "../config/fields.js";
 import {createResourceTypeItems} from "../config/fields/helpers.js";
 
 const QrCodeDialog = defineAsyncComponent(() => import("./dialogs/QrCodeDialog.vue"))
-const CloudDirectoryDialog = defineAsyncComponent(() => import("./dialogs/CloudDirectoryDialog.vue"))
+const DirectoryDialog = defineAsyncComponent(() => import("./dialogs/DirectoryDialog.vue"));
+
+const pluginVersion = typeof __PLUGIN_VERSION__ !== "undefined" ? __PLUGIN_VERSION__ : "1.5.0";
+const pluginAuthor = typeof __PLUGIN_AUTHOR__ !== "undefined" ? __PLUGIN_AUTHOR__ : "odomu";
+const authorUrl = typeof __AUTHOR_URL__ !== "undefined" ? __AUTHOR_URL__ : "https://github.com/odomu";
+const repoUrl = typeof __REPO_URL__ !== "undefined" ? __REPO_URL__ : "https://github.com/odomu/MoviePilot-Plugins";
+const buildDate = typeof __BUILD_DATE__ !== "undefined" ? __BUILD_DATE__ : "";
+const buildTime = typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "";
+const buildId = typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "";
 const props = defineProps({
   api: { type: [Object, Function], required: true },
   initialConfig: { type: Object, default: () => ({}) },
@@ -532,6 +646,13 @@ const props = defineProps({
 })
 const emit = defineEmits(["save", "close", "switch", "layout"])
 const api = props.api
+let display = null;
+try {
+  display = useDisplay();
+} catch {
+  display = null;
+}
+const isMobile = computed(() => (display?.smAndDown?.value ?? false) || (typeof window !== "undefined" && window.innerWidth <= 768));
 const config = reactive(JSON.parse(JSON.stringify(props.initialConfig || {})))
 
 function normalizeAutoSubscribeYears(target) {
@@ -576,6 +697,9 @@ function normalizeAutoSubscribeYears(target) {
   if (!target.animegarden_no_subs_re) target.animegarden_no_subs_re = defaultNoSubsRe;
   if (!target.animegarden_chinese_re) target.animegarden_chinese_re = defaultChineseRe;
   if (!target.animegarden_exclude_re) target.animegarden_exclude_re = defaultExcludeRe;
+  if (!String(target.cross_transfer_download_path || "").trim()) {
+    target.cross_transfer_download_path = "/tmp";
+  }
 }
 
 normalizeAutoSubscribeYears(config);
@@ -595,6 +719,13 @@ if (!config.online_docs.length) {
 config.online_docs_urls = []
 config.online_docs_resource_types = []
 const activeTab = ref("basic")
+
+function onNavClick(val, event) {
+  activeTab.value = val;
+  if (event?.currentTarget) {
+    event.currentTarget.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
+  }
+}
 const optionScopeByTab = Object.freeze({
   basic: "base",
   transfer: "subscriptions",
@@ -609,6 +740,7 @@ const optionScopeRequests = new Map()
 const qrVisible = ref(false),
   qrProvider = ref("115"),
   directoryVisible = ref(false),
+  directoryMode = ref("cloud"),
   directoryField = ref(""),
   directoryInitialPath = ref("/"),
   directoryProvider = ref("115"),
@@ -671,6 +803,13 @@ const options = reactive({
   rsshubLoading: false,
 })
 const sections = computed(() => createConfigSections(options, config))
+const currentSection = computed(() => {
+  return sections.value.find((s) => s.value === activeTab.value) || sections.value[0];
+});
+const currentSectionTitle = computed(() => {
+  const current = sections.value.find((s) => s.value === activeTab.value);
+  return current?.title || "配置详情";
+});
 const testResourceTypes = computed(() => {
   const declared = Array.isArray(testResult.value?.resource_types)
     ? testResult.value.resource_types
@@ -1304,8 +1443,9 @@ async function handleQrSuccess(payload) {
   }
 }
 
-function openDirectoryPicker(fieldKey, provider) {
+function openDirectoryPicker(fieldKey, provider, isLocal = false) {
   directoryField.value = fieldKey
+  directoryMode.value = isLocal ? "local" : "cloud";
   directoryProvider.value = String(provider || config.cloud_drive || "115")
   directoryInitialPath.value = String(config[fieldKey] || "/").trim() || "/"
   directoryVisible.value = true
@@ -1742,44 +1882,412 @@ watch(
   white-space: nowrap;
 }
 
-.config-body {
+.cloud-subscribe-config {
+  display: flex;
+  width: min(62rem, calc(100vw - 32px));
+  max-width: min(62rem, 100%);
+  min-width: 0;
+  height: min(800px, calc(100dvh - 56px));
+  max-height: min(800px, calc(100dvh - 56px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.v-overlay__content:has(.cloud-subscribe-config)) {
+  overflow: hidden !important;
+  border-radius: 8px !important;
+}
+
+:global(.v-overlay__content:has(.cloud-subscribe-config) > *) {
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden !important;
+}
+
+.config-shell {
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px !important;
+  border: 1px solid rgba(var(--v-border-color), 0.12) !important;
+  background-color: rgb(var(--v-theme-surface)) !important;
+}
+
+.config-layout {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+/* 侧边栏：融合标题、舒展高级视觉比例（176px）、高质感指示 */
+.config-sidebar {
+  width: 176px !important;
+  min-width: 176px !important;
+  max-width: 176px !important;
+  flex: 0 0 176px !important;
+  flex-shrink: 0 !important;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: transparent !important;
+  border-right: 1px solid rgba(var(--v-border-color), 0.08);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px 10px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.sidebar-brand-title {
+  font-size: 0.885rem;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 8px 10px;
+  flex: 1 1 auto;
+}
+
+.sidebar-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.78);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-nav-icon {
+  margin-right: 8px;
+  color: inherit;
+  opacity: 0.82;
+  flex-shrink: 0;
+}
+
+.sidebar-nav-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-active-indicator {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-primary));
+  opacity: 0.85;
+  animation: indicator-fade-in 0.18s ease;
+}
+
+@keyframes indicator-fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+  to {
+    opacity: 0.85;
+    transform: translateX(0);
+  }
+}
+
+.sidebar-nav-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.sidebar-nav-item--active {
+  background: rgba(var(--v-theme-primary), 0.09) !important;
+  color: rgb(var(--v-theme-primary)) !important;
+  font-weight: 600;
+}
+
+.sidebar-nav-item--active .sidebar-nav-icon {
+  opacity: 1;
+  color: rgb(var(--v-theme-primary));
+}
+
+.sidebar-nav-item--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: rgb(var(--v-theme-primary));
+}
+
+/* 右侧主区域与内容架构 */
+.config-main {
+  flex: 1 1 0;
+  min-width: 0 !important;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.cloud-subscribe-config :deep(.v-field),
-.cloud-subscribe-config :deep(.v-selection-control) {
-  font-size: 0.875rem;
-}
-
-.cloud-subscribe-config :deep(.v-field) {
-  --v-input-control-height: 38px;
-}
-
-.config-tabs :deep(.v-tab) {
-  min-width: 132px;
-  text-transform: none;
-}
-
-.config-tabs {
+.config-main-header {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px 6px;
 }
 
-.config-content-scroll {
+.config-main-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.config-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.config-header-btn {
+  font-size: 0.8125rem;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+}
+
+.config-header-btn:hover {
+  background-color: rgba(var(--v-theme-on-surface), 0.06) !important;
+  transform: translateY(-0.5px);
+}
+
+.config-main-body {
   flex: 1 1 0;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+.config-window-section {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 6px 24px 14px;
+}
+
+/* 主内容区切换平滑滑动淡入动画 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* 左下角全高状态看板卡片（占满空白，排版饱满高级） */
+.sidebar-footer {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 10px 8px 12px;
+  min-height: 180px;
+}
+
+.sidebar-status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 10px;
+  background: rgba(var(--v-theme-on-surface), 0.025);
+  border: 1px solid rgba(var(--v-border-color), 0.08);
+  border-radius: 10px;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.sidebar-status-panel:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-color: rgba(var(--v-border-color), 0.16);
+}
+
+.status-panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.status-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+  animation: live-pulse 2s infinite ease-in-out;
+}
+
+@keyframes live-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
+  }
+}
+
+.status-live-text {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.78);
+}
+
+.status-version-tag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+}
+
+.status-info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px dashed rgba(var(--v-border-color), 0.1);
+  border-bottom: 1px dashed rgba(var(--v-border-color), 0.1);
+}
+
+.status-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+}
+
+.status-info-label {
+  color: rgba(var(--v-theme-on-surface), 0.45);
+}
+
+.status-info-value {
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  font-weight: 500;
+}
+
+.status-panel-links {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.status-action-link {
+  display: flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  text-decoration: none;
+  padding: 3px 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.status-action-link:hover {
+  color: rgb(var(--v-theme-primary)) !important;
+  background: rgba(var(--v-theme-primary), 0.06);
+}
+
+.status-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
 }
 
 .config-actions {
   position: relative;
-  min-height: 68px;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 24px;
+  border-top: 1px solid rgba(var(--v-border-color), 0.06);
+  background-color: rgb(var(--v-theme-surface));
+  flex-shrink: 0;
+}
+
+.actions-spacer {
+  flex: 1 1 auto;
 }
 
 .save-progress {
@@ -1799,8 +2307,19 @@ watch(
   min-width: 132px;
   height: 42px;
   font-weight: 600;
-  letter-spacing: 0;
-  box-shadow: 0 3px 8px rgba(var(--v-theme-primary), 0.24) !important;
+  letter-spacing: 0.01em;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(var(--v-theme-primary), 0.28) !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.save-config-button:hover {
+  box-shadow: 0 4px 14px rgba(var(--v-theme-primary), 0.38) !important;
+  transform: translateY(-1px);
+}
+
+.save-config-button:active {
+  transform: translateY(0);
 }
 
 .source-test-card {
@@ -2155,23 +2674,7 @@ watch(
   overflow: hidden;
 }
 
-.config-window-section {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-}
-
-@media (min-width: 601px) {
-  .config-window-section {
-    padding: 12px 14px 20px;
-  }
-}
-
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   :global(.v-overlay__content:has(.cloud-subscribe-config)) {
     width: 100vw !important;
     max-width: 100vw !important;
@@ -2188,59 +2691,116 @@ watch(
   }
 
   .config-shell {
-    width: 100%;
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
     border-radius: 0 !important;
+    border: none !important;
   }
 
-  .config-body,
-  .config-content-scroll {
-    height: 0;
+  .config-layout {
+    flex-direction: column !important;
   }
 
-  .config-content-scroll {
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    scroll-behavior: auto;
+  .config-sidebar {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: auto !important;
+    border-right: none !important;
+    border-bottom: 1px solid rgba(var(--v-border-color), 0.08) !important;
+    background: transparent !important;
+    overflow: hidden !important;
   }
 
-  .config-header {
-    padding-left: 10px !important;
-    padding-right: 10px !important;
+  /* 移动端彻底隐藏左下角元数据卡片 */
+  .sidebar-footer {
+    display: none !important;
   }
 
-  .config-header-action {
-    flex: 0 0 34px;
-    min-width: 34px !important;
-    width: 34px;
-    padding: 0 !important;
+  .sidebar-brand {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 10px 12px 6px !important;
   }
 
-  .config-header-action :deep(.v-btn__content) {
+  .sidebar-brand-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sidebar-brand-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .sidebar-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .mobile-header-btn {
+    font-size: 0.78125rem !important;
+    padding: 0 6px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    color: rgba(var(--v-theme-on-surface), 0.75) !important;
+    border-radius: 6px !important;
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    padding: 2px 10px 8px;
+    gap: 6px;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .sidebar-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .config-header-action :deep(.v-btn__prepend) {
-    margin: 0;
-  }
-
-  .config-actions {
-    min-height: 64px;
-    padding-inline: 12px !important;
-  }
-
-  .save-state {
+  .sidebar-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    height: 32px;
+    padding: 0 10px;
     font-size: 0.8125rem;
+    border-radius: 6px;
   }
 
-  .config-tabs :deep(.v-tab) {
-    min-width: 112px;
+  /* 移动端横向 Tab 栏严禁显示 > 指示箭头 */
+  .sidebar-active-indicator {
+    display: none !important;
+  }
+
+  .sidebar-nav-item--active::before {
+    display: none !important;
+  }
+
+  .sidebar-nav-icon {
+    margin-right: 5px;
+    font-size: 15px !important;
+  }
+
+  /* 移动端已将返回和关闭置于顶部 Brand 栏右侧，隐藏第三行冗余的 main-header */
+  .config-main-header {
+    display: none !important;
   }
 
   .config-window-section {
-    padding: 10px 12px 20px;
+    padding: 8px 12px 16px;
+  }
+
+  .config-actions {
+    min-height: 60px;
+    padding-inline: 12px !important;
   }
 }
 </style>

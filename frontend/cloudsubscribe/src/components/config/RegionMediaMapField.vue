@@ -1,39 +1,119 @@
 <template>
   <div class="region-media-map-field">
-    <div v-if="field.hint" class="text-caption text-medium-emphasis mb-2">{{ field.hint }}</div>
-    <v-text-field
-      :model-value="summary"
-      :label="field.label"
-      readonly
-      density="compact"
-      variant="outlined"
-      hide-details="auto"
-      append-inner-icon="mdi-chevron-down"
-      class="cursor-pointer"
-      @click="dialogVisible = true" />
+    <div
+      class="priority-echo-trigger"
+      :class="{ 'priority-echo-trigger--active': dialogVisible }"
+      role="button"
+      tabindex="0"
+      :aria-label="field.label"
+      @click="dialogVisible = true"
+      @keydown.enter.space="dialogVisible = true">
+      <!-- 顶部轻量浮动 Label -->
+      <span class="echo-legend-label">{{ field.label }}</span>
+
+      <!-- 回显主体展示区 -->
+      <div class="echo-content-wrap">
+        <!-- 列表模式回显（优先级芯片胶囊 + 顺序箭头） -->
+        <template v-if="isListMode">
+          <div v-if="rulesList.length" class="echo-chips-row">
+            <template
+              v-for="(item, index) in displayRules"
+              :key="item.value || item.title">
+              <div class="echo-pill-chip">
+                <span class="echo-pill-rank" :class="rankClass(index)">#{{ index + 1 }}</span>
+                <span class="echo-pill-title">{{ item.title }}</span>
+              </div>
+              <v-icon
+                v-if="index < displayRules.length - 1 || remainRulesCount > 0"
+                icon="mdi-chevron-right"
+                size="14"
+                class="echo-flow-arrow" />
+            </template>
+            <span v-if="remainRulesCount > 0" class="echo-remain-pill">
+              +{{ remainRulesCount }}
+            </span>
+          </div>
+          <div v-else class="echo-placeholder">
+            <v-icon icon="mdi-tune-variant" size="14" class="mr-1 opacity-60" />
+            <span>留空表示不限制优先级（默认）</span>
+          </div>
+        </template>
+
+        <!-- 字典平台映射模式回显 -->
+        <template v-else>
+          <div v-if="selectedRegions.length" class="echo-chips-row">
+            <div
+              v-for="region in selectedRegions.slice(0, 4)"
+              :key="region"
+              class="echo-pill-chip echo-platform-chip">
+              <span class="echo-pill-title">{{ regionLabel(region) }}</span>
+              <span class="echo-platform-count">{{ values(region).length }}类</span>
+            </div>
+            <span v-if="selectedRegions.length > 4" class="echo-remain-pill">
+              +{{ selectedRegions.length - 4 }}
+            </span>
+          </div>
+          <div v-else class="echo-placeholder">
+            <v-icon icon="mdi-view-grid-plus-outline" size="14" class="mr-1 opacity-60" />
+            <span>未配置（点击选择平台与媒体类型）</span>
+          </div>
+        </template>
+      </div>
+
+      <!-- 右侧精致操作区：极简数量文字 + 一键清空 + 纤细小箭头 -->
+      <div class="echo-append-actions">
+        <!-- 纯文本轻量计数，克制低调 -->
+        <span v-if="currentCount > 0" class="echo-count-text">
+          共 {{ currentCount }} 项
+        </span>
+
+        <!-- 一键清空 x 按钮 -->
+        <button
+          v-if="currentCount > 0"
+          type="button"
+          class="echo-clear-trigger"
+          title="清空配置"
+          @click.stop="clearSelection">
+          <v-icon icon="mdi-close" size="14" />
+        </button>
+
+        <!-- 下拉小箭头 -->
+        <v-icon
+          icon="mdi-chevron-down"
+          size="16"
+          class="echo-chevron-icon"
+          :class="{ 'echo-chevron-icon--open': dialogVisible }" />
+      </div>
+    </div>
+
+    <!-- 规范的底部辅助提示文本（与 Vuetify 统一位于输入框底部） -->
+    <div v-if="field.hint" class="echo-field-details">
+      <span class="echo-field-hint">{{ field.hint }}</span>
+    </div>
 
     <!-- 主配置弹窗 -->
     <v-dialog v-model="dialogVisible" max-width="560" scrollable>
       <v-card class="compact-config-dialog rounded-xl">
         <!-- 头部导航 -->
         <div class="dialog-header d-flex align-center px-4 py-3">
-          <div class="dialog-header-icon mr-2">
-            <v-icon :icon="field.icon || (isListMode ? 'mdi-sort-ascending' : 'mdi-view-grid-plus-outline')" size="18"
+          <div class="dialog-header-icon mr-3">
+            <v-icon :icon="field.icon || (isListMode ? 'mdi-sort-ascending' : 'mdi-view-grid-plus-outline')" size="19"
                     color="primary" />
           </div>
-          <div>
-            <div class="dialog-header-title">{{ field.label }}</div>
-            <div class="dialog-header-subtitle text-caption text-medium-emphasis">
-              {{ isListMode ? (isFansubMode ? "按优先级自上而下排列（首位最高优先），支持编辑规则与调序" : "按优先级自上而下排列（首位最高优先），支持拖拽或上下按钮调序") : "按平台选择要监听的媒体类型"
+          <div class="min-w-0 flex-grow-1 mr-2">
+            <div class="dialog-header-title text-truncate">{{ field.label }}</div>
+            <div class="dialog-header-subtitle text-caption text-medium-emphasis text-truncate">
+              {{ isListMode ? (isFansubMode ? "按优先级自上而下排列，首位最高优先" : "按优先级自上而下排列，支持拖拽调序") : "按平台选择要监听的媒体类型"
               }}
             </div>
           </div>
-          <v-spacer />
-          <v-chip size="small" variant="tonal" color="primary" class="font-weight-medium px-2 mr-1">
-            已配置 {{ currentCount }} 项
-          </v-chip>
-          <v-btn icon="mdi-close" variant="text" size="small" class="dialog-close-btn ml-1"
-                 title="关闭" @click="dialogVisible = false" />
+          <div class="d-flex align-center ga-2">
+            <span class="dialog-header-badge">
+              已配置 {{ currentCount }} 项
+            </span>
+            <v-btn icon="mdi-close" variant="text" size="small" class="dialog-close-btn"
+                   title="关闭" @click="dialogVisible = false" />
+          </div>
         </div>
 
         <v-divider />
@@ -460,7 +540,18 @@ const unselectedOptions = computed(() => {
     }));
 });
 
-// Summary 概览（展示前 3 个纯净名称）
+// Summary 概览与胶囊回显
+const maxDisplayCount = 4;
+const displayRules = computed(() => rulesList.value.slice(0, maxDisplayCount));
+const remainRulesCount = computed(() => Math.max(0, rulesList.value.length - maxDisplayCount));
+
+function rankClass(index) {
+  if (index === 0) return "rank-badge--first";
+  if (index === 1) return "rank-badge--second";
+  if (index === 2) return "rank-badge--third";
+  return "";
+}
+
 const summary = computed(() => {
   if (isListMode.value) {
     if (!rulesList.value.length) return "未配置（默认）";
@@ -610,6 +701,10 @@ function clearAll() {
   emit("update:modelValue", isListMode.value ? [] : {});
 }
 
+function clearSelection() {
+  clearAll();
+}
+
 // 拖拽与移动排序
 function moveItem(fromIndex, toIndex) {
   if (!isListMode.value) return;
@@ -728,6 +823,20 @@ function onDragEnd() {
 
 .dialog-close-btn:active {
   transform: rotate(90deg) scale(0.92);
+}
+
+.dialog-header-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  background-color: rgba(var(--v-theme-primary), 0.1);
+  color: rgb(var(--v-theme-primary));
+  border: 1px solid rgba(var(--v-theme-primary), 0.18);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* 优先级列表容器：独立滚动、限制高度 */
@@ -880,5 +989,262 @@ function onDragEnd() {
 
 .map-card-item:hover {
   border-color: rgba(var(--v-theme-primary), 0.3);
+}
+
+/* 现代高质感优先级/平台回显触发输入框 */
+.region-media-map-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.priority-echo-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 10px 0 12px;
+  background-color: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-border-color), 0.24);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-top: 6px;
+}
+
+.priority-echo-trigger:hover {
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  background-color: rgba(var(--v-theme-primary), 0.02);
+}
+
+.priority-echo-trigger--active {
+  border-color: rgb(var(--v-theme-primary)) !important;
+  box-shadow: 0 0 0 1px rgb(var(--v-theme-primary));
+}
+
+.echo-legend-label {
+  position: absolute;
+  top: -8px;
+  left: 9px;
+  padding: 0 4px;
+  background-color: rgb(var(--v-theme-surface));
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 底部辅助提示：与 Vuetify v-input__details 保持一致 */
+.echo-field-details {
+  padding: 3px 6px 0;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+}
+
+.echo-field-hint {
+  font-size: 0.75rem;
+  line-height: 1.25;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.echo-content-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.echo-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.echo-chips-row::-webkit-scrollbar {
+  display: none;
+}
+
+.echo-pill-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px 0 2px;
+  border-radius: 6px;
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-border-color), 0.16);
+  font-size: 0.78125rem;
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  gap: 5px;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+/* 平台回显标签：通透浅色主色调，微透光泽，拒绝灰暗泥色 */
+.echo-platform-chip {
+  padding: 0 4px 0 8px !important;
+  background: rgba(var(--v-theme-primary), 0.05) !important;
+  border: 1px solid rgba(var(--v-theme-primary), 0.18) !important;
+  border-radius: 6px !important;
+  height: 24px !important;
+  gap: 6px !important;
+  transition: all 0.18s ease;
+}
+
+.echo-platform-chip:hover {
+  border-color: rgba(var(--v-theme-primary), 0.35) !important;
+  background: rgba(var(--v-theme-primary), 0.08) !important;
+}
+
+.echo-platform-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  height: 17px;
+  border-radius: 4px;
+  background-color: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.echo-flow-arrow {
+  color: rgba(var(--v-theme-on-surface), 0.35);
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+.echo-pill-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background-color: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.echo-pill-rank.rank-badge--first {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.3);
+}
+
+.echo-pill-rank.rank-badge--second {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  color: #fff;
+}
+
+.echo-pill-rank.rank-badge--third {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: #fff;
+}
+
+.echo-pill-title {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.echo-pill-badge {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.echo-remain-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background-color: rgba(var(--v-theme-primary), 0.08);
+  border: 1px solid rgba(var(--v-theme-primary), 0.2);
+  color: rgb(var(--v-theme-primary));
+  font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.echo-placeholder {
+  display: flex;
+  align-items: center;
+  color: rgba(var(--v-theme-on-surface), 0.38);
+  font-size: 0.8125rem;
+}
+
+.echo-append-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 10px;
+  flex-shrink: 0;
+}
+
+.echo-count-text {
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.42);
+  font-weight: 500;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.echo-clear-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background-color: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.38);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+}
+
+.echo-clear-trigger:hover {
+  color: rgb(var(--v-theme-error));
+  background-color: rgba(var(--v-theme-error), 0.12);
+  transform: scale(1.1);
+}
+
+.echo-clear-trigger:active {
+  transform: scale(0.92);
+}
+
+.echo-chevron-icon {
+  color: rgba(var(--v-theme-on-surface), 0.35);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease;
+}
+
+.echo-chevron-icon--open {
+  transform: rotate(180deg);
+  color: rgb(var(--v-theme-primary));
 }
 </style>

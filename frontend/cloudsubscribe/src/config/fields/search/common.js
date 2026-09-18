@@ -20,12 +20,10 @@ export function createCommonSearchGroups(resourceTypeItems) {
       tab: "common",
       title: "搜索顺序",
       icon: "mdi-sort",
-      hint: "按勾选顺序设置搜索源优先级；未选择的搜索源不会发起请求。",
       fields: [
         {
           key: "search_source_order",
           label: "搜索资源优先级",
-          hint: "点击打开配置窗口，通过拖拽卡片调整搜索源查询优先级（排在前面的最高优先）；留空时不限制搜索渠道。",
           type: "priority-order",
           items: SOURCE_ITEMS,
           cols: 12,
@@ -33,7 +31,6 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "resource_type_order",
           label: "资源类型优先级",
-          hint: "点击打开配置窗口，通过拖拽卡片调整网盘与资源类型匹配优先级（排在前面的优先选择与下载）。",
           type: "priority-order",
           items: resourceTypeItems,
           cols: 12,
@@ -41,7 +38,7 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "magnet_metadata_url_template",
           label: "Magnet元数据地址模板",
-          hint: "必须包含 {info_hash}；返回内容会由torf解码并校验Info Hash。",
+          hint: "必须包含 {info_hash}",
           placeholder: "https://itorrents.org/torrent/{info_hash}.torrent",
           cols: 12,
         },
@@ -51,13 +48,12 @@ export function createCommonSearchGroups(resourceTypeItems) {
       tab: "common",
       title: "搜索代理",
       icon: "mdi-lan-connect",
-      hint: "仅代理搜索渠道请求；测试使用 Cloudflare Trace 获取请求延迟、出口 IP、地区和节点。",
       fields: [
         {
           key: "search_proxy",
           label: "代理地址",
           type: "proxy",
-          hint: "支持 http://、https://、socks5:// 和 host:port，留空则直连。",
+          hint: "留空直连，支持 http/socks5",
           placeholder: "http://127.0.0.1:7890",
           cols: 12,
         },
@@ -78,12 +74,11 @@ export function createCommonSearchGroups(resourceTypeItems) {
       tab: "common",
       title: "搜索性能",
       icon: "mdi-speedometer",
-      hint: "控制跨搜索源查询并发、超时与本地缓存；115接口与积分解锁仍保持串行限速。",
       fields: [
         {
           key: "search_concurrency",
           label: "搜索并发数",
-          hint: "跨渠道并发查询数（1 为逐源查询，建议 2，最大 5）",
+          hint: "跨渠道并发数，建议 2，最大 5",
           type: "number",
           min: 1,
           max: 5,
@@ -92,7 +87,7 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "search_source_timeout",
           label: "搜索超时",
-          hint: "未单独配置超时的搜索源默认最长等待时间，默认 60 秒",
+          hint: "渠道默认等待超时，默认 60 秒",
           type: "number",
           min: 5,
           max: 120,
@@ -102,14 +97,14 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "search_cache_enabled",
           label: "启用搜索缓存",
-          hint: "缓存搜索源查询结果，避免重复检索相同内容",
+          hint: "避免短时间内重复检索",
           type: "switch",
           cols: 6,
         },
         {
           key: "search_cache_ttl_minutes",
           label: "缓存时间（分钟）",
-          hint: "搜索结果本地缓存有效期，默认 30 分钟",
+          hint: "本地缓存有效期，默认 30 分钟",
           type: "number",
           min: 1,
           max: 1440,
@@ -122,19 +117,18 @@ export function createCommonSearchGroups(resourceTypeItems) {
       tab: "common",
       title: "故障熔断",
       icon: "mdi-shield-alert-outline",
-      hint: "渠道连续请求失败或超时时自动熔断降级，避免连锁阻塞后续任务。",
       fields: [
         {
           key: "search_circuit_breaker_enabled",
           label: "启用故障熔断机制",
-          hint: "渠道连续故障时自动跳过，期满自动探测恢复",
+          hint: "故障时自动跳过，期满自动探测恢复",
           type: "switch",
           cols: 4,
         },
         {
           key: "search_circuit_breaker_threshold",
           label: "连续失败熔断阈值",
-          hint: "连续失败或超时达到此次数后触发熔断",
+          hint: "连续失败此次数后触发熔断",
           type: "number",
           min: 1,
           max: 10,
@@ -145,7 +139,7 @@ export function createCommonSearchGroups(resourceTypeItems) {
         {
           key: "search_circuit_breaker_cooldown",
           label: "熔断冷却时间",
-          hint: "触发熔断后跳过该渠道的时间，期满自动试探恢复",
+          hint: "熔断后跳过时长，期满自动恢复",
           type: "number",
           min: 10,
           max: 600,

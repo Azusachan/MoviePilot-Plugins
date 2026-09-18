@@ -8,7 +8,7 @@ from urllib.parse import quote, unquote
 
 from app.log import logger
 
-from ..cloudflare import click_challenge_frame, is_cloudflare_challenge, launch_challenge_context
+from ..cloudflare import fetch_cloudflare_html, is_cloudflare_challenge
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
@@ -102,71 +102,11 @@ class UIndexClient:
         )
 
     def _fetch_page_with_browser(self, url: str) -> str:
-        """按需在独立纯净线程中通过 CloakBrowser 穿透 Cloudflare 盾并获取搜索页面 HTML。"""
-
-        def _worker() -> str:
-            try:
-                asyncio.set_event_loop(None)
-            except Exception:
-                pass
-
-            context = launch_challenge_context(self._proxy)
-            try:
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                started = time.monotonic()
-                deadline = started + 30
-                clicked = False
-                while time.monotonic() < deadline:
-                    try:
-                        title = page.title()
-                    except Exception:
-                        page.wait_for_timeout(500)
-                        continue
-
-                    if "Just a moment" not in title:
-                        try:
-                            content = page.content()
-                            if len(content) > 5000:
-                                return content
-                        except Exception:
-                            page.wait_for_timeout(500)
-                            continue
-
-                    if not clicked:
-                        clicked = click_challenge_frame(page)
-                    page.wait_for_timeout(500)
-
-                try:
-                    final_content = page.content()
-                    if "Just a moment" not in page.title():
-                        return final_content
-                except Exception:
-                    pass
-                raise TimeoutError("Cloudflare 验证等待超时")
-            finally:
-                try:
-                    context.close()
-                except Exception as err:
-                    logger.debug(f"关闭 UIndex 浏览器上下文异常：{err}")
-
-        result_holder = [None]
-        error_holder = [None]
-
-        def _runner():
-            try:
-                result_holder[0] = _worker()
-            except BaseException as err:
-                error_holder[0] = err
-
-        thread = threading.Thread(target=_runner, name="UIndex-Cloak-Thread", daemon=True)
-        thread.start()
-        thread.join(timeout=35)
-        if thread.is_alive():
-            raise UIndexError("CloakBrowser 渲染执行超时")
-        if error_holder[0] is not None:
-            raise UIndexError(f"CloakBrowser 渲染页面失败：{error_holder[0]}") from error_holder[0]
-        return result_holder[0]
+        """按需通过统一反盾工具穿透 Cloudflare 盾并获取搜索页面 HTML。"""
+        try:
+            return fetch_cloudflare_html(url, proxy=self._proxy)
+        except Exception as err:
+            raise UIndexError(f"CloakBrowser 渲染页面失败：{err}") from err
 
     def search(self, query: str) -> List[Dict[str, Any]]:
         keyword = str(query or "").strip()

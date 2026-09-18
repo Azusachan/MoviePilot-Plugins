@@ -9,7 +9,6 @@ export function createNotifySection(options) {
       {
         title: "入库通知",
         icon: "mdi-database-arrow-up-outline",
-        hint: "STRM 写入成功后仅通知对应媒体项，不触发全库扫描；Emby 可在入库后继续提取媒体信息。",
         fields: [
           {
             key: "media_server_refresh_enabled",
@@ -21,13 +20,14 @@ export function createNotifySection(options) {
             key: "emby_mediainfo_enabled",
             label: "Emby 媒体信息提取",
             type: "switch",
-            hint: "入库后通过 Emby PlaybackInfo 接口触发，不依赖其他服务。",
+            hint: "入库后触发 Emby 提取信息",
             cols: 6,
             show: enabled("media_server_refresh_enabled"),
           },
           {
             key: "media_server_refresh_delay",
             label: "延迟通知（秒）",
+            hint: "延迟触发入库通知秒数",
             type: "number",
             min: 0,
             cols: 4,
@@ -38,7 +38,7 @@ export function createNotifySection(options) {
             label: "媒体服务器路径映射",
             type: "textarea",
             placeholder: "/媒体服务器/strm#/strm",
-            hint: "每行：媒体服务器路径#本地路径；路径一致时留空",
+            hint: "每行：媒体服务器路径#本地路径",
             cols: 12,
             show: enabled("media_server_refresh_enabled"),
           },
@@ -47,7 +47,6 @@ export function createNotifySection(options) {
       {
         title: "媒体库通知",
         icon: "mdi-server-network-outline",
-        hint: "通过平台 Webhook 接收 Emby 变更事件并同步内部媒体索引。",
         fields: [
           {
             key: "platform_media_sync_enabled",
@@ -59,7 +58,7 @@ export function createNotifySection(options) {
             key: "platform_deep_delete_enabled",
             label: "神医深度删除联动",
             type: "switch",
-            hint: "收到神医 deep.delete 通知后，精确匹配并删除网盘文件、STRM和插件历史；不会删除订阅。",
+            hint: "收到通知后同步清理网盘与历史",
             cols: 6,
           },
           {
@@ -96,7 +95,7 @@ export function createNotifySection(options) {
             label: "消息通知类型",
             type: "select",
             items: options.notificationTypes,
-            hint: "按消息类型分发到已启用的通知渠道。",
+            hint: "分发到已启用的通知渠道",
             cols: 8,
             show: enabled("notify"),
           },

@@ -126,7 +126,7 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_onlyonce",
             label: "保存后立即运行一次",
             type: "switch",
-            hint: "保存后运行所有已启用榜单一次，随后自动复位。",
+            hint: "立即执行一次并复位",
             cols: 4,
           },
           {key: "auto_subscribe_notify", label: "发送运行结果通知", type: "switch", cols: 4},
@@ -134,14 +134,14 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_cron",
             label: "榜单订阅执行周期",
             type: "cron",
-            hint: "所有已启用榜单按此周期并发抓取。",
+            hint: "自动抓取周期",
             cols: 12,
           },
           {
             key: "auto_subscribe_skip_season_zero",
             label: "跳过第 0 季",
             type: "switch",
-            hint: "只影响季号为 Season 0 的特别篇，不会阻止正常季度订阅。",
+            hint: "跳过特别篇 (S00)",
             cols: 4,
           },
           {key: "auto_subscribe_skip_subscribed", label: "跳过已有活动订阅", type: "switch", cols: 4},
@@ -150,7 +150,7 @@ export function createSubscribeSection(options = {}) {
           {
             key: "auto_subscribe_username",
             label: "订阅用户名",
-            hint: "写入 MoviePilot 订阅记录，用于通知、归属和历史展示。",
+            hint: "写入系统订阅记录",
             cols: 12,
           },
         ],
@@ -159,13 +159,12 @@ export function createSubscribeSection(options = {}) {
         title: "代理服务器",
         icon: "mdi-lan-connect",
         tab: "global",
-        hint: "统一配置榜单请求代理；各榜单可在自己的连接分组中决定是否启用。",
         fields: [
           {
             key: "auto_subscribe_proxy",
             label: "代理地址",
             type: "auto-subscribe-proxy",
-            hint: "支持 http://、https://、socks5:// 和 host:port，留空则直连。",
+            hint: "留空直连，支持 http/socks5",
             placeholder: "http://127.0.0.1:7890",
             cols: 12,
           },
@@ -177,14 +176,13 @@ export function createSubscribeSection(options = {}) {
         title: "豆瓣推荐与测试",
         icon: "mdi-server-network-outline",
         tab: "douban",
-        hint: "已直接接入 MoviePilot 平台原生豆瓣推荐链，无需自建或配置第三方 RSSHub。",
         fields: [
           {key: "auto_subscribe_douban_enabled", label: "启用豆瓣榜单", type: "switch", cols: 4},
           {
             key: "auto_subscribe_douban_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 4,
           },
           {key: "auto_subscribe_douban_limit", label: "每榜条数", type: "number", min: 1, max: 100, cols: 4},
@@ -225,7 +223,6 @@ export function createSubscribeSection(options = {}) {
         title: "豆瓣订阅筛选",
         icon: "mdi-filter-outline",
         tab: "douban",
-        hint: "以下条件同时生效；不满足媒体类型、年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_douban_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 4},
           {key: "auto_subscribe_douban_min_year", label: "年份≥", type: "number", min: 0, cols: 4},
@@ -241,6 +238,7 @@ export function createSubscribeSection(options = {}) {
             label: "媒体类型",
             type: "select",
             multiple: true,
+            hint: "多选，默认不过滤",
             items: [
               {title: "全部", value: "all"},
               {title: "电影", value: "movie"},
@@ -258,14 +256,13 @@ export function createSubscribeSection(options = {}) {
         title: "TMDB 榜单设置",
         icon: "mdi-movie-search-outline",
         tab: "tmdb",
-        hint: "直接对接 MoviePilot 原生 TMDB 流行趋势与热门影视推荐。",
         fields: [
           {key: "auto_subscribe_tmdb_enabled", label: "启用 TMDB 榜单", type: "switch", cols: 4},
           {
             key: "auto_subscribe_tmdb_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 4,
           },
           {key: "auto_subscribe_tmdb_limit", label: "每榜条数", type: "number", min: 1, max: 100, cols: 4},
@@ -305,7 +302,6 @@ export function createSubscribeSection(options = {}) {
         title: "TMDB 订阅筛选",
         icon: "mdi-filter-outline",
         tab: "tmdb",
-        hint: "以下条件同时生效；不满足媒体类型、年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_tmdb_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 4},
           {key: "auto_subscribe_tmdb_min_year", label: "年份≥", type: "number", min: 0, cols: 4},
@@ -328,7 +324,7 @@ export function createSubscribeSection(options = {}) {
               {title: "动漫电影", value: "anime_movie"},
               {title: "动漫番剧", value: "anime_tv"},
             ],
-            hint: "支持多选，保留“全部”默认订阅所有类型。",
+            hint: "多选，默认不过滤",
             cols: 12,
           },
         ],
@@ -338,14 +334,13 @@ export function createSubscribeSection(options = {}) {
         title: "Bangumi 每日放送",
         icon: "mdi-calendar-star",
         tab: "bangumi",
-        hint: "对接 MoviePilot 平台原生 Bangumi 每日放送日历推荐。",
         fields: [
           {key: "auto_subscribe_bangumi_enabled", label: "启用 Bangumi 榜单", type: "switch", cols: 4},
           {
             key: "auto_subscribe_bangumi_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 4,
           },
           {key: "auto_subscribe_bangumi_limit", label: "每榜条数", type: "number", min: 1, max: 100, cols: 4},
@@ -362,7 +357,6 @@ export function createSubscribeSection(options = {}) {
         title: "Bangumi 订阅筛选",
         icon: "mdi-filter-outline",
         tab: "bangumi",
-        hint: "以下条件同时生效；不满足年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_bangumi_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 4},
           {key: "auto_subscribe_bangumi_min_year", label: "年份≥", type: "number", min: 0, cols: 4},
@@ -379,14 +373,13 @@ export function createSubscribeSection(options = {}) {
         title: "AniList 热门动画",
         icon: "mdi-chart-box-outline",
         tab: "anilist",
-        hint: "对接 AniList 动画榜单，抓取当季热门与趋势动画。",
         fields: [
           {key: "auto_subscribe_anilist_enabled", label: "启用 AniList 榜单", type: "switch", cols: 4},
           {
             key: "auto_subscribe_anilist_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 4,
           },
           {key: "auto_subscribe_anilist_limit", label: "每榜条数", type: "number", min: 1, max: 100, cols: 4},
@@ -423,7 +416,6 @@ export function createSubscribeSection(options = {}) {
         title: "AniList 订阅筛选",
         icon: "mdi-filter-outline",
         tab: "anilist",
-        hint: "以下条件同时生效；不满足年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_anilist_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 4},
           {key: "auto_subscribe_anilist_min_year", label: "年份≥", type: "number", min: 0, cols: 4},
@@ -446,13 +438,13 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_maoyan_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 6,
           },
           {
             key: "auto_subscribe_maoyan_base_url",
             label: "接口地址",
-            hint: "默认 https://piaofang.maoyan.com，可填入第三方反向代理。",
+            hint: "默认官方地址，可填反代",
             cols: 12,
           },
           {
@@ -468,7 +460,6 @@ export function createSubscribeSection(options = {}) {
         title: "猫眼榜单范围",
         icon: "mdi-filmstrip",
         tab: "maoyan",
-        hint: "网络电影数据源已停更，不再提供。",
         fields: [
           {key: "auto_subscribe_maoyan_movie_box", label: "电影票房榜", type: "switch", cols: 4},
           {
@@ -483,7 +474,7 @@ export function createSubscribeSection(options = {}) {
               {title: "动漫电影", value: "anime_movie"},
               {title: "动漫番剧", value: "anime_tv"},
             ],
-            hint: "支持多选，保留“全部”默认订阅所有类型。",
+            hint: "多选，默认不过滤",
             cols: 8,
           },
           {
@@ -507,7 +498,7 @@ export function createSubscribeSection(options = {}) {
               {title: "网络剧", value: "web"},
               {title: "综艺", value: "variety"},
             ],
-            hint: "点击打开配置窗口，按平台分别选择网播类型。",
+            hint: "按平台配置要订阅的类型",
           },
         ],
       },
@@ -515,7 +506,6 @@ export function createSubscribeSection(options = {}) {
         title: "猫眼订阅筛选",
         icon: "mdi-filter-outline",
         tab: "maoyan",
-        hint: "以下条件同时生效；不满足年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_maoyan_limit", label: "每榜条数", type: "number", min: 1, max: 100, cols: 4},
           {key: "auto_subscribe_maoyan_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 4},
@@ -539,13 +529,13 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_netflix_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 6,
           },
           {
             key: "auto_subscribe_netflix_base_url",
             label: "Netflix 服务地址",
-            hint: "Tudum 榜单页和 TSV 数据的服务根地址。",
+            hint: "Tudum 服务根地址",
             cols: 12,
           },
           {
@@ -584,7 +574,7 @@ export function createSubscribeSection(options = {}) {
               {title: "英语剧集", value: "TV (English)"},
               {title: "非英语剧集", value: "TV (Non-English)"},
             ],
-            hint: "媒体类型使用多选下拉；榜单识别后统一通过 TMDB 取中文标题。",
+            hint: "多选，通过 TMDB 识别",
             cols: 12,
           },
           {
@@ -597,7 +587,7 @@ export function createSubscribeSection(options = {}) {
               {title: "电影", value: "Films"},
               {title: "剧集", value: "TV"},
             ],
-            hint: "点击打开配置窗口，按地区分别选择媒体类型。",
+            hint: "按地区配置要订阅的类型",
           },
         ],
       },
@@ -605,7 +595,6 @@ export function createSubscribeSection(options = {}) {
         title: "Netflix 订阅筛选",
         icon: "mdi-filter-outline",
         tab: "netflix",
-        hint: "以下条件同时生效；不满足媒体类型、年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_netflix_limit", label: "每榜取前 N", type: "number", min: 1, max: 100, cols: 3},
           {key: "auto_subscribe_netflix_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 3},
@@ -629,13 +618,11 @@ export function createSubscribeSection(options = {}) {
               {title: "动漫电影", value: "anime_movie"},
               {title: "动漫番剧", value: "anime_tv"},
             ],
-            hint: "支持多选，保留“全部”默认订阅所有类型。",
+            hint: "多选，默认不过滤",
             cols: 12,
           },
         ],
       },
-
-
       {
         title: "Netflix 识别与缓存",
         icon: "mdi-database-sync-outline",
@@ -645,7 +632,7 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_netflix_rich_metadata",
             label: "抓取详细元数据",
             type: "switch",
-            hint: "抓 Tudum 榜单页补充年份和干净剧名，识别更准但更慢。",
+            hint: "补充年份剧名，识别更准",
             cols: 4,
           },
           {
@@ -660,7 +647,7 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_netflix_use_cache",
             label: "启用周更缓存",
             type: "switch",
-            hint: "同一榜单周内避免重复抓取。",
+            hint: "同榜单周内不重复抓取",
             cols: 4,
           },
         ],
@@ -675,14 +662,14 @@ export function createSubscribeSection(options = {}) {
             key: "auto_subscribe_mikan_proxy",
             label: "启用代理服务器",
             type: "switch",
-            hint: "使用通用设置中的榜单代理。",
+            hint: "使用通用设置代理",
             cols: 4,
           },
           {
             key: "auto_subscribe_mikan_resolve_bangumi_id",
             label: "抓取 Bangumi ID",
             type: "switch",
-            hint: "访问番组详情补充 Bangumi ID 和放送年份，识别更准但请求更慢。",
+            hint: "补充番组信息，识别更准",
             cols: 4,
           },
           {
@@ -694,7 +681,7 @@ export function createSubscribeSection(options = {}) {
               {title: "mikanani.me", value: "https://mikanani.me"},
               {title: "mikanime.tv", value: "https://mikanime.tv"},
             ],
-            hint: "可选择或输入多个服务根地址，按顺序尝试。",
+            hint: "支持配置多个镜像地址",
             cols: 12,
           },
           {
@@ -732,7 +719,6 @@ export function createSubscribeSection(options = {}) {
         title: "Mikan 订阅筛选",
         icon: "mdi-filter-outline",
         tab: "mikan",
-        hint: "以下条件同时生效；不满足年月或评分要求的条目不会创建订阅。",
         fields: [
           {key: "auto_subscribe_mikan_min_vote", label: "评分≥", type: "number", min: 0, max: 10, cols: 6},
           {key: "auto_subscribe_mikan_min_year", label: "年份≥", type: "number", min: 0, cols: 6},

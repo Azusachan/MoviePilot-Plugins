@@ -725,36 +725,81 @@ class ResourceTransferService(OwnerDelegator):
         }.get(resource_type, resource_type)
         return not self._cloud_drive.supports_resource_type(resource_type)
 
+    def _normalize_candidate_resource_type(self, resource: Dict[str, Any]) -> str:
+        """获取并规范化候选资源的类型键（与 resource_type_order 配置保持一致）。"""
+        rtype = str(resource.get("resource_type") or resource.get("pan_type") or "").strip().lower()
+        if rtype in {"115", "ed2k", "magnet", "189", "aliyun", "quark", "uc", "cloud"}:
+            return rtype
+        url = str(resource.get("url") or "").strip()
+        if url:
+            if self._is_ed2k_url(url):
+                return "ed2k"
+            if self._is_magnet_url(url):
+                return "magnet"
+            if self._is_offline_url(url):
+                return "ed2k"
+            detected = self._supported_resource_type(resource, url)
+            if detected:
+                return detected.lower()
+        return rtype or "unknown"
+
     def _build_transfer_resource_batches(
             self,
             sources: List[str],
             source_results: Mapping[str, List[Dict[str, Any]]],
     ) -> List[Tuple[str, List[Dict[str, Any]], bool]]:
-        """按目标盘直存优先、跨盘最后生成来源批次。"""
-        direct_batches = []
-        cross_batches = []
-        direct_count = 0
-        cross_count = 0
+        """严格按用户配置的资源类型优先级（resource_type_order）组织并发搜索候选批次。
+
+        先按资源类型优先级全局排序，同类型按搜索源优先级组织；跨盘转存批次置于最后。
+        """
+        # 读取用户配置的资源类型优先级
+        configured_types = list(
+            getattr(self._search_handler, "_resource_type_order_config", None) or []
+        )
+        if not configured_types and self._cloud_drive:
+            configured_types = [self._cloud_drive.key.lower(), "ed2k", "magnet"]
+
+        # 将所有并发搜索结果汇总并按直存类型和跨盘归类
+        direct_by_type: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        cross_by_source: Dict[str, List[Dict[str, Any]]] = {}
+        total_direct_count = 0
+        total_cross_count = 0
+
         for source in sources or []:
-            direct_resources = []
-            cross_resources = []
             for resource in source_results.get(source) or []:
                 if self._is_cross_drive_resource(resource):
-                    cross_resources.append(resource)
+                    cross_by_source.setdefault(source, []).append(resource)
+                    total_cross_count += 1
                 else:
-                    direct_resources.append(resource)
-            if direct_resources:
-                direct_count += len(direct_resources)
-                direct_batches.append((source, direct_resources, False))
-            if cross_resources:
-                cross_count += len(cross_resources)
-                cross_batches.append((source, cross_resources, True))
-        if direct_count or cross_count:
+                    rtype = self._normalize_candidate_resource_type(resource)
+                    direct_by_type.setdefault(rtype, {}).setdefault(source, []).append(resource)
+                    total_direct_count += 1
+
+        # 严格按用户配置的资源类型优先级产出直存批次
+        ordered_batches: List[Tuple[str, List[Dict[str, Any]], bool]] = []
+        ordered_type_keys = [t for t in configured_types if t in direct_by_type]
+        remaining_type_keys = [t for t in direct_by_type if t not in configured_types]
+
+        for rtype in ordered_type_keys + remaining_type_keys:
+            sources_map = direct_by_type[rtype]
+            for source in sources or []:
+                items = sources_map.get(source)
+                if items:
+                    ordered_batches.append((source, items, False))
+
+        # 跨盘转存批次置于直存之后，按搜索源优先级排列
+        for source in sources or []:
+            items = cross_by_source.get(source)
+            if items:
+                ordered_batches.append((source, items, True))
+
+        if total_direct_count or total_cross_count:
+            type_summary = " > ".join(ordered_type_keys + remaining_type_keys)
             logger.debug(
-                f"候选转存顺序：目标网盘直存 {direct_count} 个，"
-                f"跨盘 {cross_count} 个（跨盘最后处理）"
+                f"并发搜索候选：分享 {total_direct_count} 个（{type_summary}），"
+                f"跨盘 {total_cross_count} 个（最后处理）"
             )
-        return direct_batches + cross_batches
+        return ordered_batches
 
     def _resource_provider_for_url(
             self, share_url: str

@@ -576,6 +576,99 @@ class PageApi(OwnerDelegator):
             logger.error(f"创建网盘目录失败：{target_path if 'target_path' in locals() else folder_name}，{error}")
             return {"success": False, "message": f"创建文件夹失败：{error}"}
 
+    def api_vue_local_directories(self, path: str = "/") -> dict:
+        """列出本地（宿主机/容器）指定目录下的子目录，供配置页选择本地路径。"""
+        import os
+        from pathlib import Path
+
+        normalized_path = str(path or "/").strip()
+        if not normalized_path:
+            normalized_path = "/"
+        # 兼容 Windows 根目录或 Unix 根目录
+        target = Path(normalized_path)
+        if not target.is_absolute():
+            target = Path("/").resolve()
+
+        if not target.exists():
+            # 尝试向上回溯到存在的父目录
+            while not target.exists() and target.parent != target:
+                target = target.parent
+
+        target_str = str(target.as_posix()) if hasattr(target, "as_posix") else str(target).replace("\\", "/")
+        if not target_str.startswith("/"):
+            target_str = f"/{target_str}"
+
+        try:
+            directories = []
+            if target.is_dir():
+                try:
+                    with os.scandir(target) as entries:
+                        for entry in entries:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    name = entry.name
+                                    if name.startswith("."):
+                                        continue
+                                    full_p = str(Path(entry.path).as_posix())
+                                    if not full_p.startswith("/"):
+                                        full_p = f"/{full_p}"
+                                    directories.append({
+                                        "id": full_p,
+                                        "name": name,
+                                        "path": full_p,
+                                    })
+                            except (PermissionError, OSError):
+                                continue
+                except (PermissionError, OSError) as perm_err:
+                    logger.warning(f"扫描本地目录权限受限：{target_str}，{perm_err}")
+
+            directories.sort(key=lambda item: str(item.get("name", "")).lower())
+
+            # 生成面包屑导航
+            breadcrumbs = [{"name": "根目录", "path": "/"}]
+            curr = ""
+            for part in [p for p in target_str.split("/") if p]:
+                curr = f"{curr}/{part}"
+                breadcrumbs.append({"name": part, "path": curr})
+
+            return {
+                "success": True,
+                "data": {
+                    "path": target_str,
+                    "breadcrumbs": breadcrumbs,
+                    "directories": directories,
+                },
+            }
+        except Exception as error:
+            logger.error(f"读取本地目录失败：{target_str}，{error}")
+            return {"success": False, "message": f"读取本地目录失败：{error}"}
+
+    def api_vue_create_local_directory(self, payload: dict) -> dict:
+        """在本地当前目录创建子文件夹。"""
+        import os
+        from pathlib import Path
+
+        request = payload or {}
+        parent_path = str(request.get("path") or "/").strip()
+        name = str(request.get("name") or "").strip()
+
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            return {"success": False, "message": "文件夹名称无效"}
+
+        parent = Path(parent_path)
+        target = parent / name
+        try:
+            target.mkdir(parents=True, exist_ok=False)
+            target_str = str(target.as_posix())
+            if not target_str.startswith("/"):
+                target_str = f"/{target_str}"
+            return {"success": True, "data": {"path": target_str}}
+        except FileExistsError:
+            return {"success": False, "message": "同名文件夹已存在"}
+        except (PermissionError, OSError) as error:
+            logger.error(f"创建本地目录失败：{target}，{error}")
+            return {"success": False, "message": f"创建本地目录失败：{error}"}
+
     def api_vue_resource_recommend(
             self,
             source: str = "tmdb_trending",

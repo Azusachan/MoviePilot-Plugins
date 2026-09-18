@@ -2095,7 +2095,10 @@ class HistoryService(OwnerDelegator):
         }
 
     def _refresh_deleted_media(self, records: List[Dict[str, Any]]) -> None:
-        """删除关联文件后，按受影响 STRM 路径刷新媒体库。"""
+        """删除关联文件后，按受影响 STRM 路径与媒体目录刷新媒体库。"""
+        if not self._media_server_notifier or not records:
+            return
+        notified_dirs = set()
         for record in records:
             cloud_dir = str(record.get("cloud_dir") or "").strip()
             file_name = str(record.get("file_name") or "").strip()
@@ -2114,6 +2117,20 @@ class HistoryService(OwnerDelegator):
                     )
                     continue
                 self._media_server_notifier.notify_deleted_path(local_path, record)
+
+                # 当季目录或整剧本地目录已不存在（如整体删除）时，将目录本身也纳入删除通知
+                season_dir = local_path.parent
+                if season_dir not in notified_dirs:
+                    notified_dirs.add(season_dir)
+                    if not season_dir.exists():
+                        self._media_server_notifier.notify_deleted_path(season_dir, record)
+
+                if self._is_season_directory(cloud_dir, record):
+                    series_dir = season_dir.parent
+                    if series_dir not in notified_dirs:
+                        notified_dirs.add(series_dir)
+                        if not series_dir.exists():
+                            self._media_server_notifier.notify_deleted_path(series_dir, record)
             except Exception as error:
                 logger.warning(
                     f"删除历史后刷新媒体库失败：{file_name} - {error}"
@@ -2161,9 +2178,7 @@ class HistoryService(OwnerDelegator):
                     int(value) for value in (getattr(subscribe, "note", None) or [])
                     if str(value).isdigit()
                 }
-                new_note = sorted(
-                    (current_note - deleted_episodes) | remaining_episodes
-                )
+                new_note = sorted(current_note - deleted_episodes)
                 if new_note == sorted(current_note):
                     continue
                 start = int(getattr(subscribe, "start_episode", 1) or 1)
