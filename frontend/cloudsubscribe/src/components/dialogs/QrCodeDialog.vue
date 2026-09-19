@@ -24,7 +24,7 @@
         </div>
 
         <div v-else-if="qrCode" class="d-flex flex-column align-center">
-          <template v-if="provider === '115'">
+          <template v-if="channels.length">
             <div class="mb-2 font-weight-medium">扫码渠道</div>
             <v-chip-group v-model="channel" class="channel-list mb-3" mandatory selected-class="text-primary">
               <v-chip
@@ -88,29 +88,10 @@ const props = defineProps({
 })
 const emit = defineEmits(["update:modelValue", "success"])
 const pluginId = "CloudSubscribe"
-const providerMeta = {
-  115: { name: "115网盘", hint: "请使用115客户端扫描二维码" },
-  123: { name: "123网盘", hint: "请使用 123 云盘 App 扫描二维码" },
-  quark: { name: "夸克网盘", hint: "请使用夸克 App 扫描二维码" },
-  guangya: { name: "光鸭网盘", hint: "请使用光鸭网盘完成扫码授权" },
-  alipan: { name: "阿里云盘", hint: "请使用阿里云盘 App 扫描二维码" },
-  tianyi: { name: "天翼云盘", hint: "请使用小翼管家、支付宝或天翼云盘 App 扫描二维码" },
-}
-const channels = [
-  { title: "网页", value: "web" },
-  { title: "TV", value: "tv" },
-  { title: "苹果", value: "115ios" },
-  { title: "安卓", value: "115android" },
-  { title: "ipad", value: "115ipad" },
-  { title: "Windows", value: "os_windows" },
-  { title: "MacOS", value: "os_mac" },
-  { title: "Linux", value: "os_linux" },
-  { title: "微信", value: "wechatmini" },
-  { title: "支付宝", value: "alipaymini" },
-  { title: "鸿蒙", value: "harmony" },
-]
-const providerName = computed(() => providerMeta[props.provider]?.name || "网盘")
-const scanHint = computed(() => providerMeta[props.provider]?.hint || "请扫描二维码完成登录")
+const providerMeta = ref({});
+const channels = computed(() => Array.isArray(providerMeta.value.channels) ? providerMeta.value.channels : []);
+const providerName = computed(() => providerMeta.value.name || "网盘");
+const scanHint = computed(() => providerMeta.value.hint || "请扫描二维码完成登录");
 const channel = ref("alipaymini")
 const loading = ref(false)
 const qrCode = ref("")
@@ -139,32 +120,9 @@ function close() {
   emit("update:modelValue", false)
 }
 
-function buildStatusQuery() {
-  const query = new URLSearchParams({ provider: props.provider })
-  if (props.provider === "115") {
-    query.set("uid", session.value.uid || "")
-    query.set("time", session.value.time || "")
-    query.set("sign", session.value.sign || "")
-    query.set("client_type", session.value.client_type || channel.value)
-  } else if (props.provider === "123") {
-    query.set("uni_id", session.value.uni_id || "")
-  } else if (props.provider === "quark") {
-    query.set("qr_token", session.value.qr_token || "")
-  } else if (props.provider === "guangya") {
-    query.set("device_code", session.value.device_code || "")
-    query.set("device_id", session.value.device_id || "")
-    query.set("client_id", session.value.client_id || "")
-  } else if (props.provider === "alipan") {
-    query.set("t", session.value.t || "")
-    query.set("ck", session.value.ck || "")
-  } else if (props.provider === "tianyi") {
-    query.set("uuid", session.value.uuid || "")
-    query.set("encryuuid", session.value.encryuuid || "")
-    query.set("req_id", session.value.req_id || "")
-    query.set("lt", session.value.lt || "")
-    query.set("param_id", session.value.param_id || "")
-  }
-  return query
+function buildStatusPayload() {
+  const {qrcode, qr_url, meta, interval, provider, ...values} = session.value || {};
+  return {provider: props.provider, ...values};
 }
 
 function schedulePolling(delay = pollInterval) {
@@ -195,7 +153,7 @@ async function checkStatus() {
   if (!session.value) return
   try {
     const result = unwrapResponse(
-      await props.api.post(`plugin/${pluginId}/qrcode/check`, Object.fromEntries(buildStatusQuery())),
+      await props.api.post(`plugin/${pluginId}/qrcode/check`, buildStatusPayload()),
     )
     if (result.success === false) {
       throw new Error(result.message || "检查登录状态失败")
@@ -235,6 +193,7 @@ async function loadQrCode() {
   session.value = null
   loading.value = true
   qrCode.value = ""
+  providerMeta.value = {};
   error.value = false
   failures = 0
   statusText.value = "正在获取二维码..."
@@ -248,12 +207,13 @@ async function loadQrCode() {
       throw new Error(result.message || "获取二维码失败")
     }
     session.value = result.data?.data || result.data || result
+    providerMeta.value = session.value.meta || {};
     qrCode.value = session.value.qrcode || ""
     if (!qrCode.value) throw new Error("接口未返回二维码")
     pollInterval = Math.max(2, Number(session.value.interval || 3)) * 1000
     const channelName =
-      session.value.channel_name || channels.find((item) => item.value === channel.value)?.title || "115客户端"
-    statusText.value = props.provider === "115" ? `等待${channelName}扫码` : "等待扫码"
+      session.value.channel_name || channels.value.find((item) => item.value === channel.value)?.title || "客户端"
+    statusText.value = channels.value.length ? `等待${channelName}扫码` : "等待扫码";
     schedulePolling()
   } catch (loadError) {
     error.value = true
@@ -264,7 +224,7 @@ async function loadQrCode() {
 }
 
 watch([() => props.modelValue, () => props.provider], ([visible]) => (visible ? loadQrCode() : stopPolling()))
-watch(channel, () => props.modelValue && props.provider === "115" && loadQrCode())
+watch(channel, () => props.modelValue && channels.value.length && loadQrCode());
 onMounted(() => document.addEventListener("visibilitychange", handleVisibilityChange))
 onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", handleVisibilityChange)

@@ -27,19 +27,21 @@ from ...core import (
 )
 from ...core.media import tmdb_id_of
 from ...search.dian115 import Dian115SearchService
+from ...search.hdhaven import HDHavenSearchService
 from ...search.hdhive import HDHiveSearchService
 from ...search.http_client import RequestGateCooldown
-from ...search.juying import JuyingResourceService
 from ...search.matching import is_anime_media, positive_ints, unique_texts
 from ...search.mikan.service import filter_fansubs
 from ...search.pansou import PanSouSearchService
 from ...search.registry import create_search_registry
+from ...search.scanner import SearchSourceRegistry
 from ...search.types import SUPPORTED_RESOURCE_TYPES, normalize_resource_type
 from ...utils.cache import create_platform_ttl_cache
 
 _COMPONENT_TYPES = (
     HDHiveSearchService,
     Dian115SearchService,
+    HDHavenSearchService,
     PanSouSearchService,
     PlatformRuleService,
 )
@@ -63,177 +65,51 @@ class SearchHandler:
 
     def __init__(
             self,
-            pansou_client,
-            hdhive_client=None,
-            seedhub_client=None,
-            juying_client=None,
-            pinglian_client=None,
-            online_docs_client=None,
-            hdhive_web_client=None,
-            hdhive_web_client_owned: bool = True,
-            hdhive_username: str = "",
-            hdhive_password: str = "",
-            hdhive_query_mode: str = "web",
-            hdhive_auto_unlock: bool = False,
-            hdhive_max_unlock_points: int = 50,
-            hdhive_max_points_per_sub: int = 20,
-            dian115_email: str = "",
-            dian115_password: str = "",
-            dian115_auto_unlock: bool = False,
-            dian115_max_unlock_points: int = 50,
-            dian115_max_points_per_sub: int = 20,
-            pansou_channels: Any = None,
-            pansou_plugins: Any = None,
-            pansou_cloud_types: Any = None,
-            pansou_filter_include: Any = None,
-            pansou_filter_exclude: Any = None,
-            resource_type_order: Optional[List[str]] = None,
-            pansou_concurrency: Optional[int] = None,
-            pansou_result_limit: int = 10,
-            pansou_refresh: bool = True,
-            pansou_timeout: int = 60,
-            seedhub_result_limit: int = 20,
-            piratebay_client: Any = None,
-            piratebay_result_limit: int = 20,
-            uindex_client: Any = None,
-            uindex_result_limit: int = 20,
-            juying_result_limit: int = 5,
-            pinglian_result_limit: int = 20,
-            search_source_order: Optional[List[str]] = None,
-            search_proxy: Any = None,
-            search_cache_enabled: bool = True,
-            search_cache_ttl_minutes: int = 30,
-            search_concurrency: int = 2,
-            hdhive_candidate_limit: int = 4,
-            hdhive_request_interval: float = 5.0,
-            hdhive_unlocks_per_minute: int = 2,
-            dian115_candidate_limit: int = 4,
-            dian115_request_interval: float = 1.0,
-            dian115_unlocks_per_minute: int = 6,
-            hdhive_torrentclaw_enabled: bool = False,
-            hdhive_torrentclaw_subtitle_languages: Any = None,
-            enable_cloud_upgrade: bool = False,
-            upgrade_subscribe_ids: Optional[List[int]] = None,
-            should_stop: Any = None,
-            mikan_base_url: str = "https://mikanani.me",
-            mikan_result_limit: int = 10,
-            mikan_request_interval: float = 2.0,
-            mikan_timeout: int = 60,
-            mikan_fansub_order: Optional[List[Any]] = None,
-            mikan_exclude_re: str = "",
-            mikan_no_subs_re: str = "",
-            mikan_chinese_re: str = "",
-            animegarden_base_url: str = "https://animes.garden/",
-            animegarden_result_limit: int = 10,
-            animegarden_request_interval: float = 1.0,
-            animegarden_timeout: int = 60,
-            animegarden_fansub_order: Optional[List[Any]] = None,
-            animegarden_exclude_re: str = "",
-            animegarden_no_subs_re: str = "",
-            animegarden_chinese_re: str = "",
-            anime_pack_preferred: bool = True,
-            search_source_timeout: int = 60,
-            search_circuit_breaker_enabled: bool = True,
-            search_circuit_breaker_threshold: int = 3,
-            search_circuit_breaker_cooldown: int = 60,
-            hdhive_timeout: int = 60,
-            dian115_timeout: int = 60,
-            juying_timeout: int = 60,
-            seedhub_timeout: int = 60,
-            piratebay_timeout: int = 60,
-            uindex_timeout: int = 60,
-            pinglian_timeout: int = 60,
-            mikan_config: Optional[Dict[str, Any]] = None,
-            animegarden_config: Optional[Dict[str, Any]] = None,
+            plugin: Any = None,
+            **kwargs,
     ):
         """
-        初始化搜索处理器
+        初始化搜索处理器。
 
-        :param pansou_client: PanSou 客户端实例
-        :param pansou_channels: PanSou 搜索频道
-        :param search_source_order: 自定义搜索源优先级列表
+        :param plugin: 宿主插件实例，传入时自动解析全部搜索客户端、配置项与存储。
+        :param kwargs: 独立或覆盖配置参数。
         """
-        self._mikan_base_url = str(mikan_base_url or "https://mikanani.me").strip()
-        self._mikan_result_limit = max(1, min(int(mikan_result_limit or 10), 80))
-        self._mikan_request_interval = max(0.5, min(float(mikan_request_interval or 2.0), 10.0))
-        self._mikan_timeout = max(5, min(int(mikan_timeout or 60), 120))
-        self._mikan_fansub_order = list(mikan_fansub_order or [])
-        self._mikan_exclude_re = str(mikan_exclude_re or "").strip()
-        self._mikan_no_subs_re = str(mikan_no_subs_re or "").strip()
-        self._mikan_chinese_re = str(mikan_chinese_re or "").strip()
+        params: Dict[str, Any] = dict(kwargs)
 
-        self._animegarden_base_url = str(animegarden_base_url or "https://animes.garden/").strip()
-        self._animegarden_result_limit = max(1, min(int(animegarden_result_limit or 10), 80))
-        self._animegarden_request_interval = max(0.2, min(float(animegarden_request_interval or 1.0), 10.0))
-        self._animegarden_timeout = max(5, min(int(animegarden_timeout or 60), 120))
-        self._animegarden_fansub_order = list(animegarden_fansub_order or [])
-        self._animegarden_exclude_re = str(animegarden_exclude_re or "").strip()
-        self._animegarden_no_subs_re = str(animegarden_no_subs_re or "").strip()
-        self._animegarden_chinese_re = str(animegarden_chinese_re or "").strip()
+        def get_val(name: str, default: Any = None) -> Any:
+            if name in params and params[name] is not None:
+                return params[name]
+            if plugin is not None:
+                val = getattr(plugin, f"_{name}", None)
+                if val is None:
+                    val = getattr(plugin, name, None)
+                if val is not None:
+                    return val
+            return params.get(name, default)
+
+        self._plugin = plugin
+        self._test_mode = bool(get_val("test_mode", False))
+        definitions = SearchSourceRegistry.get_definitions()
+        for definition in definitions:
+            for key in definition.get_config_keys():
+                attr = f"_{key}"
+                if attr not in self.__dict__:
+                    setattr(self, attr, get_val(key))
+
+        anime_pack_preferred = get_val("anime_pack_preferred", True)
         self._anime_pack_preferred = bool(anime_pack_preferred)
-
-        # 兼容旧配置传入
-        if mikan_config:
-            if "mikan_fansub_order" in mikan_config and not self._mikan_fansub_order:
-                self._mikan_fansub_order = list(mikan_config.get("mikan_fansub_order") or [])
-            if "mikan_exclude_re" in mikan_config and not self._mikan_exclude_re:
-                self._mikan_exclude_re = str(mikan_config.get("mikan_exclude_re") or "").strip()
-        if animegarden_config:
-            if "animegarden_fansub_order" in animegarden_config and not self._animegarden_fansub_order:
-                self._animegarden_fansub_order = list(animegarden_config.get("animegarden_fansub_order") or [])
-            if "animegarden_exclude_re" in animegarden_config and not self._animegarden_exclude_re:
-                self._animegarden_exclude_re = str(animegarden_config.get("animegarden_exclude_re") or "").strip()
-        self._pansou_client = pansou_client
-        self._hdhive_client = hdhive_client
-        self._seedhub_client = seedhub_client
-        self._piratebay_client = piratebay_client
-        self._uindex_client = uindex_client
-        self._juying_client = juying_client
-        self._pinglian_client = pinglian_client
-        self._online_docs_client = online_docs_client
-        self._juying_resources = (
-            JuyingResourceService(juying_client) if juying_client else None
-        )
-        self._piratebay_result_limit = int(piratebay_result_limit or 20)
-        self._uindex_result_limit = int(uindex_result_limit or 20)
-        self._hdhive_username = hdhive_username
-        self._hdhive_password = hdhive_password
-        self._hdhive_query_mode = str(hdhive_query_mode or "web")
-        if self._hdhive_query_mode not in {"api", "web"}:
-            self._hdhive_query_mode = "web"
-        self._hdhive_auto_unlock = hdhive_auto_unlock
-        self._hdhive_web_client = hdhive_web_client
-        self._hdhive_web_client_owned = bool(
-            hdhive_web_client is None or hdhive_web_client_owned
-        )
-        self._hdhive_web_resources = None
-        self._hdhive_web_lock = threading.RLock()
-        self._hdhive_unlock_operation_lock = threading.Lock()
-        self._dian115_email = str(dian115_email or "").strip()
-        self._dian115_password = str(dian115_password or "").strip()
-        self._dian115_auto_unlock = bool(dian115_auto_unlock)
-        self._dian115_max_unlock_points = max(
-            0, int(dian115_max_unlock_points or 0)
-        )
-        self._dian115_max_points_per_sub = max(
-            0, int(dian115_max_points_per_sub or 0)
-        )
-        self._dian115_client = None
-        self._dian115_resources = None
-        self._dian115_client_lock = threading.RLock()
-        self._hdhive_max_unlock_points = hdhive_max_unlock_points
-        self._hdhive_max_points_per_sub = hdhive_max_points_per_sub
-        self._pansou_channels = self._normalize_pansou_values(pansou_channels)
-        self._pansou_plugins = self._normalize_pansou_values(pansou_plugins)
+        self._pansou_channels = self._normalize_pansou_values(get_val("pansou_channels"))
+        self._pansou_plugins = self._normalize_pansou_values(get_val("pansou_plugins"))
         self._pansou_cloud_types = [
             value.lower() for value in self._normalize_pansou_values(
-                pansou_cloud_types
+                get_val("pansou_cloud_types")
             )
         ]
         self._pansou_filter = {
-            "include": self._normalize_pansou_values(pansou_filter_include),
-            "exclude": self._normalize_pansou_values(pansou_filter_exclude),
+            "include": self._normalize_pansou_values(get_val("pansou_filter_include")),
+            "exclude": self._normalize_pansou_values(get_val("pansou_filter_exclude")),
         }
+        resource_type_order = get_val("resource_type_order")
         self._resource_type_order_config = list(
             ["115", "ed2k"]
             if resource_type_order is None else resource_type_order
@@ -241,6 +117,8 @@ class SearchHandler:
         self._resource_type_order_map = {}
         for index, value in enumerate(self._resource_type_order_config):
             self._resource_type_order_map.setdefault(value, index)
+
+        pansou_concurrency = get_val("pansou_concurrency")
         try:
             self._pansou_concurrency = (
                 max(1, min(int(pansou_concurrency), 100))
@@ -248,78 +126,37 @@ class SearchHandler:
             )
         except (TypeError, ValueError):
             self._pansou_concurrency = None
-        self._pansou_result_limit = max(1, min(int(pansou_result_limit or 10), 100))
-        self._pansou_refresh = bool(pansou_refresh)
-        self._pansou_timeout = max(5, min(int(pansou_timeout or 60), 120))
-        self._seedhub_result_limit = max(
-            1, min(int(seedhub_result_limit or 20), 80)
-        )
-        self._juying_result_limit = max(
-            1, min(int(juying_result_limit or 5), 20)
-        )
-        self._pinglian_result_limit = max(
-            1, min(int(pinglian_result_limit or 20), 80)
-        )
+
+        self._pansou_result_limit = max(1, min(int(get_val("pansou_result_limit", 10) or 10), 100))
+        self._pansou_refresh = bool(get_val("pansou_refresh", True))
+        self._pansou_timeout = max(5, min(int(get_val("pansou_timeout", 60) or 60), 120))
         self._juying_resource_types = [
             value for value in unique_texts(
                 self._resource_type_order_config, str.lower
             )
             if value in SUPPORTED_RESOURCE_TYPES
         ]
-        self._search_source_order = search_source_order or []
-        self._search_proxy = search_proxy
-        self._search_cache_enabled = bool(search_cache_enabled)
+        self._search_source_order = get_val("search_source_order", []) or []
+        self._search_proxy = get_val("search_proxy")
+        self._search_cache_enabled = bool(get_val("search_cache_enabled", True))
+        search_cache_ttl_minutes = get_val("search_cache_ttl_minutes", 30)
         self._search_cache_ttl = max(60, int(search_cache_ttl_minutes or 30) * 60)
-        self._search_concurrency = max(1, min(int(search_concurrency or 1), 5))
-        self._hdhive_candidate_limit = max(1, min(int(hdhive_candidate_limit or 4), 20))
-        self._search_source_timeout = max(5, min(int(search_source_timeout or 60), 120))
-        self._search_circuit_breaker_enabled = bool(search_circuit_breaker_enabled)
+        self._search_concurrency = max(1, min(int(get_val("search_concurrency", 2) or 1), 5))
+        self._search_source_timeout = max(5, min(int(get_val("search_source_timeout", 60) or 60), 120))
+        self._search_circuit_breaker_enabled = bool(get_val("search_circuit_breaker_enabled", True))
         self._search_circuit_breaker_threshold = max(
-            1, min(int(search_circuit_breaker_threshold or 3), 10)
+            1, min(int(get_val("search_circuit_breaker_threshold", 3) or 3), 10)
         )
         self._search_circuit_breaker_cooldown = max(
-            10, min(int(search_circuit_breaker_cooldown or 60), 600)
+            10, min(int(get_val("search_circuit_breaker_cooldown", 60) or 60), 600)
         )
-        self._hdhive_timeout = max(5, min(int(hdhive_timeout or 60), 120))
-        self._dian115_timeout = max(5, min(int(dian115_timeout or 60), 120))
-        self._juying_timeout = max(5, min(int(juying_timeout or 60), 120))
-        self._seedhub_timeout = max(5, min(int(seedhub_timeout or 60), 120))
-        self._piratebay_timeout = max(5, min(int(piratebay_timeout or 60), 120))
-        self._uindex_timeout = max(5, min(int(uindex_timeout or 60), 120))
-        self._pinglian_timeout = max(5, min(int(pinglian_timeout or 60), 120))
         SEARCH_CIRCUIT_BREAKER.configure(
             enabled=self._search_circuit_breaker_enabled,
             failure_threshold=self._search_circuit_breaker_threshold,
             cooldown_seconds=self._search_circuit_breaker_cooldown,
         )
-        self._hdhive_request_interval = max(
-            2.0, min(float(hdhive_request_interval or 5.0), 10.0)
-        )
-        self._hdhive_unlocks_per_minute = max(
-            1, min(int(hdhive_unlocks_per_minute or 2), 3)
-        )
-        self._dian115_candidate_limit = max(
-            1, min(int(dian115_candidate_limit or 4), 20)
-        )
-        self._dian115_request_interval = max(
-            0.2, min(float(dian115_request_interval or 1.0), 10.0)
-        )
-        self._dian115_unlocks_per_minute = max(
-            1, min(int(dian115_unlocks_per_minute or 6), 10)
-        )
-        self._hdhive_torrentclaw_enabled = bool(
-            hdhive_torrentclaw_enabled
-            and "magnet" in self._resource_type_order_config
-        )
-        raw_subtitle_languages = hdhive_torrentclaw_subtitle_languages or ["zh"]
-        if isinstance(raw_subtitle_languages, str):
-            raw_subtitle_languages = re.split(r"[,，\s]+", raw_subtitle_languages)
-        self._hdhive_torrentclaw_subtitle_languages = unique_texts(
-            raw_subtitle_languages,
-            lambda value: value.lower().replace("_", "-"),
-        )
-        self._enable_cloud_upgrade = bool(enable_cloud_upgrade)
-        self._upgrade_subscribe_ids = list(upgrade_subscribe_ids or [])
+        self._enable_cloud_upgrade = bool(get_val("enable_cloud_upgrade", False))
+        self._upgrade_subscribe_ids = list(get_val("upgrade_subscribe_ids", []) or [])
         self._upgrade_subscribe_id_set = {
             str(value) for value in self._upgrade_subscribe_ids
         }
@@ -339,13 +176,28 @@ class SearchHandler:
         self._platform_filter_signature_cache = create_platform_ttl_cache(
             "platform:filter_rules", maxsize=1, ttl=5
         )
+        should_stop = get_val("should_stop")
+        if should_stop is None and plugin is not None:
+            should_stop = getattr(plugin, "_stop_requested", None)
         self._should_stop = should_stop
+        for definition in definitions:
+            definition.configure_owner(self, params)
+        self._source_timeouts = {
+            definition.id: definition.get_search_timeout(
+                self.__dict__, self._search_source_timeout
+            )
+            for definition in definitions
+        }
         self._search_registry = create_search_registry(
             self,
             get_component(self, PanSouSearchService, "_search_components"),
             get_component(self, HDHiveSearchService, "_search_components"),
             get_component(self, Dian115SearchService, "_search_components"),
+            get_component(self, HDHavenSearchService, "_search_components"),
         )
+
+        if plugin is not None and hasattr(plugin, "get_data") and hasattr(plugin, "save_data"):
+            self.configure_point_storage(plugin.get_data, plugin.save_data)
 
     def _is_cloud_upgrade_subscribe(self, subscribe: Any) -> bool:
         """判断订阅是否属于插件网盘洗版范围。"""
@@ -372,27 +224,7 @@ class SearchHandler:
     def _get_source_search_timeout(self, source: str) -> float:
         """获取指定搜索渠道的超时时间（秒）。"""
         source = str(source or "").strip().lower()
-        if source == "hdhive" and hasattr(self, "_hdhive_timeout"):
-            return float(self._hdhive_timeout)
-        if source == "dian115" and hasattr(self, "_dian115_timeout"):
-            return float(self._dian115_timeout)
-        if source == "pansou" and hasattr(self, "_pansou_timeout"):
-            return float(self._pansou_timeout)
-        if source == "mikan" and hasattr(self, "_mikan_timeout"):
-            return float(self._mikan_timeout)
-        if source == "animegarden" and hasattr(self, "_animegarden_timeout"):
-            return float(self._animegarden_timeout)
-        if source == "seedhub" and hasattr(self, "_seedhub_timeout"):
-            return float(self._seedhub_timeout)
-        if source == "piratebay" and hasattr(self, "_piratebay_timeout"):
-            return float(self._piratebay_timeout)
-        if source == "uindex" and hasattr(self, "_uindex_timeout"):
-            return float(self._uindex_timeout)
-        if source == "juying" and hasattr(self, "_juying_timeout"):
-            return float(self._juying_timeout)
-        if source == "pinglian" and hasattr(self, "_pinglian_timeout"):
-            return float(self._pinglian_timeout)
-        return float(getattr(self, "_search_source_timeout", 60.0))
+        return self._source_timeouts.get(source, self._search_source_timeout)
 
     def get_enabled_sources(self, media_type: Optional[MediaType] = None) -> List[str]:
         """返回用户选择且当前可用的搜索渠道（完全由 search_source_order 优先级列表控制）。"""
@@ -424,7 +256,7 @@ class SearchHandler:
         # 优先读取用户配置的优先级顺序，其余按标准偏好排列
         configured_order = getattr(self, "_search_source_order", []) or []
         default_pref = [
-            "pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub",
+            "pansou", "hdhive", "dian115", "hdhaven", "juying", "pinglian", "seedhub",
             "piratebay", "uindex", "mikan", "animegarden", "online_docs"
         ]
 
@@ -454,6 +286,7 @@ class SearchHandler:
             "pansou": "PanSou",
             "hdhive": "HDHive",
             "dian115": "Dian115",
+            "hdhaven": "HDHaven",
             "juying": "聚影",
             "pinglian": "盘链",
             "seedhub": "SeedHub",
@@ -673,10 +506,6 @@ class SearchHandler:
                 and hasattr(self._hdhive_client, "close")
         ):
             self._hdhive_client.close()
-        if release_cache and self._juying_client:
-            self._juying_client.close()
-        if release_cache and self._pinglian_client:
-            self._pinglian_client.close()
 
     def configure_point_storage(self, get_data, save_data) -> None:
         """为所有积分搜索渠道配置持久化读写。"""
@@ -950,7 +779,9 @@ class SearchHandler:
         )
 
     def _recycle_source_provider(self, source: str) -> None:
-        """快速回收关闭指定搜索渠道的底层连接，打断可能挂起的网络请求。"""
+        """仅回收隔离测试处理器持有的连接，避免关闭正式同步共享会话。"""
+        if not self._test_mode:
+            return
         try:
             provider = self._search_registry.get(source)
             if provider and hasattr(provider, "close"):
@@ -971,7 +802,7 @@ class SearchHandler:
             force_refresh: bool = False,
             result_limit: Optional[int] = None,
     ) -> Dict[str, List[Dict]]:
-        """并发查询相互独立的来源；各来源内部仍遵守限流与熔断，支持精准超时与未完成渠道快速回收关闭。"""
+        """并发查询相互独立的来源；各来源内部仍遵守限流与熔断。"""
         ordered_sources = list(dict.fromkeys(sources or []))
         search_label = self._search_label(mediainfo, media_type, season)
         results: Dict[str, List[Dict]] = {source: [] for source in ordered_sources}
@@ -985,27 +816,31 @@ class SearchHandler:
         )
         stopped = False
         futures = {}
-        deadlines = {}
+        source_started_at: Dict[str, float] = {}
+        source_started_lock = threading.Lock()
         abandoned_sources = set()
 
+        def run_source(source: str) -> List[Dict]:
+            started_at = time.monotonic()
+            with source_started_lock:
+                source_started_at[source] = started_at
+            return self.search_single_source(
+                source,
+                mediainfo,
+                media_type,
+                season,
+                target_episodes,
+                target_episode_air_dates,
+                subscribe,
+                apply_platform_rules,
+                force_refresh,
+                result_limit,
+            )
+
         try:
-            now = time.monotonic()
             for source in ordered_sources:
-                future = executor.submit(
-                    self.search_single_source,
-                    source,
-                    mediainfo,
-                    media_type,
-                    season,
-                    target_episodes,
-                    target_episode_air_dates,
-                    subscribe,
-                    apply_platform_rules,
-                    force_refresh,
-                    result_limit,
-                )
+                future = executor.submit(run_source, source)
                 futures[future] = source
-                deadlines[future] = now + self._get_source_search_timeout(source)
 
             pending = set(futures)
             while pending:
@@ -1014,13 +849,21 @@ class SearchHandler:
                     break
 
                 now = time.monotonic()
-                # 检查超时任务并快速丢弃
-                timed_out_futures = [f for f in pending if now > deadlines[f]]
+                with source_started_lock:
+                    started_snapshot = dict(source_started_at)
+                timed_out_futures = [
+                    future for future in pending
+                    if (
+                            started_snapshot.get(futures[future]) is not None
+                            and now - started_snapshot[futures[future]]
+                            > self._get_source_search_timeout(futures[future])
+                    )
+                ]
                 for f in timed_out_futures:
                     source = futures[f]
                     abandoned_sources.add(source)
                     logger.warning(
-                        f"⏰ [{search_label}] 搜索渠道 {source.upper()} 响应超时，已主动丢弃等待并回收"
+                        f"⏰ [{search_label}] 搜索渠道 {source.upper()} 响应超时，已主动停止等待"
                     )
                     if self._search_circuit_breaker_enabled:
                         limit = self._get_source_search_timeout(source)
@@ -1034,9 +877,16 @@ class SearchHandler:
                 if not pending:
                     break
 
-                # 动态计算到下一个最近超时的等待时长，避免固定盲轮询
-                min_remaining = min(max(0.05, deadlines[f] - now) for f in pending)
-                wait_step = min(0.3, min_remaining)
+                active_remaining = [
+                    max(
+                        0.05,
+                        self._get_source_search_timeout(futures[future])
+                        - (now - started_snapshot[futures[future]]),
+                    )
+                    for future in pending
+                    if started_snapshot.get(futures[future]) is not None
+                ]
+                wait_step = min(0.3, min(active_remaining, default=0.3))
 
                 done, pending = wait(pending, timeout=wait_step, return_when=FIRST_COMPLETED)
                 for f in done:
@@ -1048,7 +898,7 @@ class SearchHandler:
                             f"[{search_label}] 搜索源 {source} 并发查询失败：{error}"
                         )
         finally:
-            # 搜索完成或提前终止：若存在仍然在搜索的渠道，快速回收关闭底层连接
+            # 正式同步的 Provider 由插件持有，不能因单个媒体停止而关闭共享会话。
             if pending or stopped:
                 for f in pending:
                     source = futures.get(f)
@@ -1059,7 +909,7 @@ class SearchHandler:
                         self._recycle_source_provider(source)
                 if abandoned_sources:
                     logger.info(
-                        f"⏹️ [{search_label}] 搜索流程结束，已快速回收并关闭未完成的渠道：{', '.join(sorted(s.upper() for s in abandoned_sources))}"
+                        f"⏹️ [{search_label}] 搜索流程结束，已停止等待未完成的渠道：{', '.join(sorted(s.upper() for s in abandoned_sources))}"
                     )
             # 绝不阻塞主线程等待后台慢任务，立即释放
             executor.shutdown(wait=False, cancel_futures=True)

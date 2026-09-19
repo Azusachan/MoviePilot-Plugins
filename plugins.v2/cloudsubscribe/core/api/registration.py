@@ -14,7 +14,6 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from fastapi import Depends
 
-from .form_content import FormContent
 from .. import OwnerDelegator
 from ..agent import (
     CloudSubscribeCacheClearTool,
@@ -57,10 +56,10 @@ class MoviePilotRegistration(OwnerDelegator):
         return "vue", "dist/assets"
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        return FormContent.form(self), UIConfig.get_default_config()
+        return None, UIConfig.get_default_config()
 
     def get_page(self) -> Optional[List[dict]]:
-        return FormContent.page(self)
+        return None
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [

@@ -699,14 +699,15 @@ class MediaServerNotifier:
         try:
             if action == "delete":
                 url = f"{host}/emby/Items/{item_id}"
+                params = {"api_key": api_key, "deleteFiles": "false"}
                 client = RequestUtils(timeout=15)
                 if hasattr(client, "delete_res"):
-                    response = client.delete_res(url=url, params={"api_key": api_key})
+                    response = client.delete_res(url=url, params=params)
                 elif hasattr(client, "request"):
-                    response = client.request("DELETE", url=url, params={"api_key": api_key})
+                    response = client.request("DELETE", url=url, params=params)
                 else:
                     import requests
-                    response = requests.delete(url=url, params={"api_key": api_key}, timeout=15)
+                    response = requests.delete(url=url, params=params, timeout=15)
             else:
                 url = f"{host}/emby/Items/{item_id}/Refresh"
                 response = RequestUtils(timeout=15).post_res(
@@ -720,14 +721,20 @@ class MediaServerNotifier:
                         "api_key": api_key,
                     },
                 )
-            if response and getattr(response, "status_code", 0) in {200, 204}:
+            status_code = getattr(response, "status_code", None) if response else None
+            if status_code in {200, 204}:
                 return True
-            status_code = getattr(response, "status_code", None)
+            if action == "delete" and status_code == 400:
+                logger.debug(
+                    f"Emby 单项 delete 返回 400，该条目可能不支持直接删除或已移除 (Item {item_id})，已跳过"
+                )
+                return False
             logger.warning(f"Emby 单项 {action} 失败 (Item {item_id})：HTTP {status_code}")
             return False
         except Exception as error:
             logger.warning(f"Emby 单项 {action} 异常 (Item {item_id})：{error}")
             return False
+
 
     def _refresh_emby_entries(
             self,
@@ -777,9 +784,18 @@ class MediaServerNotifier:
                         has_remaining_files = False
 
                 if not has_remaining_files:
+                    total_targets += 1
                     if self._send_emby_action(host, api_key, item_id, action="delete"):
                         success_count += 1
                         logger.info(f"已请求 Emby ({name}) 精确删除已清理媒体：{title} (Item ID: {item_id})")
+                    else:
+                        # 删除失败（含 400 静默跳过），降级为刷新尝试
+                        total_targets -= 1
+                        if self._send_emby_action(host, api_key, item_id, action="refresh"):
+                            total_targets += 1
+                            success_count += 1
+                            logger.info(f"已请求 Emby ({name}) 降级刷新（删除不支持）：{title} (Item ID: {item_id})")
+
                 else:
                     if self._send_emby_action(host, api_key, item_id, action="refresh"):
                         success_count += 1

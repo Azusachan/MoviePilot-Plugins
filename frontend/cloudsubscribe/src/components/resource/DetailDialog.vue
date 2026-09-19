@@ -653,8 +653,10 @@ const quickSpecOptions = computed(() => {
     {key: "HDR", label: "HDR"},
     {key: "杜比视界", label: "杜比视界"},
   ];
-  const channel = String(props.activeChannelTab || "").toLowerCase();
-  if (["hdhive", "dian115"].includes(channel)) {
+  const hasPointResources = (props.resources || []).some(
+    (r) => r?.need_unlock || r?.unlock_points !== undefined || r?.is_point_unlock,
+  );
+  if (hasPointResources) {
     options.push({key: "免费", label: "免费"});
   }
   return options;

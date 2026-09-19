@@ -684,6 +684,7 @@ const searchVisible = ref(false);
 let lastQuerySignature = "";
 
 const sourceNames = {
+  hdhaven: "HDHaven",
   hdhive: "HDHive",
   pansou: "PanSou",
   dian115: "Dian115",

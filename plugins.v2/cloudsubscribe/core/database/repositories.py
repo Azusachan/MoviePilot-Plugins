@@ -23,19 +23,12 @@ from .models import (
     PointBudgetRecord,
 )
 from ..history import history_group_key
+from ...drive.common import positive_int
 from ...search.types import normalize_resource_type, resource_type_from_url
 
 
-def _positive_int(value: Any) -> Optional[int]:
-    try:
-        number = int(value or 0)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
-
-
 def _episode_number(record: Dict[str, Any]) -> Optional[int]:
-    episode = _positive_int(record.get("episode"))
+    episode = positive_int(record.get("episode"))
     if episode:
         return episode
     values = record.get("target_episodes")
@@ -47,7 +40,7 @@ def _episode_number(record: Dict[str, Any]) -> Optional[int]:
     episodes = [
         number
         for value in candidates
-        if (number := _positive_int(value)) is not None
+        if (number := positive_int(value)) is not None
     ]
     return max(episodes, default=None)
 
@@ -162,9 +155,9 @@ class HistoryRepository(DbOper):
             "file_name": str(payload.get("file_name") or ""),
             "media_type": str(payload.get("type") or ""),
             "tmdb_id": str(payload.get("tmdb_id") or ""),
-            "season": _positive_int(payload.get("season")),
+            "season": positive_int(payload.get("season")),
             "episode": _episode_number(payload),
-            "subscribe_id": _positive_int(payload.get("subscribe_id")),
+            "subscribe_id": positive_int(payload.get("subscribe_id")),
             "payload": payload,
         }
 

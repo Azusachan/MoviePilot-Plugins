@@ -426,7 +426,7 @@ watch(mainTab, (tab) => {
 
 const activeTaskCount = computed(
   () =>
-    (runtime.tasks || []).filter((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+    (runtime.tasks || []).filter((task) => ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status))
       .length,
 )
 const stoppableTaskCount = computed(

@@ -416,7 +416,7 @@ watch(mainTab, (tab) => {
 })
 const activeTaskCount = computed(
   () =>
-    (runtime.tasks || []).filter((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+    (runtime.tasks || []).filter((task) => ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status))
       .length,
 )
 const stoppableTaskCount = computed(
@@ -694,6 +694,18 @@ async function notifyHistory() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+:global(html[data-theme="transparent"]) .page-shell,
+:global(html[data-theme="glass"]) .page-shell,
+:global(html[data-theme-preference="transparent"]) .page-shell,
+:global(html[class*="transparent-glass"]) .page-shell,
+:global(html[data-glass-appearance]) .page-shell,
+:global(.v-theme--transparent) .page-shell {
+  background-color: rgba(var(--v-theme-surface), var(--transparent-opacity-heavy, 0.78)) !important;
+  backdrop-filter: blur(var(--transparent-blur-heavy, 16px)) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(var(--transparent-blur-heavy, 16px)) saturate(140%) !important;
+  border-color: rgba(var(--v-border-color), 0.16) !important;
 }
 
 .page-header {

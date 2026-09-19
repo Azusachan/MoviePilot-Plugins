@@ -15,7 +15,7 @@ export function createConfigSections(options, config = {}) {
     createBasicSection(cloudDriveItems, options),
     createTransferSection(options),
     createSubscribeSection(options),
-    createCheckinSection(),
+    createCheckinSection(options),
     createDriveSection(options),
     createSearchSection(resourceTypeItems, options),
     createUpgradeSection(options),

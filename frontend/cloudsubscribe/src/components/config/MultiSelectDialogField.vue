@@ -116,6 +116,14 @@
           <!-- 批量操作微胶囊组 -->
           <div class="toolbar-actions d-flex align-center ga-1 flex-shrink-0">
             <v-btn
+              v-if="field.dynamicOptions?.refreshable"
+              icon="mdi-refresh"
+              variant="text"
+              size="small"
+              :loading="Boolean(field.loading)"
+              title="刷新选项列表"
+              @click="refreshOptions" />
+            <v-btn
               variant="tonal"
               size="small"
               rounded="pill"
@@ -150,9 +158,14 @@
         <!-- 选项列表主体（双列卡片网格布局，消除右侧空洞感） -->
         <v-card-text class="pt-1 pb-2 px-4">
           <!-- 空匹配状态 -->
-          <div v-if="filteredItems.length === 0" class="text-center py-8 text-medium-emphasis">
-            <v-icon icon="mdi-file-search-outline" size="36" class="mb-2 opacity-40" />
-            <div class="text-caption">没有匹配的选项</div>
+          <div v-if="field.loading" class="text-center py-8 text-medium-emphasis">
+            <v-progress-circular indeterminate color="primary" size="32" width="3" class="mb-2" />
+            <div class="text-caption">正在加载选项</div>
+          </div>
+          <div v-else-if="filteredItems.length === 0" class="text-center py-8 text-medium-emphasis">
+            <v-icon :icon="field.loadError ? 'mdi-alert-circle-outline' : 'mdi-file-search-outline'" size="36"
+                    class="mb-2 opacity-40" />
+            <div class="text-caption">{{ field.loadError || "没有可选项" }}</div>
           </div>
 
           <!-- 双列自适应网格 -->
@@ -227,7 +240,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "load-options", "refresh-options"]);
 
 const dialogVisible = ref(false);
 const searchKeyword = ref("");
@@ -292,6 +305,15 @@ function openDialog() {
   tempSelection.value = [...current];
   searchKeyword.value = "";
   dialogVisible.value = true;
+  if (props.field?.dynamicOptions) {
+    emit("load-options", props.field.dynamicOptions);
+  }
+}
+
+function refreshOptions() {
+  if (props.field?.dynamicOptions) {
+    emit("refresh-options", props.field.dynamicOptions);
+  }
 }
 
 function isTempSelected(val) {

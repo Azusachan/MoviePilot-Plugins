@@ -14,8 +14,12 @@ from app.schemas.types import MediaType, NotificationType
 from .. import CloudDriveCapability, OwnerDelegator
 from ..config import UIConfig
 from ..media import call_with_supported_kwargs, recognize_media
+from ...search.pansou import PanSouClient
+from ...search.types import PANSOU_RESOURCE_TYPES, resource_type_name
 from ...search.matching import is_anime_media
 from ...utils.cache import create_platform_ttl_cache
+from ...drive.scanner import DriverRegistry
+from ...search.scanner import SearchSourceRegistry
 
 _UI_OPTIONS_CACHE = create_platform_ttl_cache(
     "ui:options", maxsize=16, ttl=2 * 60
@@ -265,7 +269,7 @@ class PageApi(OwnerDelegator):
             "data": self._get_data_store().history_summary(today),
         }
 
-    def api_vue_ui_options(self, scope: str = "base") -> dict:
+    def api_vue_ui_options(self, scope: str = "base", refresh: bool = False) -> dict:
         normalized_scope = str(scope or "base").strip().lower()
         normalized_scope = {
             "transfer": "subscriptions",
@@ -273,13 +277,68 @@ class PageApi(OwnerDelegator):
             "manual": "subscriptions",
         }.get(normalized_scope, normalized_scope)
         if normalized_scope not in {
-            "base", "subscriptions", "drive", "search", "notify"
+            "base", "subscriptions", "drive", "search", "pansou", "notify", "checkin"
         }:
             return {"success": False, "message": "未知的配置选项范围"}
         cache_key = f"instance:{id(self)}:{normalized_scope}"
+        if refresh:
+            _UI_OPTIONS_CACHE.pop(cache_key, None)
         cached = _UI_OPTIONS_CACHE.get(cache_key)
         if isinstance(cached, dict):
             return copy.deepcopy(cached)
+
+        if normalized_scope == "checkin":
+            from ..checkin_manager import get_checkin_schemas
+            result = {
+                "success": True,
+                "data": {
+                    "checkin_schemas": get_checkin_schemas(),
+                },
+            }
+            _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
+            return result
+
+        if normalized_scope == "pansou":
+            pansou_options = {
+                "status": "unavailable",
+                "plugins": [],
+                "channels": [],
+                "cloud_types": [
+                    {
+                        "title": resource_type_name(value, value),
+                        "value": value,
+                    }
+                    for value in PANSOU_RESOURCE_TYPES
+                ],
+            }
+            pansou_url = str(getattr(self, "_pansou_url", "") or "").strip()
+            if pansou_url:
+                client = PanSouClient(
+                    base_url=pansou_url,
+                    auth_enabled=False,
+                    proxy=getattr(self, "_search_proxy", None),
+                    search_timeout=5,
+                )
+                try:
+                    health = client.health(timeout=2)
+                except Exception as error:
+                    logger.debug(f"读取 PanSou 配置选项失败：{error}")
+                    health = {"status": "error", "error": str(error)}
+                pansou_options.update({
+                    "status": str(health.get("status") or "error"),
+                    "error": str(health.get("error") or ""),
+                    "plugins": [
+                        {"title": value, "value": value}
+                        for value in health.get("plugins", [])
+                    ],
+                    "channels": [
+                        {"title": value, "value": value}
+                        for value in health.get("channels", [])
+                    ],
+                })
+            result = {"success": True, "data": {"pansou": pansou_options}}
+            _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
+            return result
 
         if normalized_scope == "subscriptions":
             providers = (
@@ -339,11 +398,13 @@ class PageApi(OwnerDelegator):
                 if self._cloud_drive_registry else []
             )
             if normalized_scope == "base":
+                from ..checkin_manager import get_checkin_schemas
                 result = {
                     "success": True,
                     "data": {
-                        "defaults": UIConfig.get_default_config(),
+                        "defaults": UIConfig.normalize_config(UIConfig.get_default_config()),
                         "mediaservers": UIConfig.get_media_server_options(),
+                        "checkin_schemas": get_checkin_schemas(),
                         "cloud_drives": [
                             {
                                 "title": provider.name,
@@ -389,6 +450,7 @@ class PageApi(OwnerDelegator):
                             "error": "请先配置当前网盘账号",
                         }),
                         "accounts": accounts,
+                        "driver_schemas": DriverRegistry.get_driver_schemas(),
                     },
                 }
             _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
@@ -421,31 +483,14 @@ class PageApi(OwnerDelegator):
             _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
             return result
 
-        from ...search.pansou import PanSouClient
-        from ...search.types import PANSOU_RESOURCE_TYPES, resource_type_name
-
-        search_accounts = {
-            "hdhive": {
-                "connected": False,
-                "error": "配置并保存 HDHive 账户后读取账户信息",
-            },
-            "dian115": {
-                "connected": False,
-                "error": "配置并保存 Dian115 账户后读取账户信息",
-            },
-            "juying": {
-                "connected": False,
-                "error": "配置并保存聚影账户后读取账户信息",
-            },
-            "pinglian": {
-                "connected": False,
-                "error": "配置并保存盘链账户后读取账户信息",
-            },
-        }
-
-        for source in search_accounts:
-            search_accounts[source] = self._cached_account_info(
-                f"search:{source}", search_accounts[source]
+        search_accounts = {}
+        for def_cls in SearchSourceRegistry.get_definitions():
+            search_accounts[def_cls.id] = self._cached_account_info(
+                f"search:{def_cls.id}",
+                {
+                    "connected": False,
+                    "error": f"配置并保存 {def_cls.name} 账户后读取账户信息",
+                },
             )
         pansou_options = {
             "status": "unavailable",
@@ -459,27 +504,6 @@ class PageApi(OwnerDelegator):
                 for value in PANSOU_RESOURCE_TYPES
             ],
         }
-        pansou_url = str(getattr(self, "_pansou_url", "") or "").strip()
-        if pansou_url:
-            client = self._pansou_client or PanSouClient(
-                base_url=pansou_url,
-                auth_enabled=False,
-                proxy=self._search_proxy,
-                search_timeout=5,
-            )
-            health = client.health(timeout=3)
-            pansou_options.update({
-                "status": str(health.get("status") or "error"),
-                "error": str(health.get("error") or ""),
-                "plugins": [
-                    {"title": value, "value": value}
-                    for value in health.get("plugins", [])
-                ],
-                "channels": [
-                    {"title": value, "value": value}
-                    for value in health.get("channels", [])
-                ],
-            })
         available_sources = []
         search_handler = getattr(self, "_search_handler", None)
         if search_handler and hasattr(search_handler, "get_available_sources_meta"):
@@ -491,6 +515,7 @@ class PageApi(OwnerDelegator):
                 "search_accounts": search_accounts,
                 "pansou": pansou_options,
                 "available_sources": available_sources,
+                "search_schemas": SearchSourceRegistry.get_search_schemas(),
             },
         }
         _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))

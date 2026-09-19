@@ -89,7 +89,15 @@ const emit = defineEmits(["refresh"])
 const user = computed(() => props.account.user || {})
 const storage = computed(() => props.account.storage || {})
 const points = computed(() => props.account.points || {})
-const details = computed(() => (Array.isArray(props.account.details) ? props.account.details : []))
+const details = computed(() => {
+  const list = Array.isArray(props.account.details) ? props.account.details : [];
+  return list
+    .filter((item) => item && typeof item === "object" && item.label && item.value !== undefined && item.value !== null && item.value !== "")
+    .map((item) => ({
+      ...item,
+      value: formatDetailValue(item.value),
+    }));
+});
 const hasLoadedInfo = computed(() => Boolean(props.account?.connected || props.account?.refreshed_at))
 const hasPoints = computed(() => points.value.available !== undefined && points.value.available !== null)
 const hasStorageInfo = computed(() => Boolean(storage.value.used || storage.value.total || storage.value.remaining))
@@ -217,19 +225,16 @@ function formatDetailValue(val) {
 }
 
 .account-details {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 18px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(var(--v-theme-primary), 0.1);
 }
 
 .account-info--compact .account-details {
-  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
-  gap: 4px 14px;
-  margin-top: 6px;
-  padding-top: 6px;
+  gap: 5px 8px;
+  margin-top: 7px;
 }
 
 .account-info--compact .account-heading {
@@ -245,30 +250,67 @@ function formatDetailValue(val) {
 }
 
 .account-detail {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  background: rgba(var(--v-theme-primary), 0.055);
+  border: 1px solid rgba(var(--v-theme-primary), 0.12);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.account-detail:hover {
+  background: rgba(var(--v-theme-primary), 0.09);
+  border-color: rgba(var(--v-theme-primary), 0.28);
+  transform: translateY(-1px);
 }
 
 .account-detail-label {
   flex: 0 0 auto;
-  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  color: rgba(var(--v-theme-on-surface), 0.58);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.account-detail-label::after {
+  content: "：";
+  margin-right: 1px;
+  opacity: 0.65;
 }
 
 .account-detail-value {
   min-width: 0;
-  color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity));
-  overflow-wrap: anywhere;
-  text-align: right;
+  color: rgba(var(--v-theme-on-surface), 0.92);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+:global(html[data-theme="transparent"]) .account-detail,
+:global(html[data-theme="glass"]) .account-detail,
+:global(html[data-theme-preference="transparent"]) .account-detail,
+:global(html[class*="transparent-glass"]) .account-detail,
+:global(html[data-glass-appearance]) .account-detail,
+:global(.v-theme--transparent) .account-detail {
+  background: rgba(var(--v-theme-surface), 0.6) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  backdrop-filter: blur(10px) !important;
 }
 
 @media (max-width: 600px) {
   .account-details,
   .account-info--compact .account-details {
-    grid-template-columns: 1fr;
+    gap: 5px 6px;
+  }
+
+  .account-detail {
+    font-size: 0.6875rem;
+    padding: 1.5px 6px;
   }
 }
 </style>

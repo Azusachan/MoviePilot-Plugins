@@ -2,8 +2,18 @@
   <div class="checkin-timeline">
     <div class="checkin-matrix-scroll">
       <div class="checkin-matrix">
-        <div class="checkin-matrix-head checkin-provider-cell">渠道</div>
-        <div class="checkin-matrix-head checkin-summary-cell">签到状态</div>
+        <div class="checkin-matrix-head checkin-provider-cell">
+          <span>渠道</span>
+          <v-btn
+            icon="mdi-refresh"
+            variant="text"
+            size="x-small"
+            density="compact"
+            class="checkin-head-refresh"
+            title="刷新签到记录"
+            :loading="checkinRefreshing"
+            @click.stop="loadHistories(true)" />
+        </div>
         <div class="checkin-matrix-head checkin-summary-cell">签到天数</div>
         <div class="checkin-matrix-head checkin-summary-cell">当前积分</div>
         <div v-for="day in dateColumns" :key="'head-' + day.key" class="checkin-matrix-head">
@@ -17,19 +27,10 @@
           </div>
 
           <div class="checkin-summary-cell checkin-matrix-row">
-            <span
-              v-if="providerStatus(provider)"
-              class="checkin-status-chip"
-              :class="'checkin-status-chip--' + providerStatus(provider).tone">
-              <v-icon :icon="providerStatus(provider).icon" size="13" />
-              {{ providerStatus(provider).label }}
-            </span>
+            {{ latestSigninDays(provider) }}
           </div>
-          <div class="checkin-summary-cell checkin-matrix-row">
-            {{ latestMetric(provider, "signin_days", "天") }}
-          </div>
-          <div class="checkin-summary-cell checkin-matrix-row">
-            {{ latestMetric(provider, "points_after") }}
+          <div class="checkin-summary-cell checkin-matrix-row font-weight-medium">
+            {{ latestPoints(provider) }}
           </div>
 
           <div
@@ -102,8 +103,16 @@
   </div>
 </template>
 
+<script>
+import {reactive, ref} from "vue";
+
+// 模块级单例缓存，跨组件生命周期与 Tab 切换保持，彻底避免每次进入签到重复发接口
+const cachedCheckinHistories = reactive({});
+const checkinRefreshing = ref(false);
+</script>
+
 <script setup>
-import {computed, onMounted, reactive, ref, watch} from "vue";
+import {computed, onMounted, ref, watch} from "vue";
 
 const props = defineProps({
   api: { type: [Object, Function], required: true },
@@ -111,7 +120,7 @@ const props = defineProps({
   config: { type: Object, required: true },
 })
 const emit = defineEmits(["result"])
-const histories = reactive({})
+const histories = cachedCheckinHistories;
 const runningProvider = ref("")
 
 const dateColumns = computed(() => buildDateColumns())
@@ -170,6 +179,11 @@ function providerConfigured(provider) {
       )
     }
   }
+  if (provider.key === "hdhaven") {
+    return Boolean(
+      String(props.config.hdhaven_username || "").trim() && String(props.config.hdhaven_password || "").trim(),
+    );
+  }
   return provider.credentialKeys.every((key) => Boolean(String(props.config[key] || "").trim()))
 }
 
@@ -213,6 +227,53 @@ function latestMetric(provider, key, suffix = "") {
   if (!record) return "—"
   const value = formatOptionalNumber(record[key], suffix)
   return value === "未记录" ? "—" : value
+}
+
+function latestSigninDays(provider) {
+  const state = historyState(provider);
+  const items = state.items || [];
+  const record = items[0];
+  if (record && record.signin_days !== undefined && record.signin_days !== null && record.signin_days !== "") {
+    const val = Number(record.signin_days);
+    if (Number.isFinite(val) && val > 0) return `${val}天`;
+  }
+  const signedDates = new Set();
+  items.forEach((item) => {
+    if (item && item.success) {
+      const parsed = new Date(item.executed_at);
+      if (!Number.isNaN(parsed.getTime())) {
+        signedDates.add(localDateKey(parsed));
+      } else {
+        signedDates.add(item.id || item.executed_at || Math.random());
+      }
+    }
+  });
+  if (signedDates.size > 0) {
+    return `${signedDates.size}天`;
+  }
+  const status = providerStatus(provider);
+  if (status && (status.tone === "already" || status.tone === "success")) {
+    return "1天";
+  }
+  return "—";
+}
+
+function latestPoints(provider) {
+  const currentPoints = histories[provider.key]?.current_points;
+  if (currentPoints !== null && currentPoints !== undefined && currentPoints !== "") {
+    return currentPoints;
+  }
+  const items = historyState(provider).items || [];
+  for (const item of items) {
+    if (item.points_after !== null && item.points_after !== undefined && item.points_after !== "") {
+      return item.points_after;
+    }
+  }
+  const record = latestRecord(provider);
+  if (record && record.points_after !== null && record.points_after !== undefined) {
+    return record.points_after;
+  }
+  return "—";
 }
 
 function canCheckin(provider, day) {
@@ -341,7 +402,11 @@ function formatOptionalNumber(value, suffix = "") {
   return Number.isFinite(normalized) ? `${normalized}${suffix}` : "未记录"
 }
 
-async function loadProviderHistory(provider) {
+async function loadProviderHistory(provider, force = false) {
+  const existing = histories[provider.key];
+  if (!force && existing?.loaded) {
+    return;
+  }
   try {
     const response = unwrapResponse(
       await props.api.get("plugin/CloudSubscribe/checkin/" + encodeURIComponent(provider.key) + "/history?limit=60"),
@@ -351,19 +416,28 @@ async function loadProviderHistory(provider) {
     histories[provider.key] = {
       total: Number(data.total || 0),
       items: Array.isArray(data.items) ? data.items : [],
+      current_points: data.current_points ?? null,
+      loaded: true,
       error: "",
     }
   } catch (error) {
     histories[provider.key] = {
-      total: 0,
-      items: [],
+      total: existing?.total || 0,
+      items: existing?.items || [],
+      current_points: existing?.current_points ?? null,
+      loaded: Boolean(existing?.loaded),
       error: error.message || String(error),
     }
   }
 }
 
-async function loadHistories() {
-  await Promise.all(enabledProviders.value.map(loadProviderHistory));
+async function loadHistories(force = false) {
+  checkinRefreshing.value = true;
+  try {
+    await Promise.all(enabledProviders.value.map((provider) => loadProviderHistory(provider, force)));
+  } finally {
+    checkinRefreshing.value = false;
+  }
 }
 
 function requestCheckin(provider) {
@@ -378,7 +452,7 @@ function wait(delay) {
 async function waitForProviderResult(provider, previousRecordId) {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     await wait(attempt === 0 ? 500 : 2000)
-    await loadProviderHistory(provider)
+    await loadProviderHistory(provider, true);
     const record = latestRecord(provider)
     if (record?.id && record.id !== previousRecordId) return record
   }
@@ -420,13 +494,13 @@ async function runCheckin(provider) {
       message: error.message || String(error),
     })
   } finally {
-    await loadProviderHistory(provider)
+    await loadProviderHistory(provider, true);
     runningProvider.value = ""
   }
 }
 
-watch(() => props.providers.map((provider) => `${provider.key}:${providerEnabled(provider)}`).join(","), loadHistories);
-onMounted(loadHistories)
+watch(() => props.providers.map((provider) => `${provider.key}:${providerEnabled(provider)}`).join(","), () => loadHistories(false));
+onMounted(() => loadHistories(false));
 </script>
 
 <style scoped>
@@ -441,10 +515,22 @@ onMounted(loadHistories)
   background: rgb(var(--v-theme-surface));
 }
 
+:global(html[data-theme="transparent"]) .checkin-matrix-scroll,
+:global(html[data-theme="glass"]) .checkin-matrix-scroll,
+:global(html[data-theme-preference="transparent"]) .checkin-matrix-scroll,
+:global(html[class*="transparent-glass"]) .checkin-matrix-scroll,
+:global(html[data-glass-appearance]) .checkin-matrix-scroll,
+:global(.v-theme--transparent) .checkin-matrix-scroll {
+  background: rgba(var(--v-theme-surface), var(--transparent-opacity, 0.65)) !important;
+  backdrop-filter: blur(var(--transparent-blur, 10px)) saturate(130%) !important;
+  -webkit-backdrop-filter: blur(var(--transparent-blur, 10px)) saturate(130%) !important;
+  border-color: rgba(var(--v-border-color), 0.16) !important;
+}
+
 .checkin-matrix {
-  min-width: 800px;
+  min-width: 600px;
   display: grid;
-  grid-template-columns: 156px 108px 78px 86px repeat(7, minmax(52px, 1fr));
+  grid-template-columns: 116px 76px 82px repeat(7, minmax(46px, 1fr));
   align-items: stretch;
 }
 
@@ -471,6 +557,19 @@ onMounted(loadHistories)
   justify-content: flex-start;
   gap: 6px;
   padding: 0 10px;
+}
+
+.checkin-head-refresh {
+  width: 20px !important;
+  height: 20px !important;
+  min-width: 20px !important;
+  margin-left: 4px;
+  color: rgba(var(--v-theme-on-surface), 0.5) !important;
+  transition: all 0.15s ease;
+}
+
+.checkin-head-refresh:hover {
+  color: rgb(var(--v-theme-primary)) !important;
 }
 
 .checkin-summary-cell {

@@ -129,34 +129,20 @@ class SyncRuntimeService(OwnerDelegator):
             retained = {
                 task_id: task
                 for task_id, task in self._sync_tasks.items()
-                if task.get("status") == "postprocessing"
+                if task.get("status") in {"downloading", "transferring", "postprocessing"}
                    or (
                            task.get("task_kind") == "pt_upgrade"
                            and task.get("status") in {"queued", "running", "stopping"}
                    )
             }
-            postprocess_fields = {
-                "pending_count",
-                "current_file",
-                "postprocess_active",
-                "postprocess_detail",
-                "postprocess_step",
-                "postprocess_step_index",
-                "postprocess_step_total",
-                "postprocess_steps",
-                "postprocess_file_index",
-                "postprocess_file_total",
-                "postprocess_progress",
-            }
             for task_id, task in tasks.items():
                 previous = retained.get(task_id)
-                if not previous or previous.get("status") != "postprocessing":
-                    continue
-                task.update({
-                    key: previous[key]
-                    for key in postprocess_fields
-                    if key in previous
-                })
+                if previous and previous.get("status") in {
+                    "downloading", "transferring", "postprocessing"
+                }:
+                    task["_postprocess_file_keys"] = list(
+                        previous.get("_postprocess_file_keys") or []
+                    )
             retained.update(tasks)
             self._sync_tasks = retained
         self._mark_runtime_changed()
@@ -166,6 +152,51 @@ class SyncRuntimeService(OwnerDelegator):
         with self._sync_tasks_lock:
             task = self._sync_tasks.get(task_id)
             if task and any(task.get(key) != value for key, value in values.items()):
+                task.update(values)
+                changed = True
+        if changed:
+            self._mark_runtime_changed()
+
+    def _update_postprocess_task(self, task_id: str, **values: Any) -> None:
+        """仅更新当前后处理卡片，避免旧回调污染同订阅的新一轮任务。"""
+        changed = False
+        with self._sync_tasks_lock:
+            task = self._sync_tasks.get(task_id)
+            if not task or task.get("status") not in {
+                "downloading", "transferring", "postprocessing"
+            }:
+                return
+            pending_key = str(values.pop("_pending_key", "") or "").strip()
+            active = values.get("postprocess_active")
+            active_key = str(task.get("_postprocess_active_key") or "")
+            if active is False and active_key and pending_key != active_key:
+                return
+            file_keys = list(task.get("_postprocess_file_keys") or [])
+            if pending_key and pending_key not in file_keys:
+                file_keys.append(pending_key)
+            if pending_key and active is not False:
+                values["status"] = (
+                    "downloading"
+                    if int(task.get("download_pending_count") or 0) > 0
+                    else "transferring"
+                    if int(task.get("transfer_pending_count") or 0) > 0
+                    else "postprocessing"
+                )
+                task["_postprocess_active_key"] = pending_key
+                values["postprocess_file_index"] = file_keys.index(pending_key) + 1
+                values["postprocess_file_total"] = len(file_keys)
+                step_index = max(0, int(values.get("postprocess_step_index") or 0))
+                step_total = max(1, int(values.get("postprocess_step_total") or 1))
+                file_progress = (
+                                        values["postprocess_file_index"] - 1
+                                        + (step_index + 1) / step_total
+                                ) / max(1, len(file_keys))
+                values["postprocess_progress"] = round(file_progress * 100, 2)
+                values["progress"] = min(99, 95 + int(file_progress * 4))
+            elif active is False:
+                task["_postprocess_active_key"] = ""
+            task["_postprocess_file_keys"] = file_keys
+            if any(task.get(key) != value for key, value in values.items()):
                 task.update(values)
                 changed = True
         if changed:
@@ -196,11 +227,13 @@ class SyncRuntimeService(OwnerDelegator):
             tasks = []
             for task in self._sync_tasks.values():
                 if task.get("status") not in {
-                    "queued", "running", "stopping", "postprocessing"
+                    "queued", "running", "stopping", "downloading",
+                    "transferring", "postprocessing"
                 }:
                     continue
                 serialized = {
-                    key: value for key, value in task.items() if key != "stop_event"
+                    key: value for key, value in task.items()
+                    if key != "stop_event" and not key.startswith("_postprocess_")
                 }
                 serialized_steps = [
                     step for step in serialized.get("postprocess_steps") or []
@@ -227,8 +260,10 @@ class SyncRuntimeService(OwnerDelegator):
             status_order = {
                 "running": 0,
                 "stopping": 1,
-                "postprocessing": 2,
-                "queued": 3,
+                "downloading": 2,
+                "transferring": 3,
+                "postprocessing": 4,
+                "queued": 5,
             }
             tasks.sort(key=lambda task: (
                 status_order.get(str(task.get("status") or ""), 9),
@@ -325,7 +360,12 @@ class SyncRuntimeService(OwnerDelegator):
             "postprocess_steps": [],
             "postprocess_file_index": 0,
             "postprocess_file_total": 0,
+            "postprocess_file_completed": 0,
             "postprocess_progress": 0,
+            "download_pending_count": 0,
+            "transfer_pending_count": 0,
+            "_postprocess_active_key": "",
+            "_postprocess_file_keys": [],
         }
 
     def _refresh_postprocessing_sync_tasks(self) -> None:
@@ -349,6 +389,7 @@ class SyncRuntimeService(OwnerDelegator):
             group = groups.setdefault(task_id, {
                 "count": 0,
                 "items": [],
+                "pending_keys": [],
                 "subscribe_id": subscribe_id if subscribe_id > 0 else None,
                 "sub_key": sub_key,
                 "title": str(media_data.get("title") or "未命名订阅"),
@@ -363,6 +404,20 @@ class SyncRuntimeService(OwnerDelegator):
             })
             group["count"] += 1
             group["items"].append(item)
+            task_type = str(item.get("task_type") or "share").strip().lower()
+            if task_type in {"magnet", "ed2k", "offline"} and not bool(
+                    item.get("offline_completed") or item.get("moved_at")
+            ):
+                group["download_pending_count"] = int(
+                    group.get("download_pending_count") or 0
+                ) + 1
+            elif task_type not in {"magnet", "ed2k", "offline"} and not item.get("moved_at"):
+                group["transfer_pending_count"] = int(
+                    group.get("transfer_pending_count") or 0
+                ) + 1
+            pending_key = str(item.get("pending_key") or "").strip()
+            if pending_key:
+                group["pending_keys"].append(pending_key)
             if str(item.get("share_url") or "").lower().startswith("pt://"):
                 group["task_kind"] = "pt_upgrade"
             elif item.get("upgrade") and group["task_kind"] == "subscribe":
@@ -376,7 +431,9 @@ class SyncRuntimeService(OwnerDelegator):
         changed = False
         with self._sync_tasks_lock:
             for task in self._sync_tasks.values():
-                if task.get("status") != "postprocessing":
+                if task.get("status") not in {
+                    "downloading", "transferring", "postprocessing"
+                }:
                     continue
                 if str(task.get("id") or "") not in groups:
                     task.update({
@@ -394,22 +451,69 @@ class SyncRuntimeService(OwnerDelegator):
                     continue
                 pending_count = int(group["count"])
                 phase, message = self._postprocessing_text(group["items"])
+                download_pending_count = int(group.get("download_pending_count") or 0)
+                transfer_pending_count = int(group.get("transfer_pending_count") or 0)
+                current_keys = list(dict.fromkeys(group["pending_keys"]))
+                file_keys = list(task.get("_postprocess_file_keys") or []) if task else []
+                for pending_key in current_keys:
+                    if pending_key not in file_keys:
+                        file_keys.append(pending_key)
+                completed_count = len(
+                    [pending_key for pending_key in file_keys if pending_key not in current_keys]
+                )
                 values = {
-                    "status": "postprocessing",
+                    "status": (
+                        "downloading" if download_pending_count
+                        else "transferring" if transfer_pending_count
+                        else "postprocessing"
+                    ),
                     "task_kind": group["task_kind"],
                     "phase": phase,
                     "message": message,
                     "progress": 95,
                     "pending_count": pending_count,
+                    "download_pending_count": download_pending_count,
+                    "transfer_pending_count": transfer_pending_count,
+                    "postprocess_file_completed": completed_count,
+                    "postprocess_file_total": len(file_keys),
+                    "_postprocess_file_keys": file_keys,
                     "finished_at": None,
                 }
                 if not task:
-                    values.update(self._idle_postprocess_state())
-                elif not task.get("postprocess_active"):
+                    values = {**self._idle_postprocess_state(), **values}
+                if not task or not task.get("postprocess_active"):
+                    next_key = next(
+                        (pending_key for pending_key in file_keys if pending_key in current_keys),
+                        "",
+                    )
                     values.update({
                         "postprocess_active": False,
                         "postprocess_detail": "",
+                        "postprocess_file_index": (
+                            file_keys.index(next_key) + 1 if next_key else 0
+                        ),
+                        "postprocess_progress": round(
+                            completed_count * 100 / max(1, len(file_keys)), 2
+                        ),
                     })
+                else:
+                    active_key = str(task.get("_postprocess_active_key") or "")
+                    if active_key in file_keys:
+                        file_index = file_keys.index(active_key) + 1
+                        step_index = max(
+                            0, int(task.get("postprocess_step_index") or 0)
+                        )
+                        step_total = max(
+                            1, int(task.get("postprocess_step_total") or 1)
+                        )
+                        file_progress = (
+                                                file_index - 1 + (step_index + 1) / step_total
+                                        ) / max(1, len(file_keys))
+                        values.update({
+                            "postprocess_file_index": file_index,
+                            "postprocess_progress": round(file_progress * 100, 2),
+                            "progress": min(99, 95 + int(file_progress * 4)),
+                        })
                 if task:
                     if any(task.get(key) != value for key, value in values.items()):
                         task.update(values)
@@ -517,7 +621,18 @@ class SyncRuntimeService(OwnerDelegator):
                     task_id,
                     status=(
                         "stopped" if stopped
-                        else "postprocessing" if pending_count
+                        else (
+                            "downloading"
+                            if any(
+                                str(item.get("task_type") or "share").lower()
+                                in {"magnet", "ed2k", "offline"}
+                                and not bool(item.get("offline_completed") or item.get("moved_at"))
+                                for item in pending_items
+                            )
+                            else "transferring"
+                            if any(not item.get("moved_at") for item in pending_items)
+                            else "postprocessing"
+                        ) if pending_count
                         else "completed"
                     ),
                     phase=(
@@ -539,6 +654,8 @@ class SyncRuntimeService(OwnerDelegator):
                     finished_at=None if pending_count and not stopped else time.time(),
                     **postprocess_state,
                 )
+                if pending_count and not stopped:
+                    self._refresh_postprocessing_sync_tasks()
             except Exception as error:
                 logger.error(f"订阅 {getattr(subscribe, 'name', '')} 处理异常：{error}")
                 self._update_sync_task(
@@ -689,18 +806,30 @@ class SyncRuntimeService(OwnerDelegator):
     def api_stop_sync(self, apikey: str) -> dict:
         if apikey != settings.API_TOKEN:
             return {"success": False, "message": "API密钥错误"}
-        if not self._sync_running:
-            transfer_manager = getattr(self, "_cross_transfer_manager", None)
-            if transfer_manager:
-                for task in transfer_manager.list(active_only=True):
-                    transfer_manager.cancel(str(task.get("id") or ""))
-            self.cancel_pending_subscribe_searches()
-            return {"success": True, "message": "当前没有正在处理的任务"}
         self.cancel_pending_subscribe_searches()
         transfer_manager = getattr(self, "_cross_transfer_manager", None)
         if transfer_manager:
             for task in transfer_manager.list(active_only=True):
                 transfer_manager.cancel(str(task.get("id") or ""))
+
+        with self._sync_tasks_lock:
+            pending_task_ids = [
+                str(task_id)
+                for task_id, task in self._sync_tasks.items()
+                if task.get("status") in {
+                    "downloading", "transferring", "postprocessing"
+                }
+            ]
+        if not self._sync_running:
+            for task_id in pending_task_ids:
+                self.api_stop_sync_task(apikey, task_id)
+            if pending_task_ids:
+                return {
+                    "success": True,
+                    "message": f"已请求停止 {len(pending_task_ids)} 个待完成任务",
+                }
+            return {"success": True, "message": "当前没有正在处理的任务"}
+
         self._stop_event.set()
         with self._sync_tasks_lock:
             for task in self._sync_tasks.values():
@@ -711,6 +840,8 @@ class SyncRuntimeService(OwnerDelegator):
                     task["status"] = "stopping"
                     task["phase"] = "等待安全停止"
                     stop_event.set()
+        for task_id in pending_task_ids:
+            self.api_stop_sync_task(apikey, task_id)
         self._set_sync_status("stopping", "已收到停止请求，等待当前操作安全结束", self._sync_progress)
         logger.info("收到快速停止请求，当前操作结束后将立即停止任务")
         return {"success": True, "message": "已发送停止请求"}
@@ -752,13 +883,16 @@ class SyncRuntimeService(OwnerDelegator):
                     "success": True,
                     "message": "文件后处理正在安全停止，请等待当前提交完成",
                 }
-            if task.get("status") == "postprocessing":
+            if task.get("status") in {"downloading", "transferring", "postprocessing"}:
                 stop_token = f"{task_id}:{time.time_ns()}"
                 task["postprocess_stop_token"] = stop_token
                 task_snapshot = dict(task)
             else:
                 task_snapshot = None
-            if task.get("status") not in {"queued", "running", "stopping"}:
+            if task.get("status") not in {
+                "queued", "running", "stopping", "downloading",
+                "transferring", "postprocessing"
+            }:
                 if not task_snapshot:
                     return {"success": True, "message": "该订阅任务已经结束"}
             if task_snapshot:
@@ -789,7 +923,7 @@ class SyncRuntimeService(OwnerDelegator):
                             != str(task_snapshot.get("postprocess_stop_token") or "")
                     ):
                         return {"success": False, "message": "任务状态已变化，请刷新后重试"}
-                    current["postprocess_stop_pending_keys"] = set(pending_keys)
+                    current["postprocess_stop_pending_keys"] = sorted(pending_keys)
                 Thread(
                     target=self._finish_postprocessing_stop,
                     args=(task_id, task_snapshot),

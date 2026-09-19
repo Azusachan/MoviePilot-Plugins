@@ -9,6 +9,8 @@ from app.core.plugin import PluginManager
 from app.utils.string import StringUtils
 from pydantic import BaseModel
 
+from ...drive.common import format_size
+
 from .schemas import (
     CloudSubscribeCacheClearInput,
     CloudSubscribeCheckinInput,
@@ -223,16 +225,6 @@ class CloudSubscribeResourceSearchTool(MoviePilotTool):
             season = f"第 {kwargs.get('season')} 季"
         return f"正在搜索 {target}{season} 的网盘候选资源"
 
-    @staticmethod
-    def _format_size(value) -> str:
-        try:
-            size = int(value or 0)
-        except (TypeError, ValueError):
-            return str(value or "未知")
-        if size <= 0:
-            return "未知"
-        return StringUtils.format_size(size)
-
     @classmethod
     def _format_search_message(cls, result: dict) -> str:
         if not result.get("success"):
@@ -256,7 +248,7 @@ class CloudSubscribeResourceSearchTool(MoviePilotTool):
             definition = str(item.get("resolution") or item.get("quality") or "").strip()
             if definition:
                 details.append(definition)
-            size = cls._format_size(item.get("size"))
+            size = format_size(item.get("size"), default="未知")
             if size != "未知":
                 details.append(size)
             if item.get("update_time"):

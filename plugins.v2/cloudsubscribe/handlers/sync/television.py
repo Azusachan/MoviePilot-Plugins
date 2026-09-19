@@ -323,6 +323,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
             for source_index, (source, candidate_resources, is_cross_batch) in enumerate(
                     resource_batches
             ):
+                offline_submit_queue: List[Dict[str, Any]] = []
                 search_prefix = f"[{search_label}][{source.upper()}]"
                 if self._stop_requested():
                     break
@@ -490,6 +491,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 target_episodes=target_episodes,
                                 sub_key=sub_key if track_points else "",
                                 transient_target=transient_target,
+                                submit_queue=offline_submit_queue,
                             )
                             if not pending_key:
                                 continue
@@ -781,6 +783,38 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             f"错误：{str(e)}"
                         )
                         continue
+
+                if offline_submit_queue:
+                    successful_pending_keys = self._submit_offline_packages(
+                        offline_submit_queue
+                    )
+                    failed_contexts = [
+                        item for item in offline_submit_queue
+                        if str(item.get("pending_key") or "")
+                           not in successful_pending_keys
+                    ]
+                    if failed_contexts:
+                        failed_keys = {
+                            str(item.get("pending_key") or "")
+                            for item in failed_contexts
+                        }
+                        for item in history:
+                            if str(item.get("finalize_key") or "") in failed_keys:
+                                item["status"] = "失败"
+                                item["error"] = "提交离线下载失败"
+                                item.pop("finalize_key", None)
+                        restored_episodes = {
+                            int(episode)
+                            for item in failed_contexts
+                            for episode in item.get("target_episodes") or []
+                            if int(episode) > 0
+                        }
+                        if discover_manual_episodes:
+                            discovered_manual_episodes.difference_update(restored_episodes)
+                        else:
+                            missing_episodes = sorted(
+                                set(missing_episodes) | restored_episodes
+                            )
 
                 # 当前源处理完成
                 if missing_episodes:

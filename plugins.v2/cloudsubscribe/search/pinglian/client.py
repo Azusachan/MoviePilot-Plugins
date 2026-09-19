@@ -312,9 +312,9 @@ class PinglianClient:
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after") or ""
             try:
-                cooldown = max(60, min(600, int(float(retry_after))))
+                cooldown = max(30, min(120, int(float(retry_after))))
             except (TypeError, ValueError):
-                cooldown = 60
+                cooldown = 30
             self._request_gate.activate_cooldown(
                 cooldown, status=429, reason="盘链 HTTP 429"
             )

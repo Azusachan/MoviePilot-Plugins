@@ -9,7 +9,7 @@
       <v-card-title class="offline-header d-flex align-center ga-1 px-3 py-2 bg-primary-lighten-5">
         <div class="offline-heading">
           <v-icon icon="mdi-cloud-download-outline" class="mr-1" color="primary" size="small" />
-          <span>{{ providerName }}离线任务</span>
+          <span>网盘离线任务</span>
           <v-chip size="x-small" variant="tonal" class="ml-1">
             {{ tasks.length }}
           </v-chip>
@@ -195,7 +195,6 @@ const emit = defineEmits(["update:modelValue"]);
 const pluginId = "CloudSubscribe";
 const tasks = ref([]);
 const quota = ref({});
-const providerName = ref("网盘");
 const updatedAt = ref(0);
 const loading = ref(false);
 const deleting = ref(false);
@@ -269,13 +268,13 @@ function statusColor(state, failed = false) {
 
 function taskIcon(task) {
   if (task?.failed) return "mdi-alert-circle-outline";
-  if (task?.finalize_pending) return "mdi-file-sync-outline";
+  if (task?.finalize_pending && task?.completed) return "mdi-file-sync-outline";
   if (task?.state === "completed") return "mdi-check-circle-outline";
   return "mdi-drive-download-outline";
 }
 
 function taskStatusText(task) {
-  if (task?.finalize_pending) return "待处理";
+  if (task?.finalize_pending && task?.completed) return "待整理";
   return task?.status_text || "未知状态";
 }
 
@@ -303,7 +302,6 @@ async function load(force = false) {
       tasks.value = Array.isArray(snapshot) ? snapshot : Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
       updatedAt.value = Number(snapshot?.updated_at || 0);
       quota.value = snapshot?.quota && typeof snapshot.quota === "object" ? snapshot.quota : {};
-      providerName.value = String(snapshot?.provider_name || "网盘");
       const availableKeys = new Set(tasks.value.map(taskSelectionKey).filter(Boolean));
       selectedKeys.value = selectedKeys.value.filter((key) => availableKeys.has(key));
     } catch (loadError) {
@@ -376,7 +374,7 @@ async function retryTasks(pendingKeys) {
 }
 
 function canRetry(task) {
-  return Boolean(task?.failed || task?.finalize_pending);
+  return Boolean(task?.failed || (task?.finalize_pending && task?.completed));
 }
 
 function taskRetryKey(task) {
@@ -444,7 +442,7 @@ watch(
   () => props.modelValue,
   (value) => {
     if (value) {
-      refreshAll();
+      void load(false);
     } else {
       stopAutoRefresh();
     }

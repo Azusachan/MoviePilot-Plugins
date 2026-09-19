@@ -463,24 +463,25 @@ class SyncApi(OwnerDelegator):
             can_resolve = bool(
                 self._search_handler
                 and not raw_item_url
-                and source in {"hdhive", "juying", "seedhub", "pinglian"}
+                and source in {"hdhive", "hdhaven", "juying", "seedhub", "pinglian"}
                 and (
                         resource_ref
+                        or provider_data.get("slug")
                         or provider_data.get("resource_id")
                         or provider_data.get("seed_id")
                         or provider_data.get("token")
                 )
             )
-            # 付费 HDHive 仍需先解锁；已解锁、零积分及其它渠道的延迟资源，
+            # 付费 HDHive/HDHaven 仍需先解锁；已解锁、零积分及其它渠道的延迟资源，
             # 在提交转存时统一由后端解析为真实链接。
             can_resolve = can_resolve and (
-                    source != "hdhive"
+                    source not in {"hdhive", "hdhaven"}
                     or bool(item.get("is_unlocked"))
                     or unlock_points <= 0
             )
             if can_resolve:
                 try:
-                    if source == "hdhive":
+                    if source in {"hdhive", "hdhaven"}:
                         resolve_item = dict(item)
                         if bool(item.get("is_unlocked")):
                             resolve_item["unlock_points"] = 0

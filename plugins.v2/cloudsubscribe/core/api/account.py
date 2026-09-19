@@ -30,6 +30,12 @@ _HDHIVE_OAUTH_LOCK = RLock()
 
 
 class AccountApi(OwnerDelegator):
+
+    def _search_runtime_value(self, name: str, default: Any = None) -> Any:
+        """从搜索处理器读取已归一化的渠道运行参数。"""
+        handler = self._search_handler
+        return getattr(handler, name, default) if handler else default
+    
     @staticmethod
     def _search_account_card(
             source: str, info: Dict[str, Any]
@@ -67,11 +73,16 @@ class AccountApi(OwnerDelegator):
         if not name or "@" in name or (email and name.lower() == email):
             name = {
                 "hdhive": "HDHive 用户",
+                "hdhaven": "HDHaven 用户",
                 "dian115": "Dian115 用户",
                 "juying": "聚影用户",
                 "pinglian": "盘链用户",
             }.get(source, "渠道用户")
-        if source == "hdhive":
+        if source == "hdhaven":
+            add_detail("会员状态", "VIP会员" if info.get("is_vip") else "普通用户")
+            add_detail("用户等级", info.get("level_name") or info.get("level"))
+            add_detail("保号截止", info.get("retention_deadline"))
+        elif source == "hdhive":
             add_detail("会员状态", "VIP" if info.get("is_vip") else "普通用户")
             add_detail("累计签到", f"{int(info.get('signin_days') or 0)} 天")
             add_detail("分享数量", f"{int(info.get('share_count') or 0)} 个")
@@ -131,6 +142,7 @@ class AccountApi(OwnerDelegator):
         """读取单个搜索渠道的账户信息。"""
         from ...search.dian115 import Dian115Client
         from ...search.hdhive import HDHiveClient
+        from ...search.hdhaven import HDHavenClient
         from ...search.juying import JuyingClient
         from ...search.pinglian import PinglianClient
         source = str(source or "").strip().lower()
@@ -138,13 +150,20 @@ class AccountApi(OwnerDelegator):
         close_client = False
         try:
             if source == "hdhive":
-                if self._hdhive_query_mode == "api":
-                    if not self._hdhive_client or not self._hdhive_client.is_ready:
+                query_mode = self._search_runtime_value("_hdhive_query_mode", "web")
+                hdhive_client = self._search_runtime_value("_hdhive_client")
+                username = self._search_runtime_value("_hdhive_username", "")
+                password = self._search_runtime_value("_hdhive_password", "")
+                request_interval = self._search_runtime_value(
+                    "_hdhive_request_interval", 5.0
+                )
+                if query_mode == "api":
+                    if not hdhive_client or not hdhive_client.is_ready:
                         return {
                             "connected": False,
                             "error": "请先完成 HDHive OpenAPI 用户授权并保存配置",
                         }
-                    data = self._hdhive_client.get_me().get("data") or {}
+                    data = hdhive_client.get_me().get("data") or {}
                     level = str(data.get("level") or "").strip().lower()
                     return self._search_account_card(source, {
                         "name": data.get("nickname") or data.get("username"),
@@ -156,67 +175,100 @@ class AccountApi(OwnerDelegator):
                         "share_count": data.get("share_num"),
                         "status": "suspended" if data.get("is_blocked") else "active",
                     })
-                if not self._hdhive_username or not self._hdhive_password:
+                if not username or not password:
                     return {
                         "connected": False,
                         "error": "请填写 HDHive 用户名和密码并保存配置",
                     }
                 client = HDHiveClient(
-                    username=self._hdhive_username,
-                    password=self._hdhive_password,
+                    username=username,
+                    password=password,
                     proxy=self._search_proxy,
-                    request_interval=self._hdhive_request_interval,
+                    request_interval=request_interval,
                     timeout=10,
                 )
                 close_client = True
             elif source == "dian115":
-                if not self._dian115_email or not self._dian115_password:
+                email = self._search_runtime_value("_dian115_email", "")
+                password = self._search_runtime_value("_dian115_password", "")
+                if not email or not password:
                     return {
                         "connected": False,
                         "error": "请填写 Dian115 邮箱和密码并保存配置",
                     }
                 client = Dian115Client(
-                    email=self._dian115_email,
-                    password=self._dian115_password,
-                    base_url=self._dian115_base_url,
+                    email=email,
+                    password=password,
+                    base_url=self._search_runtime_value(
+                        "_dian115_base_url", "https://m.dian115.com"
+                    ),
                     proxy=self._search_proxy,
-                    request_interval=self._dian115_request_interval,
-                    unlocks_per_minute=self._dian115_unlocks_per_minute,
+                    request_interval=self._search_runtime_value(
+                        "_dian115_request_interval", 1.0
+                    ),
+                    unlocks_per_minute=self._search_runtime_value(
+                        "_dian115_unlocks_per_minute", 6
+                    ),
                     timeout=10,
                     get_data_func=self.get_data,
                     save_data_func=self.save_data,
                 )
                 close_client = True
             elif source == "juying":
-                if not self._juying_username or not self._juying_password:
+                username = self._search_runtime_value("_juying_username", "")
+                password = self._search_runtime_value("_juying_password", "")
+                if not username or not password:
                     return {
                         "connected": False,
                         "error": "请填写聚影账号和密码并保存配置",
                     }
                 client = JuyingClient(
-                    username=self._juying_username,
-                    password=self._juying_password,
+                    username=username,
+                    password=password,
                     proxy=self._search_proxy,
                     request_timeout=10,
-                    request_interval=self._juying_request_interval,
+                    request_interval=self._search_runtime_value(
+                        "_juying_request_interval", 1.0
+                    ),
                     get_data_func=self.get_data,
                     save_data_func=self.save_data,
                 )
                 close_client = True
             elif source == "pinglian":
-                if not self._pinglian_username or not self._pinglian_password:
+                username = self._search_runtime_value("_pinglian_username", "")
+                password = self._search_runtime_value("_pinglian_password", "")
+                if not username or not password:
                     return {
                         "connected": False,
                         "error": "请填写盘链账号和密码并保存配置",
                     }
                 client = PinglianClient(
-                    username=self._pinglian_username,
-                    password=self._pinglian_password,
+                    username=username,
+                    password=password,
                     proxy=self._search_proxy,
-                    request_timeout=min(self._pinglian_timeout, 30),
-                    request_interval=self._pinglian_request_interval,
+                    request_timeout=min(
+                        self._search_runtime_value("_pinglian_timeout", 60), 30
+                    ),
+                    request_interval=self._search_runtime_value(
+                        "_pinglian_request_interval", 2.0
+                    ),
                     get_data_func=self.get_data,
                     save_data_func=self.save_data,
+                )
+                close_client = True
+            elif source == "hdhaven":
+                username = str(getattr(self, "_hdhaven_username", "") or "").strip()
+                password = str(getattr(self, "_hdhaven_password", "") or "").strip()
+                if not username or not password:
+                    return {
+                        "connected": False,
+                        "error": "请填写 HDHaven 用户名和密码并保存配置",
+                    }
+                client = HDHavenClient(
+                    username=username,
+                    password=password,
+                    proxy=self._search_proxy,
+                    request_interval=float(getattr(self, "_hdhaven_request_interval", 2.0) or 2.0),
                 )
                 close_client = True
             else:
@@ -338,16 +390,14 @@ class AccountApi(OwnerDelegator):
             point_info = dict(account.get("points") or {})
             point_info["available"] = normalized_points
             account["points"] = point_info
-            if normalized_days is not None:
-                details = list(account.get("details") or [])
-                for item in details:
-                    if (
-                            isinstance(item, dict)
-                            and item.get("label") in {"累计签到", "连续签到"}
-                    ):
+            details = list(account.get("details") or [])
+            for item in details:
+                if isinstance(item, dict):
+                    if item.get("label") == "今日签到":
+                        item["value"] = "已签到"
+                    elif normalized_days is not None and item.get("label") in {"累计签到", "连续签到"}:
                         item["value"] = f"{normalized_days} 天"
-                        break
-                account["details"] = details
+            account["details"] = details
             account["refreshed_at"] = int(time.time())
             _ACCOUNT_INFO_CACHE.set(account_key, account)
             _ACCOUNT_REFRESH_GUARD.set(account_key, True)
@@ -421,7 +471,9 @@ class AccountApi(OwnerDelegator):
                 app_secret="",
                 client_id=client_id,
                 proxy=self._search_proxy,
-                request_interval=self._hdhive_request_interval,
+                request_interval=self._search_runtime_value(
+                    "_hdhive_request_interval", 5.0
+                ),
             )
             try:
                 authorize_url = client.build_authorize_url(
@@ -491,7 +543,9 @@ class AccountApi(OwnerDelegator):
                 app_secret=app_secret,
                 client_id=client_id,
                 proxy=self._search_proxy,
-                request_interval=self._hdhive_request_interval,
+                request_interval=self._search_runtime_value(
+                    "_hdhive_request_interval", 5.0
+                ),
             )
             token_data = client.exchange_code(code, redirect_uri)
             warning = ""

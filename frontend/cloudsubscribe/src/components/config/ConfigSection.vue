@@ -114,14 +114,14 @@
               <v-row dense class="config-fields-row">
             <template v-for="field in group.fields" :key="field.key">
               <v-col
-                v-if="(!field.show || field.show(config)) && !isFieldEmbedded(group, field)"
+                v-if="evalShowCondition(field.show, config) && !isFieldEmbedded(group, field)"
                 :cols="12"
                 :sm="field.cols || 6"
                 :md="field.cols || 6"
                 class="config-field-col">
                 <AccountInfo
                   v-if="field.type === 'account'"
-                  :account="field.data"
+                  :account="getAccountInfo(field)"
                   :compact="Boolean(field.compact)"
                   :loading="refreshingAccounts.includes(field.accountKey)"
                   :refreshable="Boolean(field.accountKey)"
@@ -299,7 +299,9 @@
                   v-else-if="(field.type === 'select' || field.type === 'multi-select') && field.multiple"
                   v-model="config[field.key]"
                   :field="field"
-                  :disabled="Boolean(field.disabled?.(config))" />
+                  :disabled="Boolean(field.disabled?.(config))"
+                  @load-options="emit('load-options', $event)"
+                  @refresh-options="emit('refresh-options', $event)" />
                 <v-autocomplete
                   v-else-if="field.type === 'select' && field.searchable"
                   v-model="config[field.key]"
@@ -499,6 +501,7 @@ import MultiSelectDialogField from "./MultiSelectDialogField.vue";
 const props = defineProps({
   section: { type: Object, required: true },
   config: { type: Object, required: true },
+  options: {type: Object, default: () => ({})},
   api: { type: [Object, Function], required: true },
   refreshingAccounts: { type: Array, default: () => [] },
   testingSource: { type: String, default: "" },
@@ -507,6 +510,26 @@ const props = defineProps({
   testingAutoSubscribeProxy: {type: Boolean, default: false},
   hdhiveOauthAction: { type: String, default: "" },
 })
+
+function getAccountInfo(field) {
+  if (field.data && typeof field.data === "object" && Object.keys(field.data).length > 0) {
+    return field.data;
+  }
+  const key = String(field.accountKey || "").trim();
+  if (!key) return field.data || {};
+  const [category, source] = key.split(":", 2);
+  if (category === "drive") {
+    return (
+      props.options?.accounts?.[source] ||
+      (props.options?.account && props.config?.cloud_drive === source ? props.options.account : null) ||
+      {}
+    );
+  }
+  if (category === "search") {
+    return props.options?.searchAccounts?.[source] || {};
+  }
+  return field.data || {};
+}
 const emit = defineEmits([
   "scan",
   "browse-directory",
@@ -519,48 +542,23 @@ const emit = defineEmits([
   "hdhive-oauth-exchange",
   "checkin-result",
   "copy-text",
+  "load-options",
+  "refresh-options",
 ])
 
 const hasText = (value) => Boolean(String(value || "").trim())
 
 function isTestSourceConfigured(source) {
-  if (source === "online_docs") {
-    return (
-      Array.isArray(props.config.online_docs) &&
-      props.config.online_docs.some(
-        (document) =>
-          hasText(document?.url) && Array.isArray(document?.resource_types) && document.resource_types.length,
-      )
-    )
-  }
-  if (!Array.isArray(props.config.resource_type_order) || !props.config.resource_type_order.length) return false
-  if (source === "pansou") {
-    return (
-      hasText(props.config.pansou_url) &&
-      (!props.config.pansou_auth_enabled ||
-        (hasText(props.config.pansou_username) && hasText(props.config.pansou_password)))
-    )
-  }
-  if (source === "hdhive") {
-    return props.config.hdhive_query_mode === "api"
-      ? hasText(props.config.hdhive_api_key) && hasText(props.config.hdhive_access_token)
-      : hasText(props.config.hdhive_username) && hasText(props.config.hdhive_password)
-  }
-  const credentials = {
-    dian115: ["dian115_email", "dian115_password"],
-    juying: ["juying_username", "juying_password"],
-    pinglian: ["pinglian_username", "pinglian_password"],
-  }[source]
-  return !credentials || credentials.every((key) => hasText(props.config[key]))
+  // 通用原则：前端不耦合具体渠道配置，仅检查是否配置了资源类型优先级
+  return Array.isArray(props.config.resource_type_order) && props.config.resource_type_order.length > 0;
 }
 
 function testSourceTitle(source) {
-  return isTestSourceConfigured(source) ? "测试当前搜索渠道" : "请先完成渠道账号配置并选择资源类型"
+  return isTestSourceConfigured(source) ? "测试当前搜索渠道" : "请先在搜索顺序中选择至少一种资源类型";
 }
 
 function isAutoSubscribeConfigured(provider) {
-  // 所有支持的榜单提供方均允许直接测试连通性并抓取示例（未配置具体分类时自动使用默认榜单）
-  return ["douban", "tmdb", "bangumi", "anilist", "maoyan", "netflix", "mikan"].includes(provider);
+  return Boolean(provider);
 }
 
 function autoSubscribeTestTitle(provider) {
@@ -701,7 +699,30 @@ function filteredSelectItems(field) {
       normalizeSearchText(`${item?.title || ""} ${item?.value || ""}`).includes(keyword),
   )
 }
-const availableGroups = computed(() => props.section.groups.filter((group) => !group.show || group.show(props.config)))
+
+function evalShowCondition(condition, config) {
+  if (condition === undefined || condition === null || condition === "") return true;
+  if (typeof condition === "function") {
+    try {
+      return Boolean(condition(config));
+    } catch {
+      return true;
+    }
+  }
+  if (typeof condition === "boolean") return condition;
+  if (typeof condition === "string") {
+    try {
+      return Boolean(new Function("config", `"use strict"; return Boolean(${condition});`)(config));
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+
+const availableGroups = computed(() =>
+  (props.section?.groups || []).filter((group) => evalShowCondition(group.show, props.config)),
+);
 const visibleGroups = computed(() => {
   const leadingGroups = availableGroups.value.filter((group) => group.beforeTabs)
   const tabGroups = availableGroups.value.filter(

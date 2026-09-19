@@ -272,9 +272,9 @@ class JuyingClient:
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after") or ""
             try:
-                seconds = max(60, min(600, int(float(retry_after))))
+                seconds = max(30, min(120, int(float(retry_after))))
             except (TypeError, ValueError):
-                seconds = 300
+                seconds = 60
             self._request_gate.activate_cooldown(
                 seconds, status=429, reason="聚影 HTTP 429"
             )

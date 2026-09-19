@@ -29,7 +29,7 @@
       </v-card-text>
       <v-card-actions class="px-5 pb-4 pt-1 justify-end ga-2">
         <v-btn variant="text" size="small" @click="model = false">取消</v-btn>
-        <v-btn color="deep-purple" variant="elevated" size="small" :loading="loading" @click="$emit('confirm')">
+        <v-btn variant="elevated" size="small" :loading="loading" @click="$emit('confirm')">
           确认跨盘转存
         </v-btn>
       </v-card-actions>

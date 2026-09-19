@@ -583,7 +583,6 @@ export function isCrossTransferResource(res, mainDrive) {
 
 // 预览资源判断
 export function canPreviewResource(item) {
-  const source = String(item?.source || "").toLowerCase();
   const resType = getNormalizedResourceType(item);
   if (resType === "ed2k") return false;
   const previewableType = Boolean(
@@ -591,17 +590,18 @@ export function canPreviewResource(item) {
     ["115", "quark", "alipan", "uc", "tianyi", "baidu", "123", "guangya", "magnet", "torrent"].includes(resType),
   );
   if (!previewableType) return false;
-  const pendingHdhive = source === "hdhive" && Boolean(item?.resource_ref) && item?.supports_file_preview !== false;
-  const pendingProvider = source === "juying" && Boolean(item?.provider_data?.resource_id);
-  const pendingResolution = Boolean(item?.pending_resolution && ["seedhub", "pinglian"].includes(source));
-  return Boolean(item?.url || pendingHdhive || pendingProvider || pendingResolution);
+  const hasUrl = Boolean(item?.url);
+  const isPendingResolvable = Boolean(
+    item?.pending_resolution ||
+    item?.resource_ref ||
+    item?.provider_data?.resource_id,
+  ) && item?.supports_file_preview !== false;
+  return hasUrl || isPendingResolvable;
 }
 
 export function previewResourceKey(item) {
   const source = String(item?.source || "").toLowerCase();
   const providerData = item?.provider_data || {};
-  const resourceId = String(providerData.resource_id || "");
-  if (source === "juying" && resourceId) return `${source}:${resourceId}`;
   return String(
     item?.url ||
     `${source}:${item?.resource_type || ""}:${
@@ -611,8 +611,11 @@ export function previewResourceKey(item) {
 }
 
 export function isPointUnlockResource(res) {
-  const source = String(res?.source || "").toLowerCase();
-  return ["hdhive", "dian115"].includes(source);
+  return Boolean(
+    res?.is_point_unlock ||
+    res?.need_unlock ||
+    res?.unlock_points !== undefined,
+  );
 }
 
 export function getResourcePointStatus(res) {

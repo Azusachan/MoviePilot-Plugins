@@ -16,6 +16,7 @@ from .. import OwnerDelegator
 from ..delegation import get_component
 from ...drive.quark import QuarkClient
 from ...search.dian115 import Dian115Error, Dian115SearchService
+from ...search.hdhaven import HDHavenError, HDHavenSearchService
 from ...search.hdhive import (
     HDHiveOpenAPIError,
     HDHiveSearchService,
@@ -65,6 +66,13 @@ class CheckinService(OwnerDelegator):
             error_types=(Dian115Error,),
             modes=("normal", "lucky"),
         ),
+        "hdhaven": CheckinProvider(
+            key="hdhaven",
+            name="HDHaven",
+            credential_attrs=("_hdhaven_username", "_hdhaven_password"),
+            error_types=(HDHavenError,),
+            modes=("normal", "gambler"),
+        ),
         "juying": CheckinProvider(
             key="juying",
             name="聚影",
@@ -111,8 +119,28 @@ class CheckinService(OwnerDelegator):
         return datetime.now(pytz.timezone(settings.TZ))
 
     @classmethod
+    def _get_providers(cls) -> Dict[str, CheckinProvider]:
+        try:
+            from ..checkin_manager import get_checkin_definitions
+            definitions = get_checkin_definitions()
+            if definitions:
+                return {
+                    key: CheckinProvider(
+                        key=item.key,
+                        name=item.name,
+                        credential_attrs=item.credential_attrs,
+                        error_types=item.error_types,
+                        modes=item.modes,
+                    )
+                    for key, item in definitions.items()
+                }
+        except Exception as err:
+            logger.debug(f"动态加载签到提供者失败，回退默认定义: {err}")
+        return cls._PROVIDERS
+
+    @classmethod
     def _resolve_provider(cls, provider: str) -> Optional[CheckinProvider]:
-        return cls._PROVIDERS.get(str(provider or "").strip().lower())
+        return cls._get_providers().get(str(provider or "").strip().lower())
 
     def _checkin_credentials_ready(self, provider: CheckinProvider) -> bool:
         if (
@@ -121,6 +149,10 @@ class CheckinService(OwnerDelegator):
         ):
             client = getattr(self, "_hdhive_client", None)
             return bool(client and client.is_ready)
+        if provider.key == "hdhaven":
+            return bool(getattr(self, "_hdhaven_username", None)) and bool(
+                getattr(self, "_hdhaven_password", None)
+            )
         return all(
             bool(getattr(self, attr, None))
             for attr in provider.credential_attrs
@@ -136,6 +168,8 @@ class CheckinService(OwnerDelegator):
                 and str(getattr(self, "_hdhive_query_mode", "web")) == "api"
         ):
             return "请先配置并保存 HDHive OpenAPI 应用 Secret 和用户授权"
+        if provider.key == "hdhaven":
+            return "请先配置并保存 HDHaven 用户名和密码"
         return f"请先配置并保存 {provider.name} 账号和密码"
 
     def _get_checkin_client(self, provider: CheckinProvider) -> Any:
@@ -151,6 +185,10 @@ class CheckinService(OwnerDelegator):
                 return client
             return self._search_component(
                 HDHiveSearchService
+            ).get_client()
+        if provider.key == "hdhaven":
+            return self._search_component(
+                HDHavenSearchService
             ).get_client()
         if provider.key == "dian115":
             return self._search_component(
@@ -191,14 +229,11 @@ class CheckinService(OwnerDelegator):
 
         account_key = f"search:{provider.key}"
         try:
-            updated = self.update_search_account_points(
+            self.update_search_account_points(
                 provider.key,
                 record.get("points_after"),
                 record.get("signin_days"),
             )
-            if not updated:
-                clear_account_cache(account_key)
-                self._account_info(account_key, refresh=True)
             clear_ui_options_cache()
         except Exception as error:
             logger.debug(f"刷新 {provider.name} 搜索账户积分失败：{error}")
@@ -212,7 +247,7 @@ class CheckinService(OwnerDelegator):
                 "credential_attrs": item.credential_attrs,
                 "modes": item.modes,
             }
-            for item in self._PROVIDERS.values()
+            for item in self._get_providers().values()
         ]
 
     def _load_history(self, provider: CheckinProvider) -> list[Dict[str, Any]]:
@@ -238,6 +273,25 @@ class CheckinService(OwnerDelegator):
                 history[-self._HISTORY_LIMIT:],
             )
 
+    def _get_provider_current_points(self, provider: CheckinProvider) -> Optional[int]:
+        """纯从本地账户缓存或数据存储中获取可用积分，严禁发起网络请求或触发登录。"""
+        try:
+            account_key = f"search:{provider.key}"
+            account = None
+            if hasattr(self, "_cached_account_info"):
+                account = self._cached_account_info(account_key, {})
+            elif hasattr(self, "_get_data_store"):
+                account = self._get_data_store().load_account(account_key)
+            if isinstance(account, dict):
+                points = account.get("points")
+                if isinstance(points, dict) and "available" in points:
+                    return int(points["available"])
+                if points is not None and str(points).isdigit():
+                    return int(points)
+        except Exception:
+            pass
+        return None
+
     def get_checkin_history(
             self,
             provider: str,
@@ -249,9 +303,25 @@ class CheckinService(OwnerDelegator):
         with self._history_lock:
             history = self._load_history(adapter)
         normalized_limit = max(1, min(int(limit or 20), self._HISTORY_LIMIT))
+
+        current_points = None
+        for item in reversed(history):
+            p = item.get("points_after")
+            if p is not None and str(p).strip() != "":
+                try:
+                    current_points = int(p)
+                    break
+                except (ValueError, TypeError):
+                    current_points = p
+                    break
+
+        if current_points is None and self._checkin_credentials_ready(adapter):
+            current_points = self._get_provider_current_points(adapter)
+
         return {
             "total": len(history),
             "limit": normalized_limit,
+            "current_points": current_points,
             "items": list(reversed(history))[:normalized_limit],
         }
 
@@ -289,7 +359,7 @@ class CheckinService(OwnerDelegator):
             ) else []
         else:
             providers = [
-                item for item in self._PROVIDERS.values()
+                item for item in self._get_providers().values()
                 if bool(getattr(self, f"_{item.key}_checkin_enabled", False))
             ]
         normalized_limit = max(1, min(int(limit or 10), self._HISTORY_LIMIT))
@@ -388,7 +458,7 @@ class CheckinService(OwnerDelegator):
         lottery_net_points = 0
         lottery_executed = 0
 
-        for provider in self._PROVIDERS.values():
+        for provider in self._get_providers().values():
             records = [
                 copy.deepcopy(item)
                 for item in (histories.get(provider.key) or [])
@@ -718,7 +788,7 @@ class CheckinService(OwnerDelegator):
     ) -> Dict[str, Any]:
         if adapter.key == "dian115":
             return self._run_dian115_actions(client, mode)
-        if adapter.key == "hdhive":
+        if adapter.key in {"hdhive", "hdhaven"}:
             return client.checkin(is_gambler=mode == "gambler")
         if adapter.key == "p115":
             return self._run_p115_checkin(client)
@@ -949,7 +1019,7 @@ class CheckinService(OwnerDelegator):
     def _ready_providers(self) -> list[CheckinProvider]:
         return [
             provider
-            for provider in self._PROVIDERS.values()
+            for provider in self._get_providers().values()
             if bool(getattr(
                 self, f"_{provider.key}_checkin_enabled", False
             ))

@@ -16,6 +16,7 @@ from app.schemas.types import MediaType
 from ...core import OwnerDelegator
 from ...search.subs_filter import anime_file_candidates
 from ...utils import MediaFileParser
+from .utils import extract_ed2k_filename
 
 
 class PostprocessService(OwnerDelegator):
@@ -40,16 +41,29 @@ class PostprocessService(OwnerDelegator):
         "请检查网盘文件与媒体目录状态"
     )
 
-    @staticmethod
-    def _extract_ed2k_filename(url: str) -> str:
-        """从 ED2K 链接提取真实文件名。"""
-        if not url or not str(url).strip().lower().startswith("ed2k://|file|"):
-            return ""
-        parts = str(url).strip().split("|")
-        if len(parts) > 2 and parts[2]:
-            from urllib.parse import unquote
-            return unquote(parts[2]).strip()
-        return ""
+    def _cloud_directory_snapshot(
+            self,
+            cloud_dir: str,
+            cache: Optional[Dict[str, Tuple[bool, Dict[str, Any]]]] = None,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """获取并缓存网盘目录下的文件索引。"""
+        normalized_dir = str(cloud_dir or "").rstrip("/")
+        if cache is not None and normalized_dir in cache:
+            return cache[normalized_dir]
+        lookup = self._cloud_directories.resolve_directory(normalized_dir)
+        if not lookup.checked:
+            result = (False, {})
+        elif lookup.directory_id is None:
+            result = (True, {})
+        else:
+            listing = self._cloud_directories.list_directory(lookup.directory_id)
+            if not listing.checked:
+                result = (False, {})
+            else:
+                result = (True, {item.name: item for item in listing.files if item.name})
+        if cache is not None:
+            cache[normalized_dir] = result
+        return result
 
     @staticmethod
     def _postprocess_task_id(item: Dict[str, Any]) -> str:
@@ -93,13 +107,12 @@ class PostprocessService(OwnerDelegator):
     def _update_postprocess_progress(
             self,
             item: Dict[str, Any],
+            pending_key: str,
             step: str,
-            file_index: int,
-            file_total: int,
             detail: str = "",
     ) -> None:
         """通过现有任务运行态推送当前文件和处理步骤。"""
-        if not self._task_update:
+        if not self._postprocess_task_update:
             return
         task_id = self._postprocess_task_id(item)
         if not task_id:
@@ -114,14 +127,9 @@ class PostprocessService(OwnerDelegator):
         )
         if step_index is None:
             return
-        normalized_index = max(1, min(int(file_index or 1), int(file_total or 1)))
-        normalized_total = max(1, int(file_total or 1))
-        file_progress = (
-                                (normalized_index - 1)
-                                + (step_index + 1) / max(1, len(steps))
-                        ) / normalized_total
-        self._task_update(
+        self._postprocess_task_update(
             task_id,
+            _pending_key=pending_key,
             current_file=str(item.get("file_name") or "").strip(),
             postprocess_active=True,
             postprocess_detail=str(detail or "").strip(),
@@ -129,10 +137,6 @@ class PostprocessService(OwnerDelegator):
             postprocess_step_index=step_index,
             postprocess_step_total=len(steps),
             postprocess_steps=steps,
-            postprocess_file_index=normalized_index,
-            postprocess_file_total=normalized_total,
-            postprocess_progress=round(file_progress * 100, 2),
-            progress=min(99, 95 + int(file_progress * 4)),
         )
 
     def _cleanup_failed_offline_task(
@@ -578,11 +582,6 @@ class PostprocessService(OwnerDelegator):
                 if task.get("id")
             }
             directory_snapshots: Dict[str, Tuple[bool, Dict[str, Any]]] = {}
-            due_positions = {
-                pending_key: index
-                for index, pending_key in enumerate(due_keys, 1)
-            }
-
             def update_progress(
                     item: Dict[str, Any],
                     pending_key: str,
@@ -591,35 +590,13 @@ class PostprocessService(OwnerDelegator):
             ) -> None:
                 self._update_postprocess_progress(
                     item,
+                    pending_key,
                     step,
-                    due_positions.get(pending_key, 1),
-                    len(due_keys),
                     detail,
                 )
 
             def directory_snapshot(cloud_dir: str) -> Tuple[bool, Dict[str, Any]]:
-                normalized_dir = str(cloud_dir or "").rstrip("/")
-                if normalized_dir in directory_snapshots:
-                    return directory_snapshots[normalized_dir]
-                lookup = self._cloud_directories.resolve_directory(normalized_dir)
-                if not lookup.checked:
-                    result = (False, {})
-                elif lookup.directory_id is None:
-                    result = (True, {})
-                else:
-                    listing = self._cloud_directories.list_directory(
-                        lookup.directory_id
-                    )
-                    if not listing.checked:
-                        result = (False, {})
-                    else:
-                        file_index = {}
-                        for file_item in listing.files:
-                            if file_item.name:
-                                file_index[file_item.name] = file_item
-                        result = (True, file_index)
-                directory_snapshots[normalized_dir] = result
-                return result
+                return self._cloud_directory_snapshot(cloud_dir, directory_snapshots)
 
             upgrade_delete_batch: Dict[str, Dict[str, Any]] = {}
 
@@ -1101,7 +1078,7 @@ class PostprocessService(OwnerDelegator):
                     if task_type in {"ed2k", "offline"}
                     else ""
                 )
-                ed2k_url_name = self._extract_ed2k_filename(str(item.get("share_url") or ""))
+                ed2k_url_name = extract_ed2k_filename(str(item.get("share_url") or ""))
                 res_file_list = (item.get("resource") or {}).get("file_list")
                 res_file_name = str(res_file_list[0]).strip() if isinstance(res_file_list,
                                                                             list) and res_file_list else ""
@@ -1406,16 +1383,17 @@ class PostprocessService(OwnerDelegator):
             "failed": failed,
             "pending": pending_count,
         }
-        task_ids = {
-            self._postprocess_task_id(item)
+        task_items = {
+            pending_key: item
             for pending_key in due_keys
             if (item := pending_snapshot.get(pending_key))
                and self._postprocess_task_id(item)
         }
-        if self._task_update:
-            for task_id in task_ids:
-                self._task_update(
-                    task_id,
+        if self._postprocess_task_update:
+            for pending_key, item in task_items.items():
+                self._postprocess_task_update(
+                    self._postprocess_task_id(item),
+                    _pending_key=pending_key,
                     postprocess_active=False,
                     postprocess_detail="",
                 )
@@ -1468,15 +1446,7 @@ class PostprocessService(OwnerDelegator):
             return None
 
         def directory_snapshot(cloud_dir: str) -> Tuple[bool, Dict[str, Any]]:
-            lookup = self._cloud_directories.resolve_directory(cloud_dir)
-            if not lookup.checked:
-                return False, {}
-            if lookup.directory_id is None:
-                return True, {}
-            listing = self._cloud_directories.list_directory(lookup.directory_id)
-            if not listing.checked:
-                return False, {}
-            return True, {value.name: value for value in listing.files if value.name}
+            return self._cloud_directory_snapshot(cloud_dir)
 
         matched: List[Tuple[Optional[int], Any, int]] = []
         season = item.get("season")

@@ -20,9 +20,12 @@ except ImportError:
     chardet = None
 
 try:
-    from app.utils.zhconv import convert as zhconv_convert
+    from app.foundation.text import convert as zhconv_convert
 except ImportError:
-    zhconv_convert = None
+    try:
+        from app.utils.zhconv import convert as zhconv_convert
+    except ImportError:
+        zhconv_convert = None
 
 from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
 from ...utils import MediaFileParser

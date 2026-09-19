@@ -12,7 +12,9 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
   const active = computed(
     () =>
       ["starting", "running", "stopping"].includes(runtime.status) ||
-      (runtime.tasks || []).some((task) => ["queued", "running", "stopping"].includes(task.status)),
+      (runtime.tasks || []).some((task) =>
+        ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status),
+      ),
   )
 
   let runtimeRequest = null;
@@ -29,7 +31,7 @@ export function useRuntimeData(api, notify, pluginId = "CloudSubscribe", {onSett
     return (
       Date.now() < startRequestedUntil ||
       ["starting", "running", "stopping"].includes(runtime.status) ||
-      (runtime.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+      (runtime.tasks || []).some((task) => ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status))
     )
   }
 

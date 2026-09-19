@@ -1,48 +1,39 @@
 import {createCommonSearchGroups} from "./common.js";
-import {createHdhiveGroups} from "./hdhive.js";
-import {createDian115Groups} from "./dian115.js";
-import {createJuyingGroups} from "./juying.js";
-import {createPansouGroups} from "./pansou.js";
-import {createSeedhubGroups} from "./seedhub.js";
-import {createPirateBayGroups} from "./piratebay.js";
-import {createUIndexGroups} from "./uindex.js";
-import {createPinglianGroups} from "./pinglian.js";
-import {createOnlineDocsGroups} from "./online_docs.js";
-import {createMikanGroups} from "./mikan.js";
-import {createAnimeGardenGroups} from "./animegarden.js";
+
+function resolveDynamicField(field, options) {
+  const descriptor = field?.dynamicOptions;
+  if (!descriptor?.scope || !descriptor?.key) return field;
+  const scope = String(descriptor.scope);
+  const scopeOptions = options?.[scope];
+  return {
+    ...field,
+    items: Array.isArray(scopeOptions?.[descriptor.key]) ? scopeOptions[descriptor.key] : [],
+    loading: Boolean(options?.dynamicOptionLoading?.[scope]),
+    loadError: String(options?.dynamicOptionErrors?.[scope] || ""),
+  };
+}
 
 export function createSearchSection(resourceTypeItems, options = {}) {
+  const dynamicSchemas = Array.isArray(options.searchSchemas) ? options.searchSchemas : [];
+
   return {
     value: "search",
     title: "搜索渠道",
     icon: "mdi-magnify",
     subtabs: [
       {value: "common", title: "通用设置", icon: "mdi-tune"},
-      {value: "pansou", title: "PanSou", icon: "mdi-magnify-scan"},
-      {value: "hdhive", title: "HDHive", icon: "mdi-hexagon-multiple-outline"},
-      {value: "dian115", title: "Dian115", icon: "mdi-cloud-search"},
-      {value: "juying", title: "聚影", icon: "mdi-movie-search-outline"},
-      {value: "pinglian", title: "盘链", icon: "mdi-link-variant"},
-      {value: "mikan", title: "Mikan", icon: "mdi-animation-play-outline"},
-      {value: "animegarden", title: "AnimeGarden", icon: "mdi-flower-tulip-outline"},
-      {value: "seedhub", title: "SeedHub", icon: "mdi-seed-outline"},
-      {value: "piratebay", title: "海盗湾", icon: "mdi-pirate"},
-      {value: "uindex", title: "UIndex", icon: "mdi-magnet"},
-      {value: "online_docs", title: "在线文档", icon: "mdi-file-document-outline"},
+      ...dynamicSchemas.map((s) => s.subtab).filter(Boolean),
     ],
     groups: [
       ...createCommonSearchGroups(resourceTypeItems),
-      ...createPansouGroups(options.pansou || {}),
-      ...createHdhiveGroups(options),
-      ...createJuyingGroups(options),
-      ...createSeedhubGroups(),
-      ...createPirateBayGroups(),
-      ...createUIndexGroups(),
-      ...createMikanGroups(),
-      ...createAnimeGardenGroups(),
-      ...createDian115Groups(options),
-      ...createPinglianGroups(options),
-      ...createOnlineDocsGroups(resourceTypeItems),
+      ...dynamicSchemas.flatMap((schema) =>
+        (Array.isArray(schema.groups) ? schema.groups : []).map((group) => ({
+          ...group,
+          fields: (Array.isArray(group.fields) ? group.fields : []).map((field) =>
+            resolveDynamicField(field, options),
+          ),
+        })),
+      ),
     ],
-  }
+  };
 }

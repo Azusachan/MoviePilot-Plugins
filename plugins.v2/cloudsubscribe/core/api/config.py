@@ -21,18 +21,20 @@ class ConfigApi(OwnerDelegator):
          "search_circuit_breaker_threshold", "search_circuit_breaker_cooldown", "hdhive_timeout",
          "dian115_timeout", "juying_timeout", "pansou_timeout", "seedhub_timeout", "piratebay_timeout",
          "uindex_timeout", "pinglian_timeout", "mikan_timeout", "animegarden_timeout",
-         "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit"})
+         "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit", "hdhaven_candidate_limit"})
     _AGENT_BOOL_FIELDS = frozenset(
         {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_circuit_breaker_enabled"})
     _AGENT_INT_RANGES = {"search_cache_ttl_minutes": (1, 1440), "search_concurrency": (1, 5),
                          "search_source_timeout": (5, 120), "search_circuit_breaker_threshold": (1, 10),
                          "search_circuit_breaker_cooldown": (10, 600), "hdhive_timeout": (5, 120),
+                         "hdhaven_timeout": (5, 120),
                          "dian115_timeout": (5, 120), "juying_timeout": (5, 120),
                          "pansou_timeout": (5, 120), "seedhub_timeout": (5, 120), "piratebay_timeout": (5, 120),
                          "uindex_timeout": (5, 120), "pinglian_timeout": (5, 120),
                          "mikan_timeout": (5, 120), "animegarden_timeout": (5, 120),
                          "subscription_concurrency": (1, 5), "pansou_result_limit": (1, 100),
                          "hdhive_candidate_limit": (1, 20), "hdhive_unlocks_per_minute": (1, 3),
+                         "hdhaven_candidate_limit": (1, 20), "hdhaven_unlocks_per_minute": (1, 10),
                          "dian115_unlocks_per_minute": (1, 10)}
 
     @staticmethod
@@ -126,6 +128,7 @@ class ConfigApi(OwnerDelegator):
             payload = await request.json()
             if not isinstance(payload, dict):
                 return {"success": False, "message": "配置数据格式错误"}
+            UIConfig.normalize_config(payload)
             self._validate_search_proxy_config(payload)
             auto_subscribe_error = self._validate_auto_subscribe_config(payload)
             if auto_subscribe_error:

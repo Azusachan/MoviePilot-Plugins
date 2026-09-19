@@ -1089,11 +1089,6 @@ class SyncExecutionService(OwnerDelegator):
             logger.error(f"插件全局配置应用失败（下次首次执行重试）: {e}")
 
     def _release_sync_resources(self, notification_batch_started: bool) -> None:
-        if self._search_handler:
-            try:
-                self._search_handler.close()
-            except Exception as error:
-                logger.warning(f"同步结束关闭搜索客户端失败：{error}")
         try:
             # 配置重载会关闭旧 SyncHandler；必须避开正在使用它的后处理线程。
             with self._offline_monitor_lock:

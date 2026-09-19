@@ -105,7 +105,7 @@ const recentHistory = computed(() => (overview.value.recent_history || []).slice
 const activeTaskCount = computed(
   () =>
     (overview.value.runtime?.tasks || []).filter((task) =>
-      ["queued", "running", "stopping", "postprocessing"].includes(task.status),
+      ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status),
     ).length,
 )
 const statusColor = computed(() =>
@@ -159,7 +159,7 @@ async function loadOverview() {
 function runtimeIsActive(value) {
   return (
     ["starting", "running", "stopping"].includes(value?.status) ||
-    (value?.tasks || []).some((task) => ["queued", "running", "stopping", "postprocessing"].includes(task.status))
+    (value?.tasks || []).some((task) => ["queued", "running", "stopping", "downloading", "transferring", "postprocessing"].includes(task.status))
   )
 }
 

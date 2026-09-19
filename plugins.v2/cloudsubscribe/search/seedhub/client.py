@@ -187,7 +187,7 @@ class SeedHubClient:
             text = str(result.get("text") or "")
             if not text or is_cloudflare_challenge(text):
                 self._request_gate.activate_cooldown(
-                    60, reason="SeedHub 浏览器验证"
+                    30, reason="SeedHub 浏览器验证"
                 )
                 return ""
             seedhub_host = str(urlparse(self.base_url).hostname or "").lower()
