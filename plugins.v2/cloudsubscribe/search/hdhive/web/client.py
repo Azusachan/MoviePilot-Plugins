@@ -974,8 +974,9 @@ class HDHiveClient:
             ),
         }
 
-    def checkin(self, is_gambler: bool = False) -> Dict[str, Any]:
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
         """抓取首页后，通过网页 Server Action 完成一次签到。"""
+        is_gambler = str(mode or "normal").strip().lower() == "gambler"
         with self.related_requests(5):
             page_snapshot: Dict[str, Any] = {}
             response = None
@@ -1041,7 +1042,7 @@ class HDHiveClient:
                 else "签到成功" if success
                 else f"签到失败（HTTP {status_code}）"
             ),
-            "is_gambler": bool(is_gambler),
+            "mode": "gambler" if is_gambler else "normal",
             "signin_points": 0 if already_checked_in else points_change,
             "points_change": points_change,
             "points_before": points_before,

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, DriverDefinition, FieldSpec, GroupSpec
-from .client import P115ClientManager
+from .client import P115CheckinError, P115ClientManager
 from .provider import create_p115_provider
+from ...core.definitions import (
+    CheckinDefinition,
+    DriverDefinition,
+    FieldSpec,
+    GroupSpec,
+    build_checkin_definition,
+)
 
 
 class P115DriverDefinition(DriverDefinition):
@@ -36,28 +42,22 @@ class P115DriverDefinition(DriverDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
+        """自动注册 115 签到契约：仅声明与驱动默认值不同的差异项。"""
+        return build_checkin_definition(
+            cls,
             key="p115",
             name="115 网盘",
-            icon="mdi-cloud-outline",
+            order=50,
+            points_label="枫叶",
+            drive_key="115",
             credential_attrs=("_cookies",),
             credential_keys=("cookies",),
-            modes=("normal",),
-            order=50,
-            group=GroupSpec(
-                tab="checkin",
-                title="115 网盘签到",
-                icon="mdi-cloud-outline",
-                fields=[
-                    FieldSpec(
-                        key="p115_checkin_enabled",
-                        label="启用每日签到并领取枫叶",
-                        type="switch",
-                        hint="复用已配置的 115 Cookie；每天先检查签到状态，未签到时自动领取枫叶。",
-                        cols=12,
-                    ),
-                ],
-            ),
+            error_types=(P115CheckinError,),
+            hint="请先配置并保存 115 Cookie",
+            group_title="115 网盘签到",
+            enable_label="启用每日签到并领取枫叶",
+            enable_hint="复用已配置的 115 Cookie；每天先检查签到状态，未签到时自动领取枫叶。",
+            enable_cols=12,
         )
 
     @classmethod

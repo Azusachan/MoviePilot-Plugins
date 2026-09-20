@@ -191,7 +191,9 @@ class SearchAccountOperations(Protocol):
 
 @runtime_checkable
 class SearchCheckinOperations(Protocol):
-    def checkin(self, **kwargs: Any) -> Dict[str, Any]: ...
+    """签到能力的统一契约：渠道只按模式入参，不暴露渠道私有参数。"""
+
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]: ...
 
 
 @runtime_checkable

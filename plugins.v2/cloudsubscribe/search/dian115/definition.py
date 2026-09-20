@@ -5,9 +5,15 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import Dian115Client, Dian115Error
 from .provider import create_dian115_provider
+from ...core.definitions import (
+    CheckinDefinition,
+    FieldSpec,
+    GroupSpec,
+    SearchSourceDefinition,
+    build_checkin_definition,
+)
 
 
 class Dian115SourceDefinition(SearchSourceDefinition):
@@ -46,59 +52,37 @@ class Dian115SourceDefinition(SearchSourceDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
-            key="dian115",
-            name="Dian115",
-            icon="mdi-cloud-search",
+        """自动注册 Dian115 签到契约：模式下拉框由 modes 自动生成。"""
+        return build_checkin_definition(
+            cls,
             credential_attrs=("_dian115_email", "_dian115_password"),
             credential_keys=("dian115_email", "dian115_password"),
             error_types=(Dian115Error,),
             modes=("normal", "lucky"),
-            order=30,
-            group=GroupSpec(
-                tab="checkin",
-                title="Dian115 签到与娱乐",
-                icon="mdi-cloud-search",
-                fields=[
-                    FieldSpec(
-                        key="dian115_checkin_enabled",
-                        label="启用每日签到",
-                        type="switch",
-                        cols=4,
-                    ),
-                    FieldSpec(
-                        key="dian115_checkin_mode",
-                        label="签到模式",
-                        type="select",
-                        options=[
-                            {"title": "普通签到", "value": "normal"},
-                            {"title": "运气签到", "value": "lucky"},
-                        ],
-                        hint="运气签到可能获得 3～10 倍奖励，也有 21% 概率扣除 1 倍普通签到积分。",
-                        cols=8,
-                        show_condition="config.dian115_checkin_enabled",
-                    ),
-                    FieldSpec(
-                        key="dian115_lottery_enabled",
-                        label="启用幸运转盘",
-                        type="switch",
-                        hint="每次消耗 5 积分",
-                        cols=4,
-                        show_condition="config.dian115_checkin_enabled",
-                    ),
-                    FieldSpec(
-                        key="dian115_lottery_count",
-                        label="每日转盘目标次数",
-                        type="number",
-                        min=1,
-                        max=20,
-                        suffix="次",
-                        hint="最多 20 次；会先读取站点当天已用次数，只执行尚缺的次数。",
-                        cols=8,
-                        show_condition="config.dian115_checkin_enabled && config.dian115_lottery_enabled",
-                    ),
-                ],
-            ),
+            group_title="Dian115 签到与娱乐",
+            enable_cols=4,
+            mode_hint="运气签到可能获得 3～10 倍奖励，也有 21% 概率扣除 1 倍普通签到积分。",
+            fields=[
+                FieldSpec(
+                    key="dian115_lottery_enabled",
+                    label="启用幸运转盘",
+                    type="switch",
+                    hint="每次消耗 5 积分",
+                    cols=4,
+                    show_condition="config.dian115_checkin_enabled",
+                ),
+                FieldSpec(
+                    key="dian115_lottery_count",
+                    label="每日转盘目标次数",
+                    type="number",
+                    min=1,
+                    max=20,
+                    suffix="次",
+                    hint="最多 20 次；会先读取站点当天已用次数，只执行尚缺的次数。",
+                    cols=8,
+                    show_condition="config.dian115_checkin_enabled && config.dian115_lottery_enabled",
+                ),
+            ],
         )
 
     @classmethod
@@ -240,6 +224,8 @@ class Dian115SourceDefinition(SearchSourceDefinition):
             timeout=int(cls.config_value(config, "dian115_timeout", 30) or 30),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),
+            lottery_enabled=bool(cls.config_value(config, "dian115_lottery_enabled", False)),
+            lottery_count=int(cls.config_value(config, "dian115_lottery_count", 0) or 0),
         )
 
     @classmethod

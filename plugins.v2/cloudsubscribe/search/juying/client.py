@@ -372,8 +372,8 @@ class JuyingClient:
             )
         return payload
 
-    def checkin(self) -> Dict[str, Any]:
-        """通过聚影 WebAPI 完成每日签到。"""
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        """通过聚影 WebAPI 完成每日签到（聚影只有普通签到一种模式）。"""
         before = self.get_account_info()
         stats_before = self.get_checkin_stats()
         already_checked_in = bool(stats_before.get("checked_today"))

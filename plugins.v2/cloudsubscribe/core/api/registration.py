@@ -141,6 +141,13 @@ class MoviePilotRegistration(OwnerDelegator):
                 "summary": "获取多渠道签到仪表盘",
             },
             {
+                "path": "/checkin/history",
+                "endpoint": self.api_vue_checkin_histories,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取全部渠道签到历史",
+            },
+            {
                 "path": "/checkin/{provider}",
                 "endpoint": self.api_vue_checkin,
                 "methods": ["POST"],
@@ -641,18 +648,12 @@ class MoviePilotRegistration(OwnerDelegator):
             "kwargs": {}
         })
 
+        # 与运行时使用同一套凭据判定，避免注册了必然失败的签到渠道。
         checkin_providers = [
             provider
-            for provider in self.get_checkin_provider_specs()
-            if (
-                    bool(getattr(
-                        self, f"_{provider['key']}_checkin_enabled", False
-                    ))
-                    and all(
-                getattr(self, name, None)
-                for name in provider["credential_attrs"]
-            )
-            )
+            for provider in self.get_checkin_providers()
+            if bool(getattr(self, provider.enabled_attr, False))
+               and self.is_checkin_ready(provider)
         ]
         if checkin_providers and self._cron_is_valid(self._checkin_cron):
             timezone = pytz.timezone(settings.TZ)

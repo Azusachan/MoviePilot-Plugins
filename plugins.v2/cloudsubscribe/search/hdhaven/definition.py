@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import HDHavenClient, HDHavenError
 from .provider import create_hdhaven_provider
-
+from ...core.definitions import (
+    CheckinDefinition,
+    FieldSpec,
+    GroupSpec,
+    SearchSourceDefinition,
+    build_checkin_definition,
+)
 
 
 class HDHavenSourceDefinition(SearchSourceDefinition):
@@ -46,40 +51,16 @@ class HDHavenSourceDefinition(SearchSourceDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
-            key="hdhaven",
-            name="HDHaven",
-            icon="mdi-movie-open-star-outline",
+        """自动注册 HDHaven 签到契约：模式下拉框由 modes 自动生成。"""
+        return build_checkin_definition(
+            cls,
             credential_attrs=("_hdhaven_username", "_hdhaven_password"),
             credential_keys=("hdhaven_username", "hdhaven_password"),
             error_types=(HDHavenError,),
             modes=("normal", "gambler"),
-            order=20,
-            group=GroupSpec(
-                tab="checkin",
-                title="HDHaven 签到",
-                icon="mdi-movie-open-star-outline",
-                fields=[
-                    FieldSpec(
-                        key="hdhaven_checkin_enabled",
-                        label="启用每日签到",
-                        type="switch",
-                        cols=4,
-                    ),
-                    FieldSpec(
-                        key="hdhaven_checkin_mode",
-                        label="签到模式",
-                        type="select",
-                        options=[
-                            {"title": "普通签到", "value": "normal"},
-                            {"title": "赌狗签到", "value": "gambler"},
-                        ],
-                        hint="HDHaven 赌狗签到有几率暴击获得多倍丰厚积分，也有几率扣除积分。",
-                        cols=8,
-                        show_condition="config.hdhaven_checkin_enabled",
-                    ),
-                ],
-            ),
+            group_title="HDHaven 签到",
+            enable_cols=4,
+            mode_hint="HDHaven 赌狗签到有几率暴击获得多倍丰厚积分，也有几率扣除积分。",
         )
 
     @classmethod

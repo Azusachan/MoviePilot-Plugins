@@ -1,12 +1,12 @@
 """HDHaven 统一网络请求、鉴权会话与风控客户端。"""
 
 import threading
-import time
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
 from app.log import logger
 
+from .security import HDHavenTurnstile
 from ..cloudflare import is_cloudflare_challenge
 from ..http_client import (
     RequestGate,
@@ -16,7 +16,6 @@ from ..http_client import (
     normalize_proxies,
     requests,
 )
-from .security import HDHavenTurnstile
 
 
 class HDHavenError(RuntimeError):
@@ -259,7 +258,8 @@ class HDHavenClient:
             "status": "active" if retention_obj.get("state") == "active" else "normal",
         }
 
-    def checkin(self, is_gambler: bool = False, **kwargs: Any) -> Dict[str, Any]:
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        is_gambler = str(mode or "normal").strip().lower() == "gambler"
         endpoint = "/api/account/checkin/gamble" if is_gambler else "/api/account/checkin"
         mode_text = "赌狗签到" if is_gambler else "普通签到"
         try:

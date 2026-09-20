@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, DriverDefinition, FieldSpec, GroupSpec
 from .client import QuarkClient
 from .provider import QuarkDrive, create_quark_provider
+from ...core.definitions import (
+    CheckinDefinition,
+    DriverDefinition,
+    FieldSpec,
+    GroupSpec,
+    build_checkin_definition,
+)
 
 
 class QuarkDriverDefinition(DriverDefinition):
@@ -23,35 +29,27 @@ class QuarkDriverDefinition(DriverDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
-            key="quark",
-            name="夸克网盘",
-            icon="mdi-cloud-outline",
+        """自动注册夸克签到契约：启用开关由工厂生成，仅声明专属字段。"""
+        return build_checkin_definition(
+            cls,
+            order=60,
+            drive_key="quark",
             credential_attrs=("_quark_checkin_url",),
             credential_keys=("quark_checkin_url",),
-            modes=("normal",),
-            order=60,
-            group=GroupSpec(
-                tab="checkin",
-                title="夸克网盘签到",
-                icon="mdi-cloud-outline",
-                fields=[
-                    FieldSpec(
-                        key="quark_checkin_enabled",
-                        label="启用每日签到并领取空间奖励",
-                        type="switch",
-                        cols=4,
-                    ),
-                    FieldSpec(
-                        key="quark_checkin_url",
-                        label="夸克签到 URL",
-                        type="password",
-                        hint="填写抓包得到的完整 growth/reward URL，需包含 kps、sign、vcode；参数失效后需重新抓取。",
-                        cols=8,
-                        show_condition="config.quark_checkin_enabled",
-                    ),
-                ],
-            ),
+            hint="请先配置并保存夸克签到 URL",
+            group_title="夸克网盘签到",
+            enable_label="启用每日签到并领取空间奖励",
+            enable_cols=4,
+            fields=[
+                FieldSpec(
+                    key="quark_checkin_url",
+                    label="夸克签到 URL",
+                    type="password",
+                    hint="填写抓包得到的完整 growth/reward URL，需包含 kps、sign、vcode；参数失效后需重新抓取。",
+                    cols=8,
+                    show_condition="config.quark_checkin_enabled",
+                ),
+            ],
         )
 
     @classmethod
@@ -128,6 +126,11 @@ class QuarkDriverDefinition(DriverDefinition):
                 if callable(persist) else None
             ),
             timeout=int(config.get("_quark_request_timeout") or config.get("quark_request_timeout") or 30),
+            checkin_url=str(
+                config.get("_quark_checkin_url")
+                or config.get("quark_checkin_url")
+                or ""
+            ),
         )
         client.risk_cooldown = int(
             config.get("_transfer_risk_cooldown")

@@ -2,14 +2,45 @@
 
 from __future__ import annotations
 
-import threading
 import re
+import threading
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
 from .open.client import HDHiveOpenAPIClient, HDHiveOpenAPIError
 from .provider import create_hdhive_provider
 from .web.client import HDHiveClient, HDHiveWebError
+from ...core.definitions import (
+    CheckinDefinition,
+    FieldSpec,
+    GroupSpec,
+    SearchSourceDefinition,
+    build_checkin_definition,
+)
+
+
+def _is_openapi_mode(owner: Any) -> bool:
+    """当前是否使用 HDHive OpenAPI 查询模式。"""
+    return str(
+        getattr(owner, "_hdhive_query_mode", "web") or "web"
+    ).strip().lower() == "api"
+
+
+def _checkin_ready(owner: Any) -> bool:
+    """OpenAPI 模式要求已授权的应用客户端，WebAPI 模式校验账号密码。"""
+    if _is_openapi_mode(owner):
+        client = getattr(owner, "_hdhive_client", None)
+        return bool(client and client.is_ready)
+    return bool(
+        getattr(owner, "_hdhive_username", None)
+        and getattr(owner, "_hdhive_password", None)
+    )
+
+
+def _checkin_hint(owner: Any) -> str:
+    """按查询模式给出对应的未配置提示。"""
+    if _is_openapi_mode(owner):
+        return "请先配置并保存 HDHive OpenAPI 应用 Secret 和用户授权"
+    return "请先配置并保存 HDHive 账号和密码"
 
 
 class HDHiveSourceDefinition(SearchSourceDefinition):
@@ -59,40 +90,18 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
-            key="hdhive",
-            name="HDHive",
-            icon="mdi-hexagon-multiple-outline",
+        """自动注册 HDHive 签到契约，WebAPI 与 OpenAPI 共用同一执行器。"""
+        return build_checkin_definition(
+            cls,
             credential_attrs=("_hdhive_username", "_hdhive_password"),
             credential_keys=("hdhive_username", "hdhive_password"),
             error_types=(HDHiveWebError, HDHiveOpenAPIError),
             modes=("normal", "gambler"),
-            order=10,
-            group=GroupSpec(
-                tab="checkin",
-                title="HDHive 签到",
-                icon="mdi-hexagon-multiple-outline",
-                fields=[
-                    FieldSpec(
-                        key="hdhive_checkin_enabled",
-                        label="启用每日签到",
-                        type="switch",
-                        cols=4,
-                    ),
-                    FieldSpec(
-                        key="hdhive_checkin_mode",
-                        label="签到模式",
-                        type="select",
-                        options=[
-                            {"title": "普通签到", "value": "normal"},
-                            {"title": "赌狗签到", "value": "gambler"},
-                        ],
-                        hint="HDHive 赌狗模式会将签到奖励乘以 -1～3 的随机倍数，最坏扣除 3 积分。",
-                        cols=8,
-                        show_condition="config.hdhive_checkin_enabled",
-                    ),
-                ],
-            ),
+            ready=_checkin_ready,
+            hint=_checkin_hint,
+            group_title="HDHive 签到",
+            enable_cols=4,
+            mode_hint="HDHive 赌狗模式会将签到奖励乘以 -1～3 的随机倍数，最坏扣除 3 积分。",
         )
 
     @classmethod

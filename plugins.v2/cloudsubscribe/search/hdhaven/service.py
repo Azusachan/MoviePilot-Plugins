@@ -7,11 +7,6 @@ from typing import Any, Dict, List, Optional
 from app.log import logger
 from app.schemas.types import MediaType
 
-from ..budget import PointBudgetLedger
-from ...core import OwnerDelegator, SearchQuery, format_search_label
-from ...core.media import tmdb_id_of
-from ...utils.cache import create_platform_ttl_cache
-from ..types import SUPPORTED_CLOUD_TYPES, resource_type_from_url
 from .client import HDHavenClient, HDHavenError
 from .resource import (
     HDHavenResourceService,
@@ -20,6 +15,11 @@ from .resource import (
     preview_episodes_from_files,
     valid_share_url,
 )
+from ..budget import PointBudgetLedger
+from ..types import SUPPORTED_CLOUD_TYPES
+from ...core import OwnerDelegator, SearchQuery, format_search_label
+from ...core.media import tmdb_id_of
+from ...utils.cache import create_platform_ttl_cache
 
 
 class HDHavenSearchService(OwnerDelegator):
@@ -344,9 +344,9 @@ class HDHavenSearchService(OwnerDelegator):
             return ""
         return url
 
-    def checkin(self, is_gambler: bool = False, **kwargs: Any) -> Dict[str, Any]:
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
         client = self.get_client()
-        return client.checkin(is_gambler=is_gambler, **kwargs)
+        return client.checkin(mode)
 
     def get_account_info(self) -> Dict[str, Any]:
         return self.get_client().get_account_info()

@@ -33,3 +33,7 @@ class CheckinApi(OwnerDelegator):
         if history is None:
             return {"success": False, "message": "不支持的签到提供方"}
         return {"success": True, "data": history}
+
+    def api_vue_checkin_histories(self, limit: int = 60) -> dict:
+        """一次返回全部渠道的签到记录，供时间线首屏使用（单次快照读取）。"""
+        return self.list_checkin_details(provider="", limit=limit)

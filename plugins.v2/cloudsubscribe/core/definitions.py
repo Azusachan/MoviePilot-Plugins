@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import inspect
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple, Type
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple, Type, Union
 
 
 @dataclass
@@ -53,10 +53,11 @@ class FieldSpec:
             data["default"] = self.default
         raw_options = self.items if self.items is not None else self.options
         if raw_options is not None:
-            data["items"] = raw_options
-            data["options"] = raw_options
+            # 复制列表，避免被缓存的渠道定义被下游（前端 schema 组装）就地修改。
+            data["items"] = list(raw_options)
+            data["options"] = list(raw_options)
         if self.lines is not None:
-            data["lines"] = self.lines
+            data["lines"] = list(self.lines)
         if self.multiple:
             data["multiple"] = self.multiple
         if self.searchable:
@@ -125,9 +126,25 @@ class GroupSpec:
         return data
 
 
+#: 签到模式在配置表单中的统一文案；未声明的模式回落到原始 key。
+CHECKIN_MODE_LABELS: Dict[str, str] = {
+    "normal": "普通签到",
+    "lucky": "运气签到",
+    "gambler": "赌狗签到",
+}
+
+
+def checkin_mode_options(modes: Sequence[str]) -> List[Dict[str, Any]]:
+    """生成签到模式下拉选项，保证各渠道文案与顺序一致。"""
+    return [
+        {"title": CHECKIN_MODE_LABELS.get(mode, mode), "value": mode}
+        for mode in modes
+    ]
+
+
 @dataclass(frozen=True)
 class CheckinDefinition:
-    """签到提供方自描述契约。"""
+    """签到提供方自描述契约：只描述元数据与表单，执行由 CheckinService 统一负责。"""
 
     key: str
     name: str
@@ -138,6 +155,39 @@ class CheckinDefinition:
     modes: Tuple[str, ...] = ("normal",)
     order: int = 100
     group: Optional[GroupSpec] = None
+    points_label: str = "积分"
+    #: 非空表示客户端来自网盘驱动管理器（网盘渠道），否则来自搜索渠道注册表。
+    drive_key: str = ""
+    #: 未配置凭据时的提示，可为字符串或 owner -> 文本 的函数（双模式渠道按模式给提示）。
+    hint: Union[str, Callable[[Any], str]] = ""
+    #: 自定义凭据判定，缺省按 credential_attrs 判断。
+    ready: Optional[Callable[[Any], bool]] = None
+
+    @property
+    def enabled_key(self) -> str:
+        return f"{self.key}_checkin_enabled"
+
+    @property
+    def mode_key(self) -> str:
+        return f"{self.key}_checkin_mode"
+
+    @property
+    def enabled_attr(self) -> str:
+        """宿主上保存“是否启用签到”的运行时属性名。"""
+        return f"_{self.enabled_key}"
+
+    @property
+    def mode_attr(self) -> str:
+        """宿主上保存签到模式的运行时属性名。"""
+        return f"_{self.mode_key}"
+
+    @property
+    def history_key(self) -> str:
+        return f"{self.key}_checkin_history"
+
+    @property
+    def default_mode(self) -> str:
+        return self.modes[0] if self.modes else "normal"
 
     def to_provider_spec(self) -> Dict[str, Any]:
         """供前端 checkin-timeline 消费的提供者规格。"""
@@ -145,10 +195,100 @@ class CheckinDefinition:
             "key": self.key,
             "name": self.name,
             "icon": self.icon,
-            "enabledKey": f"{self.key}_checkin_enabled",
-            "modeKey": f"{self.key}_checkin_mode",
+            "enabledKey": self.enabled_key,
+            "modeKey": self.mode_key,
             "credentialKeys": list(self.credential_keys),
         }
+
+
+def build_checkin_definition(
+        definition_cls: Any,
+        *,
+        group_title: str,
+        drive_key: str = "",
+        hint: Union[str, Callable[[Any], str]] = "",
+        ready: Optional[Callable[[Any], bool]] = None,
+        key: str = "",
+        name: str = "",
+        icon: str = "",
+        order: Optional[int] = None,
+        group_icon: str = "",
+        credential_attrs: Sequence[str] = (),
+        credential_keys: Sequence[str] = (),
+        error_types: Sequence[Type[Exception]] = (Exception,),
+        modes: Sequence[str] = ("normal",),
+        points_label: str = "积分",
+        enable_label: str = "启用每日签到",
+        enable_hint: str = "",
+        enable_cols: int = 4,
+        mode_label: str = "签到模式",
+        mode_hint: str = "",
+        mode_cols: int = 8,
+        fields: Sequence[FieldSpec] = (),
+) -> CheckinDefinition:
+    """按渠道自描述自动补齐签到契约与通用表单字段。
+
+    key/name/icon/order 默认取自所属渠道定义类，只有差异项需要显式声明；启用开关与
+    签到模式下拉框按模式列表自动生成。执行细节由 CheckinService 统一处理，渠道只需在
+    客户端实现 checkin(mode)。
+    """
+    resolved_key = str(key or getattr(definition_cls, "id", "") or "").strip().lower()
+    if not resolved_key:
+        raise ValueError("签到提供方缺少 key")
+    resolved_name = str(name or getattr(definition_cls, "name", "") or resolved_key)
+    resolved_icon = str(
+        icon or getattr(definition_cls, "icon", "") or "mdi-calendar-check-outline"
+    )
+    resolved_order = int(
+        getattr(definition_cls, "order", 100) if order is None else order
+    )
+    resolved_modes = tuple(dict.fromkeys(
+        str(mode or "").strip().lower()
+        for mode in modes
+        if str(mode or "").strip()
+    )) or ("normal",)
+
+    group_fields: List[FieldSpec] = [
+        FieldSpec(
+            key=f"{resolved_key}_checkin_enabled",
+            label=enable_label,
+            type="switch",
+            hint=enable_hint,
+            cols=enable_cols,
+        )
+    ]
+    if len(resolved_modes) > 1:
+        group_fields.append(FieldSpec(
+            key=f"{resolved_key}_checkin_mode",
+            label=mode_label,
+            type="select",
+            options=checkin_mode_options(resolved_modes),
+            hint=mode_hint,
+            cols=mode_cols,
+            show_condition=f"config.{resolved_key}_checkin_enabled",
+        ))
+    group_fields.extend(fields)
+
+    return CheckinDefinition(
+        key=resolved_key,
+        name=resolved_name,
+        icon=resolved_icon,
+        credential_attrs=tuple(credential_attrs),
+        credential_keys=tuple(credential_keys),
+        error_types=tuple(error_types) or (Exception,),
+        modes=resolved_modes,
+        order=resolved_order,
+        points_label=str(points_label or "积分"),
+        group=GroupSpec(
+            tab="checkin",
+            title=str(group_title or f"{resolved_name} 签到"),
+            icon=str(group_icon or resolved_icon),
+            fields=group_fields,
+        ),
+        drive_key=str(drive_key or ""),
+        hint=hint,
+        ready=ready,
+    )
 
 
 class DriverDefinition:

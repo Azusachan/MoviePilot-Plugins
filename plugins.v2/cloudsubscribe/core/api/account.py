@@ -36,9 +36,8 @@ class AccountApi(OwnerDelegator):
         handler = self._search_handler
         return getattr(handler, name, default) if handler else default
     
-    @staticmethod
     def _search_account_card(
-            source: str, info: Dict[str, Any]
+            self, source: str, info: Dict[str, Any]
     ) -> Dict[str, Any]:
         """将搜索渠道账户数据转换为通用信息卡片。"""
         badge = str(info.get("level") or info.get("role") or "").strip()

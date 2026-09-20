@@ -126,6 +126,27 @@ const runningProvider = ref("")
 const dateColumns = computed(() => buildDateColumns())
 const enabledProviders = computed(() => props.providers.filter(providerEnabled));
 
+// 渠道视图一次性预算好：模板里逐列调用只读取结果，避免每次重渲染都扫描全部历史。
+const providerViews = computed(() => {
+  const views = {};
+  enabledProviders.value.forEach((provider) => {
+    views[provider.key] = {
+      days: buildTimelineDays(provider),
+      signinDays: buildSigninDays(provider),
+      points: buildPoints(provider),
+    };
+  });
+  return views;
+});
+
+function providerView(provider) {
+  return providerViews.value[provider.key] || {
+    days: [],
+    signinDays: "—",
+    points: "—",
+  };
+};
+
 function unwrapResponse(raw) {
   if (raw?.data && typeof raw.data === "object" && "success" in raw.data) return raw.data
   return raw || {}
@@ -230,6 +251,10 @@ function latestMetric(provider, key, suffix = "") {
 }
 
 function latestSigninDays(provider) {
+  return providerView(provider).signinDays;
+}
+
+function buildSigninDays(provider) {
   const state = historyState(provider);
   const items = state.items || [];
   const record = items[0];
@@ -259,6 +284,10 @@ function latestSigninDays(provider) {
 }
 
 function latestPoints(provider) {
+  return providerView(provider).points;
+}
+
+function buildPoints(provider) {
   const currentPoints = histories[provider.key]?.current_points;
   if (currentPoints !== null && currentPoints !== undefined && currentPoints !== "") {
     return currentPoints;
@@ -307,6 +336,10 @@ function checkinFromDay(provider, day) {
 }
 
 function timelineDays(provider) {
+  return providerView(provider).days;
+}
+
+function buildTimelineDays(provider) {
   const recordsByDay = new Map()
   for (const item of historyState(provider).items) {
     const parsed = new Date(item.executed_at)
@@ -412,14 +445,7 @@ async function loadProviderHistory(provider, force = false) {
       await props.api.get("plugin/CloudSubscribe/checkin/" + encodeURIComponent(provider.key) + "/history?limit=60"),
     )
     if (response.success === false) throw new Error(response.message || "读取签到记录失败")
-    const data = response.data?.data || response.data || {}
-    histories[provider.key] = {
-      total: Number(data.total || 0),
-      items: Array.isArray(data.items) ? data.items : [],
-      current_points: data.current_points ?? null,
-      loaded: true,
-      error: "",
-    }
+    applyHistory(provider.key, response.data?.data || response.data || {});
   } catch (error) {
     histories[provider.key] = {
       total: existing?.total || 0,
@@ -431,10 +457,49 @@ async function loadProviderHistory(provider, force = false) {
   }
 }
 
+function applyHistory(providerKey, data) {
+  histories[providerKey] = {
+    total: Number(data.total || 0),
+    items: Array.isArray(data.items) ? data.items : [],
+    current_points: data.current_points ?? null,
+    loaded: true,
+    error: "",
+  };
+}
+
+async function loadAllHistories() {
+  const response = unwrapResponse(
+    await props.api.get("plugin/CloudSubscribe/checkin/history?limit=60"),
+  );
+  if (response.success === false) throw new Error(response.message || "读取签到记录失败");
+  const data = response.data?.data || response.data || {};
+  const channels = Array.isArray(data.channels) ? data.channels : [];
+  const returned = new Set();
+  channels.forEach((channel) => {
+    const key = String(channel.provider || "");
+    if (!key) return;
+    returned.add(key);
+    applyHistory(key, channel);
+  });
+  enabledProviders.value.forEach((provider) => {
+    if (!returned.has(provider.key)) applyHistory(provider.key, {});
+  });
+}
+
 async function loadHistories(force = false) {
+  const targets = enabledProviders.value;
+  if (!targets.length) return;
+  if (!force && targets.every((provider) => histories[provider.key]?.loaded)) return;
   checkinRefreshing.value = true;
   try {
-    await Promise.all(enabledProviders.value.map((provider) => loadProviderHistory(provider, force)));
+    try {
+      // 一次请求取回全部渠道历史（单次快照读取），失败时回退到逐渠道读取。
+      await loadAllHistories();
+      return;
+    } catch (error) {
+      void error;
+    }
+    await Promise.all(targets.map((provider) => loadProviderHistory(provider, force)));
   } finally {
     checkinRefreshing.value = false;
   }
@@ -521,9 +586,9 @@ onMounted(() => loadHistories(false));
 :global(html[class*="transparent-glass"]) .checkin-matrix-scroll,
 :global(html[data-glass-appearance]) .checkin-matrix-scroll,
 :global(.v-theme--transparent) .checkin-matrix-scroll {
+  /* 外层 .config-shell 已有毛玻璃，内层再叠加 backdrop-filter 会在半透明主题下逐帧重算，
+     签到时间线一打开就要连续刷新多次，实测会明显卡顿。这里只保留透色与描边。 */
   background: rgba(var(--v-theme-surface), var(--transparent-opacity, 0.65)) !important;
-  backdrop-filter: blur(var(--transparent-blur, 10px)) saturate(130%) !important;
-  -webkit-backdrop-filter: blur(var(--transparent-blur, 10px)) saturate(130%) !important;
   border-color: rgba(var(--v-border-color), 0.16) !important;
 }
 

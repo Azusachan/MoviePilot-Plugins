@@ -53,14 +53,14 @@ class ConfigApi(OwnerDelegator):
             self,
             payload: Dict[str, Any],
     ) -> Optional[str]:
-        providers = self.get_checkin_provider_specs()
+        providers = self.get_checkin_providers()
         for provider in providers:
-            mode_key = f"{provider['key']}_checkin_mode"
+            mode_key = provider.mode_key
             mode = str(
                 payload.get(mode_key, "normal") or "normal"
             ).strip().lower()
-            if mode not in provider["modes"]:
-                return f"{provider['name']} 签到模式无效"
+            if mode not in provider.modes:
+                return f"{provider.name} 签到模式无效"
             payload[mode_key] = mode
         try:
             lottery_count = int(
@@ -79,7 +79,7 @@ class ConfigApi(OwnerDelegator):
             or "0 8 * * *"
         ).strip()
         enabled = any(
-            payload.get(f"{provider['key']}_checkin_enabled")
+            payload.get(provider.enabled_key)
             for provider in providers
         )
         if enabled and not self._cron_is_valid(cron):

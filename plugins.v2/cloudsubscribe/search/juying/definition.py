@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import JuyingClient, JuyingError
 from .provider import create_juying_provider
 from .resource import JuyingResourceService
 from .service import JuyingSearchService
+from ...core.definitions import (
+    CheckinDefinition,
+    FieldSpec,
+    GroupSpec,
+    SearchSourceDefinition,
+    build_checkin_definition,
+)
 
 
 class JuyingSourceDefinition(SearchSourceDefinition):
@@ -40,28 +46,15 @@ class JuyingSourceDefinition(SearchSourceDefinition):
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        return CheckinDefinition(
-            key="juying",
-            name="聚影",
+        """自动注册聚影签到契约：执行器与启用开关均由工厂按渠道自描述生成。"""
+        return build_checkin_definition(
+            cls,
             icon="mdi-movie-check-outline",
             credential_attrs=("_juying_username", "_juying_password"),
             credential_keys=("juying_username", "juying_password"),
             error_types=(JuyingError,),
-            modes=("normal",),
-            order=40,
-            group=GroupSpec(
-                tab="checkin",
-                title="聚影签到",
-                icon="mdi-movie-check-outline",
-                fields=[
-                    FieldSpec(
-                        key="juying_checkin_enabled",
-                        label="启用每日签到",
-                        type="switch",
-                        cols=12,
-                    ),
-                ],
-            ),
+            group_title="聚影签到",
+            enable_cols=12,
         )
 
     @classmethod
