@@ -421,7 +421,7 @@ class PanSouClient:
             }
 
         except requests.exceptions.Timeout:
-            logger.warning(
+            logger.debug(
                 f"PanSou 请求超时：关键词 '{keyword}'，超时 {self.search_timeout} 秒，"
                 f"并发数 {effective_concurrency or '自动'}，"
                 f"强制刷新={bool(refresh)}"

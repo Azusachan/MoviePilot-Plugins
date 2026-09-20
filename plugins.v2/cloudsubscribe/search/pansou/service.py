@@ -9,7 +9,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ..magnet import clear_cache, normalize_magnets
-from ..types import PANSOU_RESOURCE_TYPES, resource_type_name
+from ..types import PANSOU_RESOURCE_TYPES, normalize_resource_type, resource_type_name
 from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 
 
@@ -61,6 +61,7 @@ class PanSouSearchService(OwnerDelegator):
             media_titles: List[str],
             media_year: Any,
             resource_title: str,
+            strict_year: bool = True,
     ) -> bool:
         normalized_resource = cls._normalize_for_match(resource_title)
         if not normalized_resource:
@@ -69,11 +70,14 @@ class PanSouSearchService(OwnerDelegator):
             " ", normalized_resource
         ).strip()
         expected_year = str(media_year or "").strip()
-        resource_years = set(
-            re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", normalized_resource)
-        )
-        if expected_year and resource_years and expected_year not in resource_years:
-            return False
+        # 仅在 strict_year=True 且资源标题中明确出现了年份时才做年份过滤。
+        # 对剧集搜索，调用方可传 strict_year=False 来放宽约束，避免误杀。
+        if strict_year and expected_year:
+            resource_years = set(
+                re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", normalized_resource)
+            )
+            if resource_years and expected_year not in resource_years:
+                return False
         for media_title in media_titles:
             comparable_title = cls._PUNCT_GAP_RE.sub(
                 " ", cls._normalize_for_match(media_title)
@@ -122,9 +126,13 @@ class PanSouSearchService(OwnerDelegator):
             media_year: Any,
             allowed_types: List[str],
             limit: int,
+            strict_year: bool = True,
     ) -> Dict[str, List[Dict[str, Any]]]:
         groups: Dict[str, List[Dict[str, Any]]] = {}
         allowed = set(allowed_types)
+        # 超出上限倍数后提前退出，避免大结果集浪费 CPU
+        hard_cap = max(limit * 5, 50)
+        total_matched = 0
         for item in rows if isinstance(rows, list) else []:
             if not isinstance(item, dict):
                 continue
@@ -142,13 +150,13 @@ class PanSouSearchService(OwnerDelegator):
                 if (
                         not cls._title_matches_search_key(keyword, title)
                         and not any(
-                    cls._title_matches_search_key(value, title)
-                    for value in media_titles
-                )
+                            cls._title_matches_search_key(value, title)
+                            for value in media_titles
+                        )
                 ):
                     continue
                 if media_titles and not cls._title_matches_media(
-                        media_titles, media_year, title
+                        media_titles, media_year, title, strict_year=strict_year
                 ):
                     continue
                 resource_type = str(link.get("type") or "unknown").strip().lower()
@@ -184,6 +192,11 @@ class PanSouSearchService(OwnerDelegator):
                 if password:
                     candidate["password"] = password
                 group.append(candidate)
+                total_matched += 1
+                if total_matched >= hard_cap:
+                    break
+            if total_matched >= hard_cap:
+                break
         for group in groups.values():
             group.sort(key=lambda row: row.get("update_time", ""), reverse=True)
         return groups
@@ -273,17 +286,25 @@ class PanSouSearchService(OwnerDelegator):
 
         if not response or response.get("error"):
             reason = response.get("error") if response else "接口未返回结果"
-            logger.warning(f"{prefix} 搜索失败：关键词 '{keyword}'，原因：{reason}")
+            logger.debug(f"{prefix} 搜索失败：关键词 '{keyword}'，原因：{reason}")
             return []
+        # 剧集搜索放宽年份约束：剧集关键词不含年份，不应因标题年份差异而误杀资源
+        strict_year = (media_type != MediaType.TV)
         groups = self._normalize_results(
             response.get("results"), keyword, titles,
             None if query.resource_list_mode else getattr(mediainfo, "year", None),
             allowed_types, limit,
+            strict_year=strict_year,
         )
+        # 用 candidate 的 resource_type 字段标准化后与配置对比。
+        # groups.key 是中文显示名，不能直接匹配 _resource_type_order_config。
+        resource_type_set = set(self._resource_type_order_config)
         grouped = [
-            group for resource_type, group in groups.items()
-            if query.resource_list_mode or self._resource_type(group[0]) in self._resource_type_order_config
-            if group
+            group for group in groups.values()
+            if group and (
+                query.resource_list_mode
+                or normalize_resource_type(group[0].get("resource_type", "")) in resource_type_set
+            )
         ]
         candidates = self._round_robin(grouped, limit)
         candidates = normalize_magnets(candidates, "pansou")

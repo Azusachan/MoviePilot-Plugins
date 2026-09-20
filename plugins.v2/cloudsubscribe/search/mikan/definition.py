@@ -153,22 +153,30 @@ class MikanSourceDefinition(SearchSourceDefinition):
         ]
 
     @classmethod
-    def create_provider(
-            cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
-    ) -> Any:
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
         ctx = context or {}
-        owner = ctx.get("owner")
-        base_url = str(getattr(owner, "_mikan_base_url", "https://mikanani.me") or "https://mikanani.me")
-        timeout = int(getattr(owner, "_mikan_timeout", 60) or 60)
-        interval = float(getattr(owner, "_mikan_request_interval", 2.0) or 2.0)
-        limit = int(getattr(owner, "_mikan_result_limit", 10) or 10)
-        mikan_client = MikanClient(
+        base_url = str(
+            cls.config_value(config, "mikan_base_url", "https://mikanani.me")
+            or "https://mikanani.me"
+        ).strip()
+        timeout = int(cls.config_value(config, "mikan_timeout", 60) or 60)
+        interval = float(cls.config_value(config, "mikan_request_interval", 2.0) or 2.0)
+        return MikanClient(
             base_url=base_url,
             timeout=timeout,
             interval=interval,
-            proxy=getattr(owner, "_search_proxy", None),
+            proxy=ctx.get("proxy"),
         )
+
+    @classmethod
+    def create_provider(
+            cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
+    ) -> Any:
+        if not client:
+            return None
+        limit = int(cls.config_value(config, "mikan_result_limit", 10) or 10)
         return create_mikan_provider(
-            MikanSearchService(mikan_client, result_limit=limit),
-            {"base_url": mikan_client.base_url, "limit": limit},
+            MikanSearchService(client, result_limit=limit),
+            {"base_url": client.base_url, "limit": limit},
         )
+

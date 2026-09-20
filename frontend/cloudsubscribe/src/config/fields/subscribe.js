@@ -102,7 +102,7 @@ const monthItems = Array.from({length: 12}, (_, index) => ({
 
 export function createSubscribeSection(options = {}) {
   return {
-    value: "auto_subscribe",
+    value: "subscribe",
     title: "榜单订阅",
     icon: "mdi-format-list-bulleted-square",
     subtabs: [

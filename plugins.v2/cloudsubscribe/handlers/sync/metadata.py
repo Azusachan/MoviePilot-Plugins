@@ -9,6 +9,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
@@ -180,7 +181,8 @@ class SyncMetadataService(OwnerDelegator):
         """读取 TMDB 季网页的真实卡片，绕过 API/平台缓存的滞后。"""
         url = f"https://www.themoviedb.org/tv/{int(tmdb_id)}/season/{int(season)}"
         response = RequestUtils(
-            timeout=20,
+            proxies=settings.PROXY,
+            timeout=5,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                               "AppleWebKit/537.36 Chrome/136.0 Safari/537.36",
@@ -242,13 +244,13 @@ class SyncMetadataService(OwnerDelegator):
                 season,
             )
         except Exception as error:
-            logger.warning(
+            logger.debug(
                 f"{getattr(subscribe, 'name', '')} S{season:02d} "
                 f"读取 TMDB 季网页失败：{error}"
             )
             return None
         if not web_air_dates:
-            logger.warning(
+            logger.debug(
                 f"{getattr(subscribe, 'name', '')} S{season:02d} "
                 "TMDB 季网页未解析到剧集播出日期，跳过播出过滤"
             )
@@ -510,7 +512,7 @@ class SyncMetadataService(OwnerDelegator):
                 )
                 tmdb_id = self._tmdb_id_from_media(result)
             except Exception as error:
-                logger.warning(
+                logger.debug(
                     f"订阅 TMDB ID 自动修复的 {source_name} 映射失败："
                     f"{getattr(subscribe, 'name', '')} - {error}"
                 )
@@ -547,7 +549,7 @@ class SyncMetadataService(OwnerDelegator):
                     subscribe, media_type, candidates
                 )
             except Exception as error:
-                logger.warning(
+                logger.debug(
                     f"订阅 TMDB ID 自动修复的标题查询失败："
                     f"{getattr(subscribe, 'name', '')} - {error}"
                 )
@@ -571,13 +573,13 @@ class SyncMetadataService(OwnerDelegator):
                 )
                 tmdb_id = self._tmdb_id_from_media(recognized)
             except Exception as error:
-                logger.warning(
+                logger.debug(
                     f"订阅 TMDB ID 自动修复的媒体识别失败："
                     f"{getattr(subscribe, 'name', '')} - {error}"
                 )
 
         if not tmdb_id:
-            logger.warning(
+            logger.debug(
                 f"订阅 TMDB ID 自动修复未找到安全匹配："
                 f"{getattr(subscribe, 'name', '')} "
                 f"({getattr(subscribe, 'year', '')})，"
@@ -589,13 +591,13 @@ class SyncMetadataService(OwnerDelegator):
         try:
             updated = SubscribeOper().update(subscribe_id, identity_update)
         except Exception as error:
-            logger.warning(
+            logger.debug(
                 f"订阅 TMDB ID 自动回填失败："
                 f"{getattr(subscribe, 'name', '')} -> {tmdb_id} - {error}"
             )
             return False
         if not updated:
-            logger.warning(f"订阅 TMDB ID 自动回填失败：订阅 {subscribe_id} 不存在")
+            logger.debug(f"订阅 TMDB ID 自动回填失败：订阅 {subscribe_id} 不存在")
             return False
 
         for field, value in identity_update.items():
@@ -631,7 +633,7 @@ class SyncMetadataService(OwnerDelegator):
         media_category = str(
             getattr(subscribe, "media_category", "") or ""
         ).strip()
-        if title and tmdb_id > 0 and media_category:
+        if title and tmdb_id > 0:
             try:
                 mediainfo = MediaInfo(
                     type=media_type,

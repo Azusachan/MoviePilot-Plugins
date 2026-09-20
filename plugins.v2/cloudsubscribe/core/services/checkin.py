@@ -1,6 +1,7 @@
 """通用每日签到执行、通知与历史持久化。"""
 
 import copy
+import inspect
 import threading
 import uuid
 from dataclasses import dataclass
@@ -12,18 +13,8 @@ from app.core.config import settings
 from app.log import logger
 from p115client import check_response
 
-from .. import OwnerDelegator
-from ..delegation import get_component
+from .. import OwnerDelegator, SearchCapability
 from ...drive.quark import QuarkClient
-from ...search.dian115 import Dian115Error, Dian115SearchService
-from ...search.hdhaven import HDHavenError, HDHavenSearchService
-from ...search.hdhive import (
-    HDHiveOpenAPIError,
-    HDHiveSearchService,
-    HDHiveWebError,
-)
-from ...search.juying import JuyingError
-
 
 class P115CheckinError(RuntimeError):
     """115 签到接口错误。"""
@@ -51,50 +42,6 @@ class CheckinProvider:
 class CheckinService(OwnerDelegator):
     """统一编排各提供方的签到、通知和历史。"""
 
-    _PROVIDERS = {
-        "hdhive": CheckinProvider(
-            key="hdhive",
-            name="HDHive",
-            credential_attrs=("_hdhive_username", "_hdhive_password"),
-            error_types=(HDHiveWebError, HDHiveOpenAPIError),
-            modes=("normal", "gambler"),
-        ),
-        "dian115": CheckinProvider(
-            key="dian115",
-            name="Dian115",
-            credential_attrs=("_dian115_email", "_dian115_password"),
-            error_types=(Dian115Error,),
-            modes=("normal", "lucky"),
-        ),
-        "hdhaven": CheckinProvider(
-            key="hdhaven",
-            name="HDHaven",
-            credential_attrs=("_hdhaven_username", "_hdhaven_password"),
-            error_types=(HDHavenError,),
-            modes=("normal", "gambler"),
-        ),
-        "juying": CheckinProvider(
-            key="juying",
-            name="聚影",
-            credential_attrs=("_juying_username", "_juying_password"),
-            error_types=(JuyingError,),
-            modes=("normal",),
-        ),
-        "p115": CheckinProvider(
-            key="p115",
-            name="115 网盘",
-            credential_attrs=("_p115_cookies",),
-            error_types=(P115CheckinError,),
-            modes=("normal",),
-        ),
-        "quark": CheckinProvider(
-            key="quark",
-            name="夸克网盘",
-            credential_attrs=("_quark_checkin_url",),
-            error_types=(QuarkCheckinError,),
-            modes=("normal",),
-        ),
-    }
     _HISTORY_LIMIT = 60
     _RETRY_START_HOUR = 9
     _RETRY_END_HOUR = 23
@@ -120,23 +67,19 @@ class CheckinService(OwnerDelegator):
 
     @classmethod
     def _get_providers(cls) -> Dict[str, CheckinProvider]:
-        try:
-            from ..checkin_manager import get_checkin_definitions
-            definitions = get_checkin_definitions()
-            if definitions:
-                return {
-                    key: CheckinProvider(
-                        key=item.key,
-                        name=item.name,
-                        credential_attrs=item.credential_attrs,
-                        error_types=item.error_types,
-                        modes=item.modes,
-                    )
-                    for key, item in definitions.items()
-                }
-        except Exception as err:
-            logger.debug(f"动态加载签到提供者失败，回退默认定义: {err}")
-        return cls._PROVIDERS
+        from ..checkin_manager import get_checkin_definitions
+        definitions = get_checkin_definitions()
+        return {
+            key: CheckinProvider(
+                key=item.key,
+                name=item.name,
+                credential_attrs=item.credential_attrs,
+                error_types=item.error_types,
+                modes=item.modes,
+            )
+            for key, item in definitions.items()
+        }
+
 
     @classmethod
     def _resolve_provider(cls, provider: str) -> Optional[CheckinProvider]:
@@ -149,10 +92,6 @@ class CheckinService(OwnerDelegator):
         ):
             client = getattr(self, "_hdhive_client", None)
             return bool(client and client.is_ready)
-        if provider.key == "hdhaven":
-            return bool(getattr(self, "_hdhaven_username", None)) and bool(
-                getattr(self, "_hdhaven_password", None)
-            )
         return all(
             bool(getattr(self, attr, None))
             for attr in provider.credential_attrs
@@ -168,32 +107,11 @@ class CheckinService(OwnerDelegator):
                 and str(getattr(self, "_hdhive_query_mode", "web")) == "api"
         ):
             return "请先配置并保存 HDHive OpenAPI 应用 Secret 和用户授权"
-        if provider.key == "hdhaven":
-            return "请先配置并保存 HDHaven 用户名和密码"
         return f"请先配置并保存 {provider.name} 账号和密码"
 
+
     def _get_checkin_client(self, provider: CheckinProvider) -> Any:
-        """直接从渠道服务获取签到客户端，不依赖搜索渠道是否启用。"""
-        if provider.key == "hdhive":
-            if str(getattr(self, "_hdhive_query_mode", "web")) == "api":
-                client = getattr(self, "_hdhive_client", None)
-                if not client or not client.is_ready:
-                    raise HDHiveOpenAPIError(
-                        "OPENAPI_USER_REQUIRED",
-                        "HDHive OpenAPI 应用配置或用户授权不完整",
-                    )
-                return client
-            return self._search_component(
-                HDHiveSearchService
-            ).get_client()
-        if provider.key == "hdhaven":
-            return self._search_component(
-                HDHavenSearchService
-            ).get_client()
-        if provider.key == "dian115":
-            return self._search_component(
-                Dian115SearchService
-            ).get_client()
+        """从对应服务或注册表中获取签到客户端。"""
         if provider.key == "p115":
             manager = getattr(self, "_p115_manager", None)
             client = getattr(manager, "client", None) if manager else None
@@ -206,16 +124,16 @@ class CheckinService(OwnerDelegator):
             if isinstance(client, QuarkClient):
                 return client
             raise QuarkCheckinError("夸克客户端未初始化")
-        client = getattr(self, "_juying_client", None)
-        if client and client.is_configured:
-            return client
-        raise JuyingError("聚影账号未配置，请先保存账号和密码")
 
-    def _search_component(self, component_type):
-        """复用搜索处理器创建并缓存的渠道服务组件。"""
-        return get_component(
-            self._search_handler, component_type, "_search_components"
-        )
+        registry = getattr(getattr(self, "_search_handler", None), "_search_registry", None)
+        if registry:
+            search_provider = registry.get(provider.key)
+            if search_provider and search_provider.supports(SearchCapability.CHECKIN):
+                return search_provider.require(SearchCapability.CHECKIN)
+
+
+        err_cls = provider.error_types[0] if provider.error_types else RuntimeError
+        raise err_cls(f"{provider.name} 账号未配置，请先保存账号和密码")
 
     def _refresh_checkin_account(
             self,
@@ -788,8 +706,6 @@ class CheckinService(OwnerDelegator):
     ) -> Dict[str, Any]:
         if adapter.key == "dian115":
             return self._run_dian115_actions(client, mode)
-        if adapter.key in {"hdhive", "hdhaven"}:
-            return client.checkin(is_gambler=mode == "gambler")
         if adapter.key == "p115":
             return self._run_p115_checkin(client)
         if adapter.key == "quark":
@@ -797,6 +713,13 @@ class CheckinService(OwnerDelegator):
                 return client.checkin(getattr(self, "_quark_checkin_url", ""))
             except Exception as error:
                 raise QuarkCheckinError(str(error)) from error
+
+        try:
+            parameters = inspect.signature(client.checkin).parameters
+            if "is_gambler" in parameters:
+                return client.checkin(is_gambler=mode == "gambler")
+        except (TypeError, ValueError):
+            pass
         return client.checkin()
 
     @staticmethod

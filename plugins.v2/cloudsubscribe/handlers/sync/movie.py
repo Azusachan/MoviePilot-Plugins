@@ -143,7 +143,7 @@ class MovieSyncProcessor(OwnerDelegator):
                             target_file=existing_file,
                         )
                         if not existing_strm:
-                            logger.warning(
+                            logger.debug(
                                 f"电影 {subscribe.name} 真实网盘文件已存在，"
                                 "但 STRM 修复尚未完成"
                             )
@@ -325,7 +325,7 @@ class MovieSyncProcessor(OwnerDelegator):
                     continue
 
                 if not self._is_supported_resource(resource, share_url):
-                    logger.warning(
+                    logger.debug(
                         f"跳过当前同步链不支持的资源类型 "
                         f"{self._supported_resource_type(resource, share_url)}：{resource_title}"
                     )

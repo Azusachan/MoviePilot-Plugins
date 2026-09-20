@@ -337,6 +337,13 @@ class HDHiveClient:
                     self._request_gate.clear_cooldown()
                     self._risk_cooldowns.clear()
                     return self._raw_request(method, path, retry_cf=False, **kwargs)
+                else:
+                    self._request_gate.activate_cooldown(
+                        300,
+                        status=403,
+                        reason="Cloudflare 安全质询未通过或超时",
+                    )
+                    self._risk_cooldowns.remember(300, status=403)
 
             body_cooldown = self._body_cooldown_seconds(response)
             if body_cooldown > self._request_gate.cooldown_remaining:

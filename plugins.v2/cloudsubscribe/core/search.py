@@ -342,7 +342,16 @@ class SearchRegistry:
             raise ValueError(f"搜索渠道重复注册：{key}")
         self._providers[key] = provider
 
-    def get(self, key: str) -> SearchProvider:
+    def __contains__(self, key: str) -> bool:
+        return str(key or "").strip().lower() in self._providers
+
+    def has(self, key: str) -> bool:
+        return str(key or "").strip().lower() in self._providers
+
+    def get(self, key: str, default: Optional[SearchProvider] = None) -> Optional[SearchProvider]:
+        return self._providers.get(str(key or "").strip().lower(), default)
+
+    def require(self, key: str) -> SearchProvider:
         normalized = str(key or "").strip().lower()
         provider = self._providers.get(normalized)
         if provider is None:
@@ -351,6 +360,7 @@ class SearchRegistry:
 
     def available(self) -> List[SearchProvider]:
         return list(self._providers.values())
+
 
 
 class CircuitState(str, Enum):

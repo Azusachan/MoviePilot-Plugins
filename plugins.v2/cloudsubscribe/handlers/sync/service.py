@@ -662,7 +662,7 @@ class SyncHandler:
         try:
             return bool(self._should_stop and self._should_stop())
         except Exception as err:
-            logger.warning(f"读取停止状态失败：{err}")
+            logger.debug(f"读取停止状态失败：{err}")
             return False
 
     def _current_task_context(self) -> Tuple[str, Any]:
@@ -898,17 +898,78 @@ class SyncHandler:
                 success_ids = file_ids
             else:
                 processed_items = selected_items
-                success_ids, failed_ids = self._timed_sync_call(
-                    "share_transfer",
-                    self._share_transfer.transfer_files_batch,
-                    share_url=share_url,
-                    file_ids=file_ids,
-                    save_path=self._cloud_transfer_path,
-                    batch_size=self._batch_size,
-                    batch_interval=self._batch_interval,
-                    risk_cooldown=self._transfer_risk_cooldown,
-                    rename_items=rename_items,
-                )
+                pre_existing_ids = set()
+                # 转存前预检转存目录：若转存路径下已存在待转存文件，直接复用并跳过向网盘发起重复转存，防止网盘报错或重复转存卡死
+                staging_valid, staging_index = self._cloud_directory_snapshot(self._cloud_transfer_path)
+                if staging_valid and staging_index:
+                    for item in selected_items:
+                        file_id = str(item["file"]["id"])
+                        target_name = str(item.get("target_name") or "").strip()
+                        raw_name = str(item["file"].get("name") or "").strip()
+                        file_size = int(item["file"].get("size") or 0)
+                        file_sha1 = str(item["file"].get("sha1") or "").upper()
+                        matched_staging_file = None
+                        if target_name and target_name in staging_index:
+                            matched_staging_file = staging_index[target_name]
+                        elif raw_name and raw_name in staging_index:
+                            matched_staging_file = staging_index[raw_name]
+                        elif file_sha1:
+                            matched_staging_file = next(
+                                (f for f in staging_index.values() if
+                                 str(getattr(f, "sha1", "") or "").upper() == file_sha1),
+                                None
+                            )
+                        elif file_size > 0:
+                            matched_staging_file = next(
+                                (f for f in staging_index.values() if int(getattr(f, "size", 0) or 0) == file_size and (
+                                        target_name and getattr(f, "name", "").startswith(Path(target_name).stem)
+                                        or raw_name and getattr(f, "name", "").startswith(Path(raw_name).stem)
+                                )),
+                                None
+                            )
+                        if matched_staging_file:
+                            pre_existing_ids.add(file_id)
+                            item["file"]["staging_name"] = matched_staging_file.name
+                            logger.debug(
+                                f"转存目录已存在目标资源，复用并跳过重复转存：{self._cloud_transfer_path}/{matched_staging_file.name}"
+                            )
+
+                remaining_file_ids = [fid for fid in file_ids if fid not in pre_existing_ids]
+                if remaining_file_ids:
+                    success_ids, failed_ids = self._timed_sync_call(
+                        "share_transfer",
+                        self._share_transfer.transfer_files_batch,
+                        share_url=share_url,
+                        file_ids=remaining_file_ids,
+                        save_path=self._cloud_transfer_path,
+                        batch_size=self._batch_size,
+                        batch_interval=self._batch_interval,
+                        risk_cooldown=self._transfer_risk_cooldown,
+                        rename_items=rename_items,
+                    )
+                else:
+                    success_ids, failed_ids = [], []
+
+                success_ids = list(success_ids or []) + list(pre_existing_ids)
+
+                # 对网盘转存返回失败的项进行转存目录复核自愈（防止网盘因已存在报错等返回假失败）
+                if failed_ids:
+                    _, post_staging_index = self._cloud_directory_snapshot(self._cloud_transfer_path)
+                    recheck_success = []
+                    for fid in failed_ids:
+                        target_item = next((it for it in selected_items if str(it["file"]["id"]) == fid), None)
+                        if not target_item:
+                            continue
+                        t_name = str(target_item.get("target_name") or "")
+                        r_name = str(target_item["file"].get("name") or "")
+                        if (t_name and t_name in post_staging_index) or (r_name and r_name in post_staging_index):
+                            recheck_success.append(fid)
+                            logger.debug(f"转存虽返回失败但转存目录已核验到文件，自愈恢复：{t_name or r_name}")
+                    if recheck_success:
+                        success_ids.extend(recheck_success)
+                        recheck_set = set(recheck_success)
+                        failed_ids = [fid for fid in failed_ids if fid not in recheck_set]
+
                 if (
                         failed_ids and not success_ids
                         and bool(getattr(
@@ -1713,7 +1774,7 @@ class SyncHandler:
             if self._offline_pending_changed:
                 self._offline_pending_changed(max(0, int(pending_count or 0)))
         except Exception as error:
-            logger.warning(f"更新网盘文件后处理监控状态失败：{error}")
+            logger.debug(f"更新网盘文件后处理监控状态失败：{error}")
 
     @staticmethod
     def _finalize_source_identity(
@@ -1975,9 +2036,9 @@ class SyncHandler:
         if pending_key:
             info_hash = self._offline_hash(share_url)
             if info_hash:
-                logger.info(f"⏳ 已登记离线完成监控：{file_name}")
+                logger.debug(f"⏳ 已登记离线完成监控：{file_name}")
             else:
-                logger.info(f"⏳ 文件仍在115系统处理中，已登记重命名与STRM后处理：{file_name}")
+                logger.debug(f"⏳ 文件仍在115系统处理中，已登记重命名与STRM后处理：{file_name}")
         return pending_key
 
     def _generate_or_queue_strm(
@@ -2221,9 +2282,9 @@ class SyncHandler:
             try:
                 mediainfo = self._deserialize_mediainfo(media_data)
             except Exception as error:
-                logger.warning(f"后处理订阅进度媒体信息恢复失败：{error}")
+                logger.debug(f"后处理订阅进度媒体信息恢复失败：{error}")
         if not mediainfo or not success_episodes:
-            logger.warning(
+            logger.debug(
                 f"跳过后处理订阅进度更新：媒体信息={'有' if mediainfo else '无'}，"
                 f"完成集数={success_episodes or '无'}"
             )
@@ -2342,29 +2403,26 @@ class SyncHandler:
         # 直接复用已配置的转存目录，不为跨盘任务创建额外目录。
         return str(PurePosixPath(base_path))
 
-    @staticmethod
+    @classmethod
     def _cleanup_cross_transfer_staging(
-            source: CloudDriveProvider, staged_path: str,
+            cls,
+            source: CloudDriveProvider,
+            staged_path: str = "",
             item: Optional[CloudFile] = None,
     ) -> None:
-        if not source.supports(CloudDriveCapability.FILE_MUTATION):
+        """清理跨盘转存生成的临时源盘文件。
+        
+        注意：绝对不能删除 staged_path 目录本身！因为该目录直接复用用户配置的转存路径（如 /整理/待整理）。
+        """
+        if not source or not source.supports(CloudDriveCapability.FILE_MUTATION):
             return
-        mutation = source.require(CloudDriveCapability.FILE_MUTATION)
-        if staged_path and source.supports(CloudDriveCapability.DIRECTORY_READ):
+        if item and getattr(item, "id", None):
             try:
-                lookup = source.require(
-                    CloudDriveCapability.DIRECTORY_READ
-                ).resolve_directory(staged_path)
-                if lookup.checked and lookup.directory_id is not None:
-                    if mutation.delete_file(lookup.directory_id):
-                        return
-            except Exception as error:
-                logger.warning(f"清理源盘跨盘临时目录失败：{error}")
-        if item:
-            try:
+                mutation = source.require(CloudDriveCapability.FILE_MUTATION)
                 mutation.delete_file(item.id)
+                logger.debug(f"已清理源盘跨盘临时文件：{getattr(item, 'name', '')} ({item.id})")
             except Exception as error:
-                logger.warning(f"清理源盘跨盘临时文件失败：{error}")
+                logger.debug(f"清理源盘跨盘临时文件失败：{error}")
 
     def _transfer_file(
             self, share_url: str, file_item: Dict[str, Any], save_path: str,
@@ -2524,11 +2582,22 @@ class SyncHandler:
                     # 只清理分享转存产生的源盘暂存文件，绝不删除用户选择的网盘文件。
                     self._cleanup_cross_transfer_staging(source, "", item)
         service = source.require(CloudDriveCapability.SHARE_TRANSFER) if source else self._share_transfer
-        return bool(service.transfer_file(
+        target_check_name = target_name or file_item.get("name")
+        success = bool(service.transfer_file(
             share_url=share_url, file_id=file_item.get("id"),
             save_path=save_path, target_name=target_name,
             source_sha1=source_sha1,
         ))
+        if not success and target_check_name:
+            t_valid, t_index = self._cloud_directory_snapshot(save_path)
+            if t_valid and (
+                    target_check_name in t_index
+                    or (target_name and target_name in t_index)
+                    or (file_item.get("name") and file_item.get("name") in t_index)
+            ):
+                logger.debug(f"单文件转存返回失败但转存目录复核已存在，自愈复用：{save_path}/{target_check_name}")
+                return True
+        return success
 
     @staticmethod
     def _reconcile_subscribe_physical_episodes(
@@ -2619,7 +2688,7 @@ class SyncHandler:
                     completed_count += 1
 
             except Exception as e:
-                logger.warning(f"订阅完结检查异常 {getattr(subscribe, 'name', '?')}：{e}")
+                logger.debug(f"订阅完结检查异常 {getattr(subscribe, 'name', '?')}：{e}")
                 logger.debug(traceback.format_exc())
 
         return completed_count

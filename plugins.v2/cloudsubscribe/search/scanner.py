@@ -88,44 +88,6 @@ class SearchSourceRegistry:
             })
         return schemas
 
-
-def assemble_search_registry(
-        owner: Any,
-        pansou_service: Any = None,
-        hdhive_service: Any = None,
-        dian115_service: Any = None,
-        hdhaven_service: Any = None,
-) -> SearchRegistry:
-    """自动调度已注册渠道规范，组装可用搜索渠道注册表。"""
-    registry = SearchRegistry()
-    context = {
-        "owner": owner,
-        "resource_types": tuple(getattr(owner, "_resource_type_order_config", ())),
-        "proxy": getattr(owner, "_search_proxy", None),
-        "pansou_service": pansou_service,
-        "hdhive_service": hdhive_service,
-        "dian115_service": dian115_service,
-        "hdhaven_service": hdhaven_service,
-    }
-
-    definitions = SearchSourceRegistry.get_definitions()
-    for def_cls in definitions:
-        try:
-            # 1. 尝试从定义工厂构建
-            client = def_cls.create_client(owner.__dict__, context)
-            service = def_cls.create_service(client, owner.__dict__, context)
-            provider = def_cls.create_provider(service, client, owner.__dict__, context)
-            if provider:
-                registry.register(provider)
-        except NotImplementedError:
-            # 未实现工厂的留待外部显式装配
-            continue
-        except Exception as err:
-            logger.warning(f"搜索渠道 {def_cls.id} 初始化失败，已跳过：{err}")
-
-    return registry
-
-
 def get_search_source_definitions() -> List[Type[SearchSourceDefinition]]:
     """获取所有已发现的搜索渠道定义列表。"""
     return SearchSourceRegistry.get_definitions()

@@ -8,10 +8,7 @@ from .scanner import SearchSourceRegistry
 
 def create_search_registry(
         owner: Any,
-        pansou_service: Any = None,
-        hdhive_service: Any = None,
-        dian115_service: Any = None,
-        hdhaven_service: Any = None,
+        **extra_context: Any,
 ) -> SearchRegistry:
     """根据当前配置自动扫描并组装可用搜索渠道。"""
     registry = SearchRegistry()
@@ -19,13 +16,9 @@ def create_search_registry(
     context = {
         "owner": owner,
         "storage_owner": getattr(owner, "_plugin", None) or owner,
-        "test_mode": bool(getattr(owner, "_test_mode", False)),
         "resource_types": resource_types,
         "proxy": getattr(owner, "_search_proxy", None),
-        "pansou_service": pansou_service,
-        "hdhive_service": hdhive_service,
-        "dian115_service": dian115_service,
-        "hdhaven_service": hdhaven_service,
+        **extra_context,
     }
 
     for def_cls in SearchSourceRegistry.get_definitions():

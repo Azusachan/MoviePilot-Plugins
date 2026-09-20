@@ -1805,14 +1805,14 @@ class HistoryService(OwnerDelegator):
             raise RuntimeError("历史记录存储未初始化")
         with self._offline_pending_lock:
             history = self._get_data("history") or []
-            retained = [] if force else [
-                record for record in history
-                if not self._history_record_deletable(record)
-            ]
-            deleted_records = [
-                record for record in history if record not in retained
-            ]
-            deleted_count = len(history) - len(retained)
+            retained = []
+            deleted_records = []
+            for record in history:
+                if not force and not self._history_record_deletable(record):
+                    retained.append(record)
+                else:
+                    deleted_records.append(record)
+            deleted_count = len(deleted_records)
             if deleted_count:
                 self._save_data("history", retained)
         if deleted_count:

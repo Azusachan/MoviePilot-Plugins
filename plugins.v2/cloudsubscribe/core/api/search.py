@@ -26,6 +26,7 @@ from ...search.scanner import SearchSourceRegistry
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
     PREVIEW_RESOURCE_TYPES,
+    RESOURCE_TYPE_ORDER,
     RESOURCE_TYPE_PRIORITY,
     SUPPORTED_RESOURCE_TYPES,
     normalize_resource_type,
@@ -62,54 +63,32 @@ class SearchApi(OwnerDelegator):
 
     @staticmethod
     def _sort_size(value: Any) -> float:
-        """将候选资源大小转换为稳定的排序值，兼容带单位的文本。"""
+        """将候选资源大小转换为稳定的排序值，兼容数值与带单位文本。"""
+        if isinstance(value, (int, float)):
+            return max(0.0, float(value))
         return float(parse_size_str(value))
 
-    @staticmethod
-    def _display_tags(item: Dict[str, Any]) -> List[str]:
-        values = [item.get("tags") or []]
-        values.extend(
-            item.get(key)
-            for key in (
-                "resolution", "quality", "source_type", "codec",
-                "audio_codec", "hdr_type", "subtitle",
-            )
-            if item.get(key)
-        )
+    @classmethod
+    def _display_tags(cls, item: Dict[str, Any]) -> List[str]:
+        raw_tags = item.get("tags")
+        tag_candidates: List[str] = []
+        if isinstance(raw_tags, (list, tuple, set)):
+            tag_candidates.extend(str(x).strip() for x in raw_tags if x)
+        elif isinstance(raw_tags, str) and raw_tags.strip():
+            tag_candidates.append(raw_tags.strip())
 
-        tags: List[str] = []
-        seen_tags = set()
+        for key in (
+            "resolution", "quality", "source_type", "codec",
+            "audio_codec", "hdr_type", "subtitle",
+        ):
+            val = item.get(key)
+            if isinstance(val, (list, tuple, set)):
+                tag_candidates.extend(str(x).strip() for x in val if x)
+            elif isinstance(val, str) and val.strip():
+                tag_candidates.append(val.strip())
 
-        def append_tag(value: Any) -> None:
-            if isinstance(value, dict):
-                for nested in value.values():
-                    append_tag(nested)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for nested in value:
-                    append_tag(nested)
-                return
-
-            text = str(value or "").strip()
-            if not text:
-                return
-            if text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
-                try:
-                    parsed = ast.literal_eval(text)
-                except (SyntaxError, ValueError):
-                    parsed = None
-                if isinstance(parsed, (dict, list, tuple, set)):
-                    append_tag(parsed)
-                    return
-            if text in seen_tags:
-                return
-            seen_tags.add(text)
-            tags.append(text)
-
-        for value in values:
-            append_tag(value)
-        title_for_tags = str(item.get("title") or item.get("name") or "").strip()
-        return extract_resource_tags(title_for_tags, tags)
+        title = str(item.get("title") or item.get("name") or "").strip()
+        return extract_resource_tags(title, tag_candidates)
     def __init__(self, owner):
         super().__init__(owner)
 
@@ -230,18 +209,15 @@ class SearchApi(OwnerDelegator):
         resource_ref = str(payload.get("resource_ref") or "").strip()
         is_unlocked = bool(payload.get("is_unlocked"))
         parent_id = str(payload.get("parent_id") or "").strip()
-        pending_juying = source == "juying" and bool(juying_resource_id)
-        pending_seedhub = (
-                source == "seedhub"
-                and not url
-                and bool(payload.get("pending_resolution"))
-                and bool(provider_data.get("kind"))
-        )
-        pending_pinglian = (
-                source == "pinglian"
-                and not url
-                and bool(payload.get("pending_resolution"))
-                and bool(provider_data.get("token"))
+        pending_resolve = (
+            not url
+            and (
+                bool(juying_resource_id)
+                or (
+                    bool(payload.get("pending_resolution"))
+                    and any(provider_data.get(k) for k in ("kind", "token", "seed_id", "resource_id"))
+                )
+            )
         )
         valid_hdhive_url = bool(
             url and "\\" not in url
@@ -258,19 +234,13 @@ class SearchApi(OwnerDelegator):
                 and not url
         )
         if (
-                not url and not pending_juying and not pending_hdhive
+                not url and not pending_resolve and not pending_hdhive
                 and not pending_hdhaven
-                and not pending_seedhub and not pending_pinglian
         ) or len(url) > 8192:
             return {"success": False, "message": "资源链接无效"}
-        if pending_juying and (
-                len(juying_resource_id) > 32
-                or not juying_resource_id.isdigit()
-        ):
-            return {"success": False, "message": "聚影资源标识无效"}
         if len(parent_id) > 256:
             return {"success": False, "message": "目录标识无效"}
-        if (pending_seedhub or pending_pinglian) and parent_id:
+        if pending_resolve and parent_id:
             return {"success": False, "message": "待解析资源不支持目录导航"}
         if pending_hdhive and (
                 resource_type not in HDHIVE_DETAIL_RESOURCE_TYPES
@@ -278,27 +248,22 @@ class SearchApi(OwnerDelegator):
         ):
             return {"success": False, "message": "HDHive 资源标识或类型无效"}
         try:
-            if pending_seedhub or pending_pinglian:
+            if pending_resolve:
                 handler = self._build_test_search_handler(
                     source,
                     self._test_search_config(source, payload.get("config")),
                 )
                 try:
-                    resolve_args = (
-                        {
-                            "kind": str(provider_data.get("kind") or ""),
-                            "resource_type": resource_type,
-                            "seed_id": str(provider_data.get("seed_id") or ""),
-                            "path": str(provider_data.get("path") or ""),
-                            "host": str(provider_data.get("host") or ""),
-                        }
-                        if pending_seedhub
-                        else {
-                            "token": str(provider_data.get("token") or ""),
-                            "resource_type": resource_type,
-                            "password": str(provider_data.get("password") or ""),
-                        }
-                    )
+                    resolve_args = {
+                        "resource_id": juying_resource_id or str(provider_data.get("resource_id") or resource_ref).strip(),
+                        "token": str(provider_data.get("token") or resource_ref),
+                        "password": str(provider_data.get("password") or ""),
+                        "resource_type": resource_type,
+                        "kind": str(provider_data.get("kind") or ""),
+                        "seed_id": str(provider_data.get("seed_id") or ""),
+                        "path": str(provider_data.get("path") or ""),
+                        "host": str(provider_data.get("host") or ""),
+                    }
                     resolved = handler.resolve_source_resource(
                         source, **resolve_args
                     )
@@ -307,7 +272,7 @@ class SearchApi(OwnerDelegator):
                 url = str(resolved.get("url") or "").strip()
                 resource_type = normalize_resource_type(
                     resolved.get("resource_type")
-                )
+                ) or resource_type
                 if not url:
                     raise RuntimeError("资源链接解析失败")
             if pending_hdhive:
@@ -458,25 +423,6 @@ class SearchApi(OwnerDelegator):
                     },
                 }
 
-            if pending_juying and not url:
-                if parent_id:
-                    return {"success": False, "message": "聚影资源链接已失效，请重新预览"}
-                handler = self._build_test_search_handler(
-                    "juying",
-                    self._test_search_config("juying", payload.get("config")),
-                )
-                try:
-                    resolved = handler.resolve_source_resource(
-                        "juying", resource_id=juying_resource_id
-                    )
-                finally:
-                    handler.close(release_cache=False)
-                url = str(resolved.get("url") or "").strip()
-                resource_type = normalize_resource_type(
-                    resolved.get("resource_type")
-                )
-                if not url:
-                    raise RuntimeError("聚影资源链接为空")
             if resource_type == "magnet":
                 if parent_id:
                     return {"success": False, "message": "磁力链接不支持目录导航"}
@@ -573,9 +519,7 @@ class SearchApi(OwnerDelegator):
             handler = self._build_test_search_handler(
                 source,
                 self._test_search_config(source, payload.get("config")),
-                confirmed_unlock_points=(
-                    points if source in ("hdhive", "dian115", "hdhaven") else 0
-                ),
+                confirmed_unlock_points=points,
             )
             try:
                 if not handler.supports(
@@ -659,22 +603,27 @@ class SearchApi(OwnerDelegator):
         )
         if definition is None:
             raise ValueError(f"搜索渠道未注册：{source}")
-        resource_type_order = [
-            "115", "123", "quark", "guangya", "tianyi", "alipan",
-            "ed2k", "magnet",
-        ]
+        resource_type_order = list(
+            config.get("resource_type_order")
+            or getattr(self, "_resource_type_order", None)
+            or RESOURCE_TYPE_ORDER
+        )
+        pansou_cloud_types = list(
+            config.get("pansou_cloud_types")
+            or getattr(self, "_pansou_cloud_types", None)
+            or resource_type_order
+        )
 
         confirmed_unlock_points = max(0, int(confirmed_unlock_points or 0))
         params = dict(config)
         params.update({
-            "pansou_cloud_types": resource_type_order,
+            "pansou_cloud_types": pansou_cloud_types,
             "resource_type_order": resource_type_order,
             "pansou_refresh": False,
             "search_source_order": [source],
             "search_proxy": proxy,
             "search_cache_enabled": False,
             "search_concurrency": 1,
-            "test_mode": True,
             "should_stop": (
                 (lambda: time.monotonic() >= deadline) if deadline else None
             ),
@@ -982,59 +931,6 @@ class SearchApi(OwnerDelegator):
         items = []
         resource_type_counts: Dict[str, int] = {}
 
-        def display_size(item: Dict[str, Any]) -> Any:
-            human = str(item.get("size_human") or "").strip()
-            if human:
-                return human
-            value = item.get("size")
-            if not isinstance(value, (int, float)) or value <= 0:
-                return value or 0
-            return StringUtils.format_size(int(value))
-
-        def display_tags(item: Dict[str, Any]) -> List[str]:
-            values = [item.get("tags") or []]
-            values.extend(
-                item.get(key)
-                for key in (
-                    "resolution", "quality", "source_type", "codec",
-                    "audio_codec", "hdr_type", "subtitle",
-                )
-                if item.get(key)
-            )
-
-            tags: List[str] = []
-            seen_tags = set()
-
-            def append_tag(value: Any) -> None:
-                if isinstance(value, dict):
-                    for nested in value.values():
-                        append_tag(nested)
-                    return
-                if isinstance(value, (list, tuple, set)):
-                    for nested in value:
-                        append_tag(nested)
-                    return
-
-                text = str(value or "").strip()
-                if not text:
-                    return
-                if text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
-                    try:
-                        parsed = ast.literal_eval(text)
-                    except (SyntaxError, ValueError):
-                        parsed = None
-                    if isinstance(parsed, (dict, list, tuple, set)):
-                        append_tag(parsed)
-                        return
-                if text in seen_tags:
-                    return
-                seen_tags.add(text)
-                tags.append(text)
-
-            for value in values:
-                append_tag(value)
-            return tags
-
         for item in (results or [])[:self._SEARCH_TEST_DISPLAY_LIMIT]:
             source_url = ""
             for value in (item.get("source_url"), item.get("media_page_url")):
@@ -1062,9 +958,9 @@ class SearchApi(OwnerDelegator):
                 "resource_type_name": resource_type_name(
                     resource_type, resource_type.upper() or "未知"
                 ),
-                "size": display_size(item),
+                "size": self._display_size(item),
                 "size_bytes": item.get("size") or 0,
-                "tags": display_tags(item),
+                "tags": self._display_tags(item),
                 "description": str(item.get("description") or "").strip(),
                 "source_url": source_url,
                 "url": str(
@@ -1342,15 +1238,21 @@ class SearchApi(OwnerDelegator):
                 item_copy["tags"] = self._display_tags(item)
                 if not item_copy.get("size_formatted"):
                     item_copy["size_formatted"] = self._display_size(item)
+
+                size_bytes = self._sort_size(item.get("size"))
+                item_copy["size_bytes"] = size_bytes
+                try:
+                    seeders_count = int(item.get("seeders") or 0)
+                except (TypeError, ValueError):
+                    seeders_count = 0
+                item_copy["seeders"] = seeders_count
+
                 all_items.append(item_copy)
                 resource_type_counts[r_type] = resource_type_counts.get(r_type, 0) + 1
 
-        # 排序：有做种数排前面，其次按大小降序
+        # 排序：有做种数排前面，其次按大小降序（纯数值比较，无正则开销）
         all_items.sort(
-            key=lambda x: (
-                self._sort_size(x.get("seeders")),
-                self._sort_size(x.get("size")),
-            ),
+            key=lambda x: (x.get("seeders", 0), x.get("size_bytes", 0)),
             reverse=True,
         )
         elapsed = round(time.monotonic() - started, 2)
@@ -1358,17 +1260,19 @@ class SearchApi(OwnerDelegator):
             f"✅ [网盘资源嗅探] 《{title}》检索完成，有效候选共 {len(all_items)} 条，总耗时 {elapsed}s"
         )
 
-        # 构造网盘分类和资源类型 tabs 统计列表
+        # 构造网盘分类和资源类型 tabs 统计列表（统一按资源优先级与数量排列）
         resource_types_list = [
             {
                 "value": t_val,
-                "title": resource_type_name(t_val, t_val.upper()),
+                "title": resource_type_name(t_val, t_val.upper() if t_val else "未知"),
                 "count": t_cnt,
             }
             for t_val, t_cnt in sorted(
                 resource_type_counts.items(),
-                key=lambda x: x[1],
-                reverse=True,
+                key=lambda pair: (
+                    RESOURCE_TYPE_PRIORITY.get(pair[0], 99),
+                    -pair[1],
+                ),
             )
         ]
 

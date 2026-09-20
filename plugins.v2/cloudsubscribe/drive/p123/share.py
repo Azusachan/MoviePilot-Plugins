@@ -212,19 +212,32 @@ class P123ShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs: Any,
+            target_name: str = "", **kwargs: Any,
     ) -> bool:
-        return self._copy(share_url, [str(file_id)], save_path)
+        success = self._copy(share_url, [str(file_id)], save_path)
+        if not success:
+            if target_name and self._files.find_file(save_path, target_name):
+                return True
+            info, items = self._resolve_items(share_url, [file_id])
+            raw_name = str((items.get(str(file_id)) or {}).get("item", {}).get("name") or "")
+            if raw_name and self._files.find_file(save_path, raw_name):
+                return True
+        return success
 
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = list(dict.fromkeys(str(value) for value in file_ids))
-        succeeded = []
-        failed = []
+        if not normalized:
+            return [], []
+        rename_items = kwargs.get("rename_items") or {}
+        succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 100,
         ):
-            (succeeded if self._copy(share_url, batch, save_path) else failed).extend(batch)
+            if self._copy(share_url, batch, save_path):
+                succeeded.extend(batch)
+            else:
+                failed.extend(batch)
         return succeeded, failed

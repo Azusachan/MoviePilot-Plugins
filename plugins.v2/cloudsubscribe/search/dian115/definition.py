@@ -6,7 +6,7 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
-from .client import Dian115Error
+from .client import Dian115Client, Dian115Error
 from .provider import create_dian115_provider
 
 
@@ -224,11 +224,37 @@ class Dian115SourceDefinition(SearchSourceDefinition):
         ]
 
     @classmethod
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
+        ctx = context or {}
+        email = str(cls.config_value(config, "dian115_email", "") or "").strip()
+        password = str(cls.config_value(config, "dian115_password", "") or "").strip()
+        if not email or not password:
+            return None
+        owner = ctx.get("storage_owner")
+        return Dian115Client(
+            email=email,
+            password=password,
+            proxy=ctx.get("proxy"),
+            request_interval=float(cls.config_value(config, "dian115_request_interval", 1.0) or 1.0),
+            unlocks_per_minute=int(cls.config_value(config, "dian115_unlocks_per_minute", 6) or 6),
+            timeout=int(cls.config_value(config, "dian115_timeout", 30) or 30),
+            get_data_func=getattr(owner, "get_data", None),
+            save_data_func=getattr(owner, "save_data", None),
+        )
+
+    @classmethod
     def create_provider(
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
     ) -> Any:
         ctx = context or {}
         dian115_service = ctx.get("dian115_service")
+        if not dian115_service and ctx.get("owner"):
+            try:
+                from .service import Dian115SearchService
+                dian115_service = Dian115SearchService(ctx["owner"])
+            except Exception:
+                dian115_service = None
         if dian115_service and getattr(dian115_service, "available", False):
             return create_dian115_provider(dian115_service)
         return None
+

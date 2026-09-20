@@ -292,21 +292,27 @@ class QuarkShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs: Any,
+            target_name: str = "", **kwargs: Any,
     ) -> bool:
-        return self._save_share(share_url, [file_id], save_path)
+        success = self._save_share(share_url, [file_id], save_path)
+        if not success and target_name:
+            if self._files.find_file(save_path, target_name):
+                return True
+        return success
 
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = [str(value) for value in file_ids]
+        if not normalized:
+            return [], []
+        rename_items = kwargs.get("rename_items") or {}
         batch_size = max(1, min(int(kwargs.get("batch_size", 5) or 5), 20))
         interval = max(0.0, min(float(kwargs.get("batch_interval", 3) or 0), 60.0))
         self.client.risk_cooldown = max(
             60, min(int(kwargs.get("risk_cooldown", 1800) or 1800), 86400)
         )
-        succeeded = []
-        failed = []
+        succeeded, failed = [], []
         for offset in range(0, len(normalized), batch_size):
             batch = normalized[offset:offset + batch_size]
             if self._save_share(share_url, batch, save_path):

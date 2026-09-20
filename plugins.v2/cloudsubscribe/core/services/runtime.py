@@ -167,6 +167,7 @@ class SyncRuntimeService(OwnerDelegator):
             }:
                 return
             pending_key = str(values.pop("_pending_key", "") or "").strip()
+            file_completed = bool(values.pop("file_completed", False))
             active = values.get("postprocess_active")
             active_key = str(task.get("_postprocess_active_key") or "")
             if active is False and active_key and pending_key != active_key:
@@ -174,6 +175,15 @@ class SyncRuntimeService(OwnerDelegator):
             file_keys = list(task.get("_postprocess_file_keys") or [])
             if pending_key and pending_key not in file_keys:
                 file_keys.append(pending_key)
+            completed_keys = set(task.get("_postprocess_completed_keys") or [])
+            if file_completed and pending_key:
+                completed_keys.add(pending_key)
+            task["_postprocess_completed_keys"] = list(completed_keys)
+            completed_count = len(completed_keys)
+            total_count = max(len(file_keys), int(task.get("postprocess_file_total") or len(file_keys)))
+            values["postprocess_file_completed"] = completed_count
+            values["postprocess_file_total"] = total_count
+
             if pending_key and active is not False:
                 values["status"] = (
                     "downloading"
@@ -184,17 +194,18 @@ class SyncRuntimeService(OwnerDelegator):
                 )
                 task["_postprocess_active_key"] = pending_key
                 values["postprocess_file_index"] = file_keys.index(pending_key) + 1
-                values["postprocess_file_total"] = len(file_keys)
                 step_index = max(0, int(values.get("postprocess_step_index") or 0))
                 step_total = max(1, int(values.get("postprocess_step_total") or 1))
                 file_progress = (
-                                        values["postprocess_file_index"] - 1
-                                        + (step_index + 1) / step_total
-                                ) / max(1, len(file_keys))
-                values["postprocess_progress"] = round(file_progress * 100, 2)
+                    completed_count
+                    + (step_index + 1) / step_total
+                ) / max(1, total_count)
+                values["postprocess_progress"] = round(min(1.0, file_progress) * 100, 2)
                 values["progress"] = min(99, 95 + int(file_progress * 4))
             elif active is False:
                 task["_postprocess_active_key"] = ""
+                if total_count > 0:
+                    values["postprocess_progress"] = round(completed_count * 100 / max(1, total_count), 2)
             task["_postprocess_file_keys"] = file_keys
             if any(task.get(key) != value for key, value in values.items()):
                 task.update(values)
@@ -1182,9 +1193,16 @@ class SyncRuntimeService(OwnerDelegator):
             for item in tasks
             if item.get("id")
         }
+        offline_pending_count = 0
         for item in pending:
+            task_type = str(item.get("task_type") or "share").strip().lower()
+            is_offline_type = task_type in {"magnet", "ed2k", "offline"}
             task_id = str(item.get("task_id") or "").upper()
             task = task_by_id.get(task_id) if task_id else None
+            # 只有明确是离线类型，或在网盘返回的离线任务中存在对应 task_id 的任务，才参与离线列表合并
+            if not is_offline_type and not task:
+                continue
+            offline_pending_count += 1
             pending_meta = {
                 "pending_key": item.get("pending_key"),
                 "finalize_pending": True,
@@ -1193,15 +1211,15 @@ class SyncRuntimeService(OwnerDelegator):
                 "size": int(item.get("file_size") or (task or {}).get("size") or 0),
                 "postprocess_text": (
                     "等待下载完成后读取真实文件并匹配"
-                    if (item.get("task_type") or "share") == "magnet"
+                    if task_type == "magnet"
                     else "等待下载完成或文件处理"
-                    if (item.get("task_type") or "share") == "ed2k"
+                    if task_type == "ed2k"
                     else "等待系统处理、重命名和STRM"
                 ),
             }
             if task:
                 task.update(pending_meta)
-            else:
+            elif is_offline_type:
                 synthetic = {
                     "id": task_id,
                     "name": item.get("file_name") or "未命名文件",
@@ -1215,7 +1233,7 @@ class SyncRuntimeService(OwnerDelegator):
                 }
                 tasks.insert(0, synthetic)
         result["tasks"] = tasks
-        result["pending_count"] = len(pending)
+        result["pending_count"] = offline_pending_count
         return result
 
     def api_retry_offline_tasks(

@@ -284,7 +284,7 @@ def resolve_directory_path(
                 path_cache.set(current_path, current_id)
             return DirectoryLookup(True, current_id)
     except Exception as error:
-        logger.warning(f"解析{provider_name}目录失败：{path} - {error}")
+        logger.debug(f"解析{provider_name}目录失败：{path} - {error}")
         return DirectoryLookup(False)
 
 
@@ -364,7 +364,7 @@ class CloudDriveFileServiceBase:
                 tuple(self._list(directory_id or self.root_directory_id)),
             )
         except Exception as error:
-            logger.warning(f"读取{self.provider_name}目录失败：{error}")
+            logger.debug(f"读取{self.provider_name}目录失败：{error}")
             return DirectoryListing(False)
 
     def list_directories(self, path: str) -> list[Dict[str, str]]:

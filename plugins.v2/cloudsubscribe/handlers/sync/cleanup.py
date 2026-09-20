@@ -259,15 +259,16 @@ class HistoryCleanupService(OwnerDelegator):
                 if self._cloud_items_are_generated_metadata(
                         remaining_files, target_stems
                 ):
-                    if self._cloud_mutations.delete_file(lookup.directory_id):
-                        cloud_deleted += len(target_files)
-                        directories_deleted += 1
-                        if self._is_season_directory(
-                                cloud_dir, directory_records[0]
-                        ):
-                            directories_deleted += self._cleanup_cloud_media_parent(
-                                cloud_dir
-                            )
+                    if not self._is_protected_cloud_directory(cloud_dir):
+                        if self._cloud_mutations.delete_file(lookup.directory_id):
+                            cloud_deleted += len(target_files)
+                            directories_deleted += 1
+                            if self._is_season_directory(
+                                    cloud_dir, directory_records[0]
+                            ):
+                                directories_deleted += self._cleanup_cloud_media_parent(
+                                    cloud_dir
+                                )
                     continue
                 file_ids = [item.id for item in target_files]
                 if not file_ids:
@@ -392,7 +393,40 @@ class HistoryCleanupService(OwnerDelegator):
             return False
         return len(relative.parts) >= 2
 
+    def _is_protected_cloud_directory(self, cloud_dir: str) -> bool:
+        """检查网盘路径是否为受保护的系统路径（如根目录、转存路径、媒体库根目录及其父级），严禁级联删除。"""
+        candidate = PurePosixPath(str(cloud_dir or "/").strip())
+        candidate_str = str(candidate).rstrip("/") or "/"
+        if candidate_str == "/":
+            return True
+        protected_paths = set()
+        media_root = getattr(self, "_CLOUD_MEDIA_ROOT", "/") or "/"
+        protected_paths.add(PurePosixPath(media_root))
+        transfer_path = getattr(self, "_cloud_transfer_path", None)
+        if transfer_path:
+            protected_paths.add(PurePosixPath(transfer_path))
+        all_transfer_paths = getattr(self, "_cloud_transfer_paths", {}) or {}
+        if isinstance(all_transfer_paths, dict):
+            for p in all_transfer_paths.values():
+                if p:
+                    protected_paths.add(PurePosixPath(p))
+        for prot in protected_paths:
+            prot_str = str(prot).rstrip("/") or "/"
+            if not prot_str:
+                continue
+            if candidate_str == prot_str:
+                return True
+            try:
+                prot.relative_to(candidate)
+                return True
+            except ValueError:
+                pass
+        return False
+
     def _delete_cloud_directory_direct(self, cloud_dir: str) -> bool:
+        if self._is_protected_cloud_directory(cloud_dir):
+            logger.warning(f"拒绝删除受保护的网盘目录：{cloud_dir}")
+            return False
         if len(self._cloud_media_relative_parts(cloud_dir)) < 2:
             return False
         try:
@@ -403,7 +437,7 @@ class HistoryCleanupService(OwnerDelegator):
                 and self._cloud_mutations.delete_file(lookup.directory_id)
             )
         except Exception as error:
-            logger.warning(f"直接删除关联115目录失败，将回退逐文件删除：{cloud_dir} - {error}")
+            logger.warning(f"直接删除关联网盘目录失败，将回退逐文件删除：{cloud_dir} - {error}")
             return False
 
     @classmethod
@@ -488,6 +522,9 @@ class HistoryCleanupService(OwnerDelegator):
     def _cleanup_cloud_media_parent(self, cloud_dir: str) -> int:
         child_path = PurePosixPath(cloud_dir)
         parent_path = str(child_path.parent) or "/"
+        if self._is_protected_cloud_directory(parent_path):
+            logger.debug(f"父级目录属于受保护路径，跳过清理：{parent_path}")
+            return 0
         if len(self._cloud_media_relative_parts(parent_path)) < 2:
             return 0
         lookup = self._cloud_directories.resolve_directory(parent_path)

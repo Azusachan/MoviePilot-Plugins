@@ -163,22 +163,30 @@ class AnimeGardenSourceDefinition(SearchSourceDefinition):
         ]
 
     @classmethod
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
+        ctx = context or {}
+        base_url = str(
+            cls.config_value(config, "animegarden_base_url", "https://animes.garden/")
+            or "https://animes.garden/"
+        ).strip()
+        timeout = int(cls.config_value(config, "animegarden_timeout", 60) or 60)
+        interval = float(cls.config_value(config, "animegarden_request_interval", 1.0) or 1.0)
+        return AnimeGardenClient(
+            base_url=base_url,
+            timeout=timeout,
+            interval=interval,
+            proxy=ctx.get("proxy"),
+        )
+
+    @classmethod
     def create_provider(
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
     ) -> Any:
-        ctx = context or {}
-        owner = ctx.get("owner")
-        ag_base_url = str(getattr(owner, "_animegarden_base_url", "https://animes.garden/") or "https://animes.garden/")
-        ag_timeout = int(getattr(owner, "_animegarden_timeout", 60) or 60)
-        ag_interval = float(getattr(owner, "_animegarden_request_interval", 1.0) or 1.0)
-        ag_limit = int(getattr(owner, "_animegarden_result_limit", 10) or 10)
-        ag_client = AnimeGardenClient(
-            base_url=ag_base_url,
-            timeout=ag_timeout,
-            interval=ag_interval,
-            proxy=getattr(owner, "_search_proxy", None),
-        )
+        if not client:
+            return None
+        limit = int(cls.config_value(config, "animegarden_result_limit", 10) or 10)
         return create_animegarden_provider(
-            AnimeGardenSearchService(ag_client, result_limit=ag_limit),
-            {"base_url": ag_client.base_url, "limit": ag_limit},
+            AnimeGardenSearchService(client, result_limit=limit),
+            {"base_url": client.base_url, "limit": limit},
         )
+

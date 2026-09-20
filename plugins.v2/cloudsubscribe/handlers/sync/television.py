@@ -291,7 +291,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
             )
 
             if not enabled_sources:
-                logger.warning(f"没有可用的搜索源，跳过 {mediainfo.title} S{season} 的搜索")
+                logger.debug(f"没有可用的搜索源，跳过 {mediainfo.title} S{season} 的搜索")
                 return transferred_count
 
             prefetched_results = (
@@ -376,7 +376,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                     share_url = share_url.strip()
                     if not self._is_supported_resource(resource, share_url):
-                        logger.warning(
+                        logger.debug(
                             f"跳过当前同步链不支持的资源类型 "
                             f"{self._supported_resource_type(resource, share_url)}：{resource_title}"
                         )

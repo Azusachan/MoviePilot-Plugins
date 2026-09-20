@@ -358,11 +358,48 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
         ]
 
     @classmethod
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
+        ctx = context or {}
+        proxy = ctx.get("proxy")
+        mode = str(cls.config_value(config, "hdhive_query_mode", "web") or "web").strip().lower()
+        if mode == "api":
+            api_key = str(cls.config_value(config, "hdhive_api_key", "") or "").strip()
+            client_id = str(cls.config_value(config, "hdhive_client_id", "") or "").strip()
+            if not api_key or not client_id:
+                return None
+            return HDHiveOpenAPIClient(
+                app_secret=api_key,
+                client_id=client_id,
+                access_token=str(cls.config_value(config, "hdhive_access_token", "") or ""),
+                refresh_token=str(cls.config_value(config, "hdhive_refresh_token", "") or ""),
+                token_expires_at=float(cls.config_value(config, "hdhive_token_expires_at", 0) or 0),
+                proxy=proxy,
+                request_interval=float(cls.config_value(config, "hdhive_request_interval", 5) or 5),
+            )
+        username = str(cls.config_value(config, "hdhive_username", "") or "").strip()
+        password = str(cls.config_value(config, "hdhive_password", "") or "").strip()
+        if not username or not password:
+            return None
+        return HDHiveClient(
+            username=username,
+            password=password,
+            proxy=proxy,
+            request_interval=float(cls.config_value(config, "hdhive_request_interval", 5) or 5),
+        )
+
+    @classmethod
     def create_provider(
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
     ) -> Any:
         ctx = context or {}
         hdhive_service = ctx.get("hdhive_service")
+        if not hdhive_service and ctx.get("owner"):
+            try:
+                from .service import HDHiveSearchService
+                hdhive_service = HDHiveSearchService(ctx["owner"])
+            except Exception:
+                hdhive_service = None
         if hdhive_service and getattr(hdhive_service, "available", False):
             return create_hdhive_provider(hdhive_service)
         return None
+

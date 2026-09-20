@@ -179,10 +179,11 @@ class SyncExecutionService(OwnerDelegator):
     def _prepare_searchable_subscribes(
             self, subscribes: List[Any]
     ) -> Tuple[List[Any], int]:
-        """统一准备媒体身份、目标集和播出日历，供任务线程直接复用。"""
-        prepared = []
-        unresolved_count = 0
-        for subscribe in subscribes:
+        """统一准备媒体身份、目标集和播出日历，供任务线程直接复用（多线程并发加速）。"""
+        if not subscribes:
+            return [], 0
+
+        def _prepare_one(subscribe: Any) -> Optional[Any]:
             try:
                 has_tmdb_id = bool(tmdb_id_of(subscribe))
             except (TypeError, ValueError):
@@ -192,8 +193,7 @@ class SyncExecutionService(OwnerDelegator):
                 and self._sync_handler.repair_subscribe_tmdb_id(subscribe)
             )
             if not repaired:
-                unresolved_count += 1
-                continue
+                return None
 
             is_tv = getattr(subscribe, "type", "") == MediaType.TV.value
             start_episode = (
@@ -235,7 +235,31 @@ class SyncExecutionService(OwnerDelegator):
                 ),
             }
             setattr(subscribe, "_cloudsubscribe_preparation", preparation)
-            prepared.append(subscribe)
+            return subscribe
+
+        prepared = []
+        unresolved_count = 0
+
+        if len(subscribes) <= 1:
+            for sub in subscribes:
+                res = _prepare_one(sub)
+                if res is not None:
+                    prepared.append(res)
+                else:
+                    unresolved_count += 1
+        else:
+            worker_count = min(8, len(subscribes))
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="cloudsubscribe-prep"
+            ) as executor:
+                results = list(executor.map(_prepare_one, subscribes))
+            for res in results:
+                if res is not None:
+                    prepared.append(res)
+                else:
+                    unresolved_count += 1
+
         return prepared, unresolved_count
 
     def _deduplicate_subscribes(
@@ -716,6 +740,12 @@ class SyncExecutionService(OwnerDelegator):
                 candidates.append(subscribe)
 
             candidates, _ = self._deduplicate_subscribes(candidates)
+            if candidates:
+                self._set_sync_status(
+                    "running",
+                    f"正在预处理订阅列表（共 {len(candidates)} 个）",
+                    8,
+                )
             prepared, unresolved_tmdb_count = self._prepare_searchable_subscribes(candidates)
             if prepared:
                 logger.debug(

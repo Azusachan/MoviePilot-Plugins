@@ -15,7 +15,11 @@ from ...core import (
     OwnerDelegator,
     SearchCapability,
 )
-from ...search.types import normalize_resource_type, resource_type_from_url
+from ...search.types import (
+    normalize_resource_type,
+    resource_type_from_url,
+    resource_type_name,
+)
 from ...utils import MediaFileParser, parse_magnet_metadata
 
 
@@ -903,17 +907,13 @@ class ResourceTransferService(OwnerDelegator):
     def _format_resource_summary(
             cls, resources: List[Dict[str, Any]]
     ) -> str:
-        labels = {
-            "share": "网盘分享", "cloud": "网盘路径",
-            "ed2k": "ED2K", "magnet": "Magnet",
-        }
         summary_counts: Dict[str, Dict[str, int]] = {}
         seen = set()
         for resource in resources or []:
             resource_type = cls._supported_resource_type(
                 resource, str(resource.get("url") or "")
             )
-            label = labels.get(resource_type, resource_type.upper() or "未知")
+            label = resource_type_name(resource_type, resource_type.upper() or "未知")
             identity = str(
                 resource.get("unlock_group") or resource.get("source_url")
                 or resource.get("url") or resource.get("title") or ""

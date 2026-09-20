@@ -160,47 +160,61 @@ class AliPanShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs,
+            target_name: str = "", **kwargs,
     ) -> bool:
         info = self._prepare(share_url)
         if str(file_id) not in info["items"]:
             self.list_share_files(share_url)
         item = info["items"].get(str(file_id)) or {}
-        name = target_name or str(item.get("name") or file_id)
+        raw_name = str(item.get("name") or file_id)
+        name = target_name or raw_name
         lookup = self.files.resolve_directory(save_path, create=True)
         if not lookup.directory_id:
             return False
-        data = self._request(
-            "/adrive/v2/batch",
-            authenticated=True,
-            headers={"x-share-token": info["share_token"]},
-            payload={
-                "requests": [{
-                    "body": {
-                        "file_id": str(file_id),
-                        "share_id": info["share_id"],
-                        "to_drive_id": self.client.drive_id,
-                        "to_parent_file_id": lookup.directory_id,
-                        "auto_rename": False,
-                    },
-                    "headers": {"Content-Type": "application/json"},
-                    "id": str(file_id), "method": "POST", "url": "/file/copy",
-                }],
-                "resource": "file",
-            },
-        )
-        response = (data.get("responses") or [{}])[0]
-        body = response.get("body") or {}
-        if isinstance(body, str):
-            try:
-                body = json.loads(body)
-            except json.JSONDecodeError:
-                body = {}
-        status = int(response.get("status") or response.get("status_code") or 0)
-        if body.get("code") or (status and status not in (200, 201)):
+        try:
+            data = self._request(
+                "/adrive/v2/batch",
+                authenticated=True,
+                headers={"x-share-token": info["share_token"]},
+                payload={
+                    "requests": [{
+                        "body": {
+                            "file_id": str(file_id),
+                            "share_id": info["share_id"],
+                            "to_drive_id": self.client.drive_id,
+                            "to_parent_file_id": lookup.directory_id,
+                            "auto_rename": False,
+                        },
+                        "headers": {"Content-Type": "application/json"},
+                        "id": str(file_id), "method": "POST", "url": "/file/copy",
+                    }],
+                    "resource": "file",
+                },
+            )
+            response = (data.get("responses") or [{}])[0]
+            body = response.get("body") or {}
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError:
+                    body = {}
+            status = int(response.get("status") or response.get("status_code") or 0)
+            if body.get("code") or (status and status not in (200, 201)):
+                if (target_name and self.files.find_file(save_path, target_name)) or (
+                    raw_name and self.files.find_file(save_path, raw_name)
+                ):
+                    return True
+                return False
+        except Exception as error:
+            logger.debug(f"阿里云盘转存请求异常：{error}")
+            if (target_name and self.files.find_file(save_path, target_name)) or (
+                raw_name and self.files.find_file(save_path, raw_name)
+            ):
+                return True
             return False
-        if name != str(item.get("name") or ""):
-            copied = self.files.find_file(save_path, str(item.get("name") or ""))
+
+        if name != raw_name:
+            copied = self.files.find_file(save_path, raw_name)
             if not copied or not self.files.rename_file(save_path, copied, name):
                 return False
         return True
@@ -215,13 +229,18 @@ class AliPanShareService:
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs,
     ) -> tuple:
+        normalized = [str(value) for value in file_ids]
+        if not normalized:
+            return [], []
+        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
-                file_ids, kwargs.get("batch_size", 20),
+                normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 20,
         ):
             for file_id in batch:
-                if self.transfer_file(share_url, file_id, save_path, ""):
+                target_name = str((rename_items.get(str(file_id)) or {}).get("target_name") or "").strip()
+                if self.transfer_file(share_url, file_id, save_path, target_name):
                     succeeded.append(file_id)
                 else:
                     failed.append(file_id)

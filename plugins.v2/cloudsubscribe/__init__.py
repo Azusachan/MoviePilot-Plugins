@@ -102,7 +102,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.1"
+    plugin_version = "1.5.3"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -681,11 +681,17 @@ class CloudSubscribe(_PluginBase):
     def _apply_drive_config(self, config: Dict[str, Any]) -> None:
         self._cloud_drive_key = str(config.get("cloud_drive", "115") or "115").strip().lower()
         key = self._cloud_drive_key
-        transfer_path = config.get(f"{key}_transfer_path") or (
-            config.get("cloud_transfer_path") if key == "115" else "/"
+        transfer_path = (
+            config.get(f"p{key}_transfer_path")
+            or config.get(f"{key}_transfer_path")
+            or config.get("cloud_transfer_path")
+            or "/"
         )
-        media_path = config.get(f"{key}_media_path") or (
-            config.get("cloud_media_path") if key == "115" else "/"
+        media_path = (
+            config.get(f"p{key}_media_path")
+            or config.get(f"{key}_media_path")
+            or config.get("cloud_media_path")
+            or "/"
         )
         self._cloud_transfer_path = self._config_cloud_path(transfer_path)
         self._cloud_media_path = self._config_cloud_path(media_path)

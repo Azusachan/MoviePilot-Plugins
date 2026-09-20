@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from ...core.definitions import CheckinDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
-from .client import HDHavenError
+from .client import HDHavenClient, HDHavenError
 from .provider import create_hdhaven_provider
+
 
 
 class HDHavenSourceDefinition(SearchSourceDefinition):
@@ -213,11 +214,35 @@ class HDHavenSourceDefinition(SearchSourceDefinition):
         ]
 
     @classmethod
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
+        username = str(cls.config_value(config, "hdhaven_username", "") or "").strip()
+        password = str(cls.config_value(config, "hdhaven_password", "") or "").strip()
+        if not username or not password:
+            return None
+        return HDHavenClient(
+            username=username,
+            password=password,
+            base_url=str(
+                cls.config_value(config, "hdhaven_base_url", HDHavenClient.DEFAULT_BASE_URL)
+                or HDHavenClient.DEFAULT_BASE_URL
+            ),
+            proxy=(context or {}).get("proxy"),
+            request_interval=float(cls.config_value(config, "hdhaven_request_interval", 1.0) or 1.0),
+        )
+
+    @classmethod
     def create_provider(
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
     ) -> Any:
         ctx = context or {}
         hdhaven_service = ctx.get("hdhaven_service")
+        if not hdhaven_service and ctx.get("owner"):
+            try:
+                from .service import HDHavenSearchService
+                hdhaven_service = HDHavenSearchService(ctx["owner"])
+            except Exception:
+                hdhaven_service = None
         if hdhaven_service and getattr(hdhaven_service, "available", False):
             return create_hdhaven_provider(hdhaven_service)
         return None
+

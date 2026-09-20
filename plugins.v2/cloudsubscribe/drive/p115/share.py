@@ -435,7 +435,7 @@ class ShareService(OwnerDelegator):
             logger.error(f"无法获取或创建目标目录: {save_path}")
             return False
 
-        logger.info(f"转存分享到目录 ID: {parent_id} ({save_path})")
+        logger.debug(f"转存分享到目录 ID: {parent_id} ({save_path})")
 
         # 执行转存 (file_id=0 表示转存所有内容)
         return self._do_transfer(
@@ -461,23 +461,6 @@ class ShareService(OwnerDelegator):
             )
         if not self.client:
             return False
-        if target_name:
-            existing, _ = self.rename_files_by_sha1_batch(
-                save_path,
-                {
-                    str(file_id): {
-                        "sha1": source_sha1,
-                        "target_name": target_name,
-                    }
-                },
-                [str(file_id)],
-                log_unresolved=False,
-            )
-            if str(file_id) in existing:
-                logger.debug(
-                    f"115 暂存目录已存在目标文件，跳过重复转存：{target_name}"
-                )
-                return True
         info = self.extract_share_info(share_url)
         share_code = info.get("share_code")
         receive_code = info.get("receive_code")
@@ -493,21 +476,27 @@ class ShareService(OwnerDelegator):
             parent_id=parent_id, save_path=save_path
         )
         if success is None:
-            if target_name and self.rename_file_by_sha1(
-                    save_path, source_sha1, target_name
+            if target_name and (
+                self.find_file(save_path, target_name)
+                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
             ):
                 return True
-            source_hash = self._normalize_hash(source_sha1)
-            if target_name and len(source_hash) == 40:
-                logger.info(
-                    f"115返回文件已存在，目标文件尚未可见，"
-                    f"交由既有后处理复核：{target_name}"
+            if target_name:
+                logger.debug(
+                    f"115返回文件已存在，交由既有后处理复核：{target_name}"
                 )
+                return True
+            return True
+        if not success:
+            if target_name and (
+                self.find_file(save_path, target_name)
+                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
+            ):
                 return True
             return False
         if success and target_name:
             if not self.rename_file_by_sha1(save_path, source_sha1, target_name):
-                logger.info(f"转存已完成，文件重命名进入后处理队列：{target_name}")
+                logger.debug(f"转存已完成，文件重命名进入后处理队列：{target_name}")
         return success
 
     def transfer_files_batch(
@@ -707,7 +696,7 @@ class ShareService(OwnerDelegator):
 
                 if resp.get("state"):
                     if file_id == "0":
-                        logger.info(f"115 转存完成：{save_path}")
+                        logger.debug(f"115 转存完成：{save_path}")
                     else:
                         file_count = len([item for item in str(file_id).split(",") if item])
                         logger.debug(f"115 文件转存完成：{file_count} 个，目录 {save_path}")
@@ -718,7 +707,7 @@ class ShareService(OwnerDelegator):
 
                     # 检查是否是重复文件
                     if "重复" in error_msg or "已存在" in error_msg:
-                        logger.warning(
+                        logger.debug(
                             f"115返回文件已存在，等待目标目录复核: {file_id}，"
                             f"错误码: {error_code}"
                         )
@@ -728,7 +717,7 @@ class ShareService(OwnerDelegator):
                     if error_code in (990001, 990002, 990009):  # 常见的限流错误码
                         if attempt < max_retries:
                             wait_time = min(30.0, 1.0 * (2 ** attempt))
-                            logger.warning(f"遇到限流，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
+                            logger.debug(f"遇到限流，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
                             time.sleep(wait_time)
                             continue
 
@@ -739,7 +728,7 @@ class ShareService(OwnerDelegator):
                 last_error = e
                 if attempt < max_retries:
                     wait_time = min(30.0, 0.75 * (2 ** attempt))
-                    logger.warning(f"转存异常: {e}, {wait_time:.1f}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
+                    logger.debug(f"转存异常: {e}, {wait_time:.1f}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
                     time.sleep(wait_time)
                 else:
                     logger.error(f"转存过程中发生异常: {e}")

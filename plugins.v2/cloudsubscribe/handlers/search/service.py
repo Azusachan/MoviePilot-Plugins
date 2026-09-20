@@ -88,7 +88,6 @@ class SearchHandler:
             return params.get(name, default)
 
         self._plugin = plugin
-        self._test_mode = bool(get_val("test_mode", False))
         definitions = SearchSourceRegistry.get_definitions()
         for definition in definitions:
             for key in definition.get_config_keys():
@@ -188,13 +187,8 @@ class SearchHandler:
             )
             for definition in definitions
         }
-        self._search_registry = create_search_registry(
-            self,
-            get_component(self, PanSouSearchService, "_search_components"),
-            get_component(self, HDHiveSearchService, "_search_components"),
-            get_component(self, Dian115SearchService, "_search_components"),
-            get_component(self, HDHavenSearchService, "_search_components"),
-        )
+        self._search_registry = create_search_registry(self)
+
 
         if plugin is not None and hasattr(plugin, "get_data") and hasattr(plugin, "save_data"):
             self.configure_point_storage(plugin.get_data, plugin.save_data)
@@ -253,12 +247,9 @@ class SearchHandler:
         if not registered:
             return []
 
-        # 优先读取用户配置的优先级顺序，其余按标准偏好排列
+        # 优先读取用户配置的优先级顺序，其余按自描述规范标准偏好排列
         configured_order = getattr(self, "_search_source_order", []) or []
-        default_pref = [
-            "pansou", "hdhive", "dian115", "hdhaven", "juying", "pinglian", "seedhub",
-            "piratebay", "uindex", "mikan", "animegarden", "online_docs"
-        ]
+        default_pref = [d.id for d in SearchSourceRegistry.get_definitions()]
 
         merged_order: List[str] = []
         for s in list(configured_order) + default_pref:
@@ -269,41 +260,27 @@ class SearchHandler:
             if s not in merged_order:
                 merged_order.append(s)
 
-        anime_sources = ["mikan", "animegarden"]
+        anime_sources = {"mikan", "animegarden"}
         if is_anime is None and mediainfo:
             is_anime = is_anime_media(mediainfo)
 
         if is_anime:
             # 动漫番剧优先展示动漫源
-            anime_part = [s for s in anime_sources if s in merged_order]
+            anime_part = [s for s in merged_order if s in anime_sources]
             other_part = [s for s in merged_order if s not in anime_sources]
             merged_order = anime_part + other_part
         elif media_type == MediaType.MOVIE:
             # 非动漫电影剔除纯番剧更新源
             merged_order = [s for s in merged_order if s not in anime_sources]
 
-        source_display_names = {
-            "pansou": "PanSou",
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "hdhaven": "HDHaven",
-            "juying": "聚影",
-            "pinglian": "盘链",
-            "seedhub": "SeedHub",
-            "piratebay": "海盗湾",
-            "uindex": "UIndex",
-            "mikan": "Mikan",
-            "animegarden": "AnimeGarden",
-            "online_docs": "在线文档",
-        }
-
         return [
             {
                 "key": src_key,
-                "name": registered.get(src_key) or source_display_names.get(src_key, src_key),
+                "name": registered.get(src_key, src_key),
             }
             for src_key in merged_order
         ]
+
 
 
     @property
@@ -586,9 +563,10 @@ class SearchHandler:
             target_episodes: Optional[List[int]],
             apply_platform_rules: bool,
     ) -> List[Dict]:
-        if is_anime_media(mediainfo):
+        if is_anime_media(mediainfo) and source in ("mikan", "animegarden"):
             before = len(results)
-            prefix = "animegarden" if source == "animegarden" else "mikan"
+            prefix = source
+
             strict_filter = bool(apply_platform_rules)
             results = filter_fansubs(
                 results,
@@ -716,7 +694,7 @@ class SearchHandler:
         if self._search_circuit_breaker_enabled and not SEARCH_CIRCUIT_BREAKER.can_execute(source):
             state = SEARCH_CIRCUIT_BREAKER.get_state(source)
             remaining = SEARCH_CIRCUIT_BREAKER.get_cooldown_remaining(source)
-            logger.warning(
+            logger.debug(
                 f"⚡ [{search_label}][{source.upper()}] 渠道已触发熔断保护({state.value})，跳过检索 (冷却剩余 {remaining:.1f}s)"
             )
             return []
@@ -777,17 +755,6 @@ class SearchHandler:
             target_episodes,
             apply_platform_rules,
         )
-
-    def _recycle_source_provider(self, source: str) -> None:
-        """仅回收隔离测试处理器持有的连接，避免关闭正式同步共享会话。"""
-        if not self._test_mode:
-            return
-        try:
-            provider = self._search_registry.get(source)
-            if provider and hasattr(provider, "close"):
-                provider.close()
-        except Exception as error:
-            logger.debug(f"快速回收搜索渠道 {source} 连接失败：{error}")
 
     def search_sources(
             self,
@@ -862,7 +829,7 @@ class SearchHandler:
                 for f in timed_out_futures:
                     source = futures[f]
                     abandoned_sources.add(source)
-                    logger.warning(
+                    logger.debug(
                         f"⏰ [{search_label}] 搜索渠道 {source.upper()} 响应超时，已主动停止等待"
                     )
                     if self._search_circuit_breaker_enabled:
@@ -871,7 +838,6 @@ class SearchHandler:
                             source, f"单次搜索超时(>{limit:.1f}s)"
                         )
                     f.cancel()
-                    self._recycle_source_provider(source)
                     pending.discard(f)
 
                 if not pending:
@@ -905,8 +871,6 @@ class SearchHandler:
                     if source:
                         abandoned_sources.add(source)
                     f.cancel()
-                    if source:
-                        self._recycle_source_provider(source)
                 if abandoned_sources:
                     logger.info(
                         f"⏹️ [{search_label}] 搜索流程结束，已停止等待未完成的渠道：{', '.join(sorted(s.upper() for s in abandoned_sources))}"

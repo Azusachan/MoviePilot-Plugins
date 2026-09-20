@@ -36,7 +36,6 @@ class JuyingSourceDefinition(SearchSourceDefinition):
             request_interval=float(cls.config_value(config, "juying_request_interval", 1.0) or 1.0),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),
-            cache_namespace="test-preview" if ctx.get("test_mode") else "",
         )
 
     @classmethod

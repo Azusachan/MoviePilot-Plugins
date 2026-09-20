@@ -142,7 +142,7 @@ class PostprocessService(OwnerDelegator):
     def _cleanup_failed_offline_task(
             self, item: Dict[str, Any], reason: str
     ) -> None:
-        """失败后删除对应离线任务及其源文件，不清空共享隔离目录。"""
+        """失败后删除对应离线任务及其已下载文件。"""
         task_id = str(item.get("task_id") or "").strip().upper()
         if not task_id or not self._offline_tasks:
             return
@@ -155,8 +155,8 @@ class PostprocessService(OwnerDelegator):
                     f"Magnet 匹配失败，已删除离线任务及下载文件：{task_id}，原因：{reason}"
                 )
         except Exception as error:
-            logger.warning(
-                f"Magnet 匹配失败后清理下载文件失败：{task_id}，{error}"
+            logger.debug(
+                f"Magnet 匹配失败后清理离线任务及下载文件失败：{task_id}，{error}"
             )
 
     @staticmethod
@@ -337,9 +337,9 @@ class PostprocessService(OwnerDelegator):
                 return
             if strm_path.is_file():
                 strm_path.unlink()
-                logger.info(f"洗版清理旧 STRM：{strm_path}")
+                logger.debug(f"洗版清理旧 STRM：{strm_path}")
         except (OSError, ValueError) as error:
-            logger.warning(f"洗版清理旧 STRM 失败：{old_dir}/{old_name}，{error}")
+            logger.debug(f"洗版清理旧 STRM 失败：{old_dir}/{old_name}，{error}")
 
     def _replace_upgrade_file(
             self,
@@ -376,11 +376,11 @@ class PostprocessService(OwnerDelegator):
                     old_name, item.get("task_id") or pending_key
                 )
             )
-            logger.info(
+            logger.debug(
                 f"洗版临时备份旧文件：{old_dir}/{old_name} -> {backup_name}"
             )
             if not self._cloud_mutations.rename_file(old_dir, old_file, backup_name):
-                logger.warning(f"洗版替换无法备份旧文件：{old_dir}/{old_name}")
+                logger.debug(f"洗版替换无法备份旧文件：{old_dir}/{old_name}")
                 return None
             item["upgrade_old_backed_up"] = True
             item["upgrade_backup_name"] = backup_name
@@ -459,9 +459,9 @@ class PostprocessService(OwnerDelegator):
         if backup_id and self._cloud_mutations.delete_file(backup_id):
             item["upgrade_old_deleted"] = True
         if item.get("upgrade_old_deleted"):
-            logger.info(f"洗版完成，已删除旧文件：{old_dir}/{backup_name}")
+            logger.debug(f"洗版完成，已删除旧文件：{old_dir}/{backup_name}")
             return True
-        logger.warning(f"洗版新文件已就绪，旧文件删除待重试：{old_dir}/{backup_name}")
+        logger.debug(f"洗版新文件已就绪，旧文件删除待重试：{old_dir}/{backup_name}")
         return False
 
     def monitor_offline_strm_tasks(
@@ -639,6 +639,21 @@ class PostprocessService(OwnerDelegator):
                     f"{strm_path or item.get('file_name') or pending_key}"
                 )
                 pending.pop(pending_key, None)
+                with self._offline_pending_lock:
+                    current_persisted = self._get_data(self._OFFLINE_PENDING_KEY) or {}
+                    if pending_key in current_persisted:
+                        current_persisted.pop(pending_key, None)
+                        self._save_offline_pending(current_persisted)
+                        self._notify_offline_pending_changed(len(current_persisted))
+                task_id = self._postprocess_task_id(item)
+                if task_id and self._postprocess_task_update:
+                    self._postprocess_task_update(
+                        task_id,
+                        _pending_key=pending_key,
+                        file_completed=True,
+                        postprocess_active=False,
+                        postprocess_detail="文件处理完成",
+                    )
                 completed += 1
 
             def finalize_ready_item(
@@ -742,7 +757,14 @@ class PostprocessService(OwnerDelegator):
                 rename_groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
                 for pending_key in due_keys:
                     item = pending.get(pending_key) or {}
-                    task_type = str(item.get("task_type") or "share")
+                    task_type = str(item.get("task_type") or "share").strip().lower()
+                    share_url = str(item.get("share_url") or "").strip()
+                    # 核对“已存在文件”的恢复分支：如果复用了离线 pending 结构，但 URL 不是离线协议，还原原始任务类型
+                    if task_type in {"ed2k", "offline"} and share_url and not (
+                            share_url.lower().startswith("ed2k://") or share_url.lower().startswith("magnet:?")
+                    ):
+                        item["task_type"] = "share"
+                        task_type = "share"
                     is_replacement = item.get("upgrade") and str(
                         item.get("upgrade_mode") or self._upgrade_mode
                     ) != "coexist"
@@ -756,11 +778,7 @@ class PostprocessService(OwnerDelegator):
                         str(item.get("task_id") or pending_key).upper()
                     )
                     if task_type in {"ed2k", "offline"}:
-                        share_url = str(item.get("share_url") or "").strip()
-                        if share_url and not share_url.lower().startswith("ed2k://"):
-                            item["task_type"] = "share"
-                            task_type = "share"
-                        elif not bool(task and task.get("completed")):
+                        if not bool(task and task.get("completed")):
                             staging_dir_chk = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
                             chk_valid, chk_index = directory_snapshot(staging_dir_chk)
                             chk_sname = str(item.get("staging_name") or item.get("file_name") or "")
@@ -933,6 +951,21 @@ class PostprocessService(OwnerDelegator):
                         self._schedule_finalize_retry(item, now)
                         continue
                     pending.pop(pending_key, None)
+                    with self._offline_pending_lock:
+                        current_persisted = self._get_data(self._OFFLINE_PENDING_KEY) or {}
+                        if pending_key in current_persisted:
+                            current_persisted.pop(pending_key, None)
+                            self._save_offline_pending(current_persisted)
+                            self._notify_offline_pending_changed(len(current_persisted))
+                    task_id = self._postprocess_task_id(item)
+                    if task_id and self._postprocess_task_update:
+                        self._postprocess_task_update(
+                            task_id,
+                            _pending_key=pending_key,
+                            file_completed=True,
+                            postprocess_active=False,
+                            postprocess_detail="Magnet 任务完成",
+                        )
                     if finalized:
                         # Magnet 一个离线任务可能匹配多个真实文件；该任务的
                         # 历史已在 _finalize_magnet_package 中持久化，立即入队。
@@ -977,7 +1010,7 @@ class PostprocessService(OwnerDelegator):
                                 or (f_valid and (f_index.get(file_name) or (source_sha1 and any(str(getattr(f, "sha1", "")).upper() == source_sha1 for f in f_index.values()))))
                             ):
                                 task_done = True
-                                logger.info(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
+                                logger.debug(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
                         if not task_done and task is not None:
                             timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
                             if now - created_at >= self._OFFLINE_TIMEOUT:
@@ -997,7 +1030,7 @@ class PostprocessService(OwnerDelegator):
                             directory_valid, file_index = directory_snapshot(staging_dir)
                             if directory_valid and not file_index:
                                 reason = "离线任务及目标文件均不存在"
-                                logger.warning(f"{reason}：{file_name}")
+                                logger.debug(f"{reason}：{file_name}")
                                 self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
                                 self._mark_offline_history_status(pending_key, "失败", reason)
                                 pending.pop(pending_key, None)
@@ -1185,7 +1218,11 @@ class PostprocessService(OwnerDelegator):
                         if source_suffix and not file_name.endswith(source_suffix):
                             file_name = f"{Path(file_name).stem}{source_suffix}"
                             item["file_name"] = file_name
-                        if not self._cloud_mutations.rename_file(
+                        staging_valid, staging_index = directory_snapshot(staging_dir)
+                        if staging_valid and file_name in staging_index and str(staging_index[file_name].id) == str(
+                                target_file.id):
+                            target_file = staging_index[file_name]
+                        elif not self._cloud_mutations.rename_file(
                                 staging_dir, target_file, file_name
                         ):
                             self._schedule_finalize_retry(item, now)
@@ -1199,14 +1236,49 @@ class PostprocessService(OwnerDelegator):
                             continue
                     final_dir = str(item["cloud_dir"]).rstrip("/") or "/"
                     if staging_dir != final_dir:
-                        moved_file = self._cloud_mutations.move_file(
-                            target_file, item["cloud_dir"], file_name
+                        # 移动前先核对目标媒体库目录，若已存在同名且尺寸/特征一致的文件，直接自愈复用，避免 move 报错无限重试卡死
+                        final_valid, final_index = directory_snapshot(final_dir)
+                        existing_in_final = final_index.get(file_name) if final_valid else None
+                        source_size = int(item.get("file_size") or getattr(target_file, "size", 0) or 0)
+                        existing_size = int(getattr(existing_in_final, "size", 0) or 0)
+                        source_sha1 = str(item.get("source_sha1") or getattr(target_file, "sha1", "") or "").upper()
+                        existing_sha1 = str(getattr(existing_in_final, "sha1", "") or "").upper()
+                        matched_existing = bool(
+                            existing_in_final and (
+                                    (source_sha1 and existing_sha1 and source_sha1 == existing_sha1)
+                                    or (source_size > 0 and existing_size > 0 and abs(
+                                source_size - existing_size) <= 1024)
+                                    or (existing_size > 0 and not source_size)
+                                    or str(existing_in_final.id) == str(target_file.id)
+                            )
                         )
+                        if matched_existing:
+                            logger.debug(
+                                f"媒体目录已存在目标文件，自愈复用并跳过移动：{final_dir}/{file_name}"
+                            )
+                            if str(existing_in_final.id) != str(target_file.id):
+                                try:
+                                    self._cloud_mutations.delete_file(target_file.id)
+                                except Exception as clean_err:
+                                    logger.debug(f"清理暂存区多余副本失败：{clean_err}")
+                            moved_file = existing_in_final
+                        else:
+                            moved_file = self._cloud_mutations.move_file(
+                                target_file, item["cloud_dir"], file_name
+                            )
                     else:
                         moved_file = target_file
                     if not moved_file:
-                        self._schedule_finalize_retry(item, now)
-                        continue
+                        # 移动失败后兜底检查：复核目标目录是否已存在目标文件（可能已被前序请求或异步动作完成）
+                        final_valid, final_index = directory_snapshot(final_dir)
+                        if final_valid and file_name in final_index:
+                            moved_file = final_index[file_name]
+                            logger.debug(
+                                f"移动操作返回失败但在目标目录找到文件，自愈恢复：{final_dir}/{file_name}"
+                            )
+                        else:
+                            self._schedule_finalize_retry(item, now)
+                            continue
                     target_file = moved_file
                     item["moved_at"] = now
 
@@ -1237,7 +1309,7 @@ class PostprocessService(OwnerDelegator):
                         if not self._finalize_subtitle_files(
                                 item, directory_snapshot
                         ):
-                            logger.warning(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
+                            logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
                     finalize_after_metadata(
                         item, pending_key, file_name, None, media, media_data
                     )
@@ -1260,7 +1332,7 @@ class PostprocessService(OwnerDelegator):
                         if not self._finalize_subtitle_files(
                                 item, directory_snapshot, strm_path=strm_path
                         ):
-                            logger.warning(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
+                            logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
                     if not self._strm_file_ready(strm_path):
                         logger.error(f"洗版后 STRM 文件不存在或为空：{strm_path}")
                         self._schedule_finalize_retry(item, now)
@@ -1493,7 +1565,7 @@ class PostprocessService(OwnerDelegator):
 
         if not matched:
             reason = "Magnet 下载完成，但真实文件名未匹配当前订阅"
-            logger.warning(f"{reason}：{item.get('file_name')}")
+            logger.debug(f"{reason}：{item.get('file_name')}")
             self._cleanup_failed_offline_task(item, reason)
             self._mark_offline_history_status(pending_key, "失败", reason)
             return []
@@ -1519,7 +1591,7 @@ class PostprocessService(OwnerDelegator):
                 )
                 if not should_upgrade:
                     label = f"E{int(episode):02d}" if episode else mediainfo.title
-                    logger.info(f"Magnet 下载后洗版候选跳过 {label}：{reason}")
+                    logger.debug(f"Magnet 下载后洗版候选跳过 {label}：{reason}")
                     continue
             cloud_dir, target_name = self._platform_target(
                 self._CLOUD_MEDIA_ROOT,
@@ -1598,7 +1670,7 @@ class PostprocessService(OwnerDelegator):
                         if not self._delete_upgrade_old_file(
                                 replace_item, directory_snapshot
                         ):
-                            logger.warning(
+                            logger.debug(
                                 f"Magnet 洗版旧文件删除失败：{target_name}"
                             )
                             continue
@@ -1613,7 +1685,7 @@ class PostprocessService(OwnerDelegator):
                     if not self._delete_upgrade_old_file(
                             replace_item, directory_snapshot
                     ):
-                        logger.warning(
+                        logger.debug(
                             f"Magnet 洗版旧文件删除失败：{target_name}"
                         )
                         continue
@@ -1890,4 +1962,4 @@ class PostprocessService(OwnerDelegator):
                 ),
             )
         except Exception as error:
-            logger.warning(f"后处理失败通知发送异常：{error}")
+            logger.debug(f"后处理失败通知发送异常：{error}")

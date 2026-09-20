@@ -177,7 +177,7 @@ class PanSouSourceDefinition(SearchSourceDefinition):
     ) -> Any:
         ctx = context or {}
         owner = ctx.get("owner")
-        if not client:
+        if not client or not owner:
             return None
         setattr(owner, "_pansou_client", client)
         pansou_service = ctx.get("pansou_service") or PanSouSearchService(owner)
@@ -195,3 +195,4 @@ class PanSouSourceDefinition(SearchSourceDefinition):
                 "timeout": getattr(owner, "_pansou_timeout", 30),
             },
         )
+

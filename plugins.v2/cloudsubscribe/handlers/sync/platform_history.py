@@ -44,21 +44,20 @@ class PlatformHistoryService(OwnerDelegator):
     @staticmethod
     def _platform_source_label(record: Dict[str, Any]) -> str:
         source = str(record.get("source") or "").strip().lower()
-        labels = {
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "pansou": "PanSou",
-            "manual": "手动添加",
-        }
-        if source in labels:
-            return labels[source]
+        if source == "manual":
+            return "手动添加"
+        if source:
+            from ...search.scanner import SearchSourceRegistry
+            defs = {d.id: d.name for d in SearchSourceRegistry.get_definitions()}
+            if source in defs:
+                return defs[source]
+
         resource_type = str(record.get("resource_type") or "").strip().lower()
-        return {
-            "115": "115资源",
-            "cloud": "网盘路径",
-            "ed2k": "ED2K",
-            "magnet": "Magnet",
-        }.get(resource_type, "网盘订阅助手")
+        if resource_type == "cloud":
+            return "网盘路径"
+        from ...search.types import resource_type_name
+        return resource_type_name(resource_type, fallback="网盘订阅助手")
+
 
     @classmethod
     def _platform_source_path(

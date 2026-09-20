@@ -49,7 +49,6 @@ class JuyingClient:
             request_interval: float = 1.0,
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
-            cache_namespace: str = "",
     ):
         self.base_url = str(base_url or self.BASE_URL).rstrip("/")
         self.username = str(username or "").strip()
@@ -60,7 +59,6 @@ class JuyingClient:
         self._token = ""
         self._get_data_func = get_data_func
         self._save_data_func = save_data_func
-        self.cache_namespace = str(cache_namespace or "").strip()
         self._lock = threading.RLock()
         self._circuit_open_until = 0.0
         self._request_gate = RequestGate.shared(

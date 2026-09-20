@@ -225,7 +225,7 @@ class SyncNamingService(OwnerDelegator):
             if rename_path:
                 resolved = rename_path.parent
         except Exception as error:
-            logger.warning(f"资源路径解析失败：{mediainfo.title_year}，{error}")
+            logger.debug(f"资源路径解析失败：{mediainfo.title_year}，{error}")
 
         if season_lock and season_cache:
             with season_lock:
@@ -251,7 +251,7 @@ class SyncNamingService(OwnerDelegator):
                 if item.is_file() and item.suffix.lower() in allowed_extensions
             ]
         except OSError as error:
-            logger.warning(f"资源季目录读取失败 {season_dir}: {error}")
+            logger.debug(f"资源季目录读取失败 {season_dir}: {error}")
             return []
 
     def _scan_local_resource_episodes(
@@ -399,7 +399,7 @@ class SyncNamingService(OwnerDelegator):
                 f"{getattr(subscribe, 'name', None) or mediainfo.title}.mkv",
             )
         except Exception as error:
-            logger.warning(f"115电影目标路径计算失败：{mediainfo.title_year}，{error}")
+            logger.debug(f"115电影目标路径计算失败：{mediainfo.title_year}，{error}")
             return None
         cloud_directories = getattr(self, "_cloud_directories", None)
         if not cloud_directories:
