@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import SeedHubClient
 from .provider import create_seedhub_provider
 from .service import SeedHubSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class SeedHubSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class SeedHubSourceDefinition(SearchSourceDefinition):
     id = "seedhub"
     name = "SeedHub"
     icon = "mdi-seed-outline"
+    color = "deep-purple"
     order = 80
 
     @classmethod

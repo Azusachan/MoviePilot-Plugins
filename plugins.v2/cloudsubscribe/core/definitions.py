@@ -310,6 +310,15 @@ class DriverDefinition:
         return []
 
     @classmethod
+    def get_transfer_path_key(cls) -> str:
+        """返回该驱动「网盘转存路径」的表单键名；未声明时返回空串。"""
+        for group in cls.get_config_groups():
+            for field in group.fields:
+                if field.key.endswith("_transfer_path"):
+                    return field.key
+        return ""
+
+    @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
         """如果该网盘支持签到，返回其自描述契约。"""
         return None
@@ -376,6 +385,8 @@ class SearchSourceDefinition:
     id: str = ""
     name: str = ""
     icon: str = "mdi-magnify"
+    #: 渠道在界面上的配色，由后端下发给前端直接渲染。
+    color: str = "grey"
     order: int = 100
 
     @staticmethod

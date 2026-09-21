@@ -22,7 +22,6 @@ from ...core import (
     SearchQuery,
     format_search_label,
     format_search_log_prefix,
-    get_component,
     resolve_component,
 )
 from ...core.media import tmdb_id_of
@@ -246,6 +245,10 @@ class SearchHandler:
         registered = {provider.key: provider.name for provider in self._search_registry.available()}
         if not registered:
             return []
+        display = {
+            def_cls.id: def_cls
+            for def_cls in SearchSourceRegistry.get_definitions()
+        }
 
         # 优先读取用户配置的优先级顺序，其余按自描述规范标准偏好排列
         configured_order = getattr(self, "_search_source_order", []) or []
@@ -273,13 +276,16 @@ class SearchHandler:
             # 非动漫电影剔除纯番剧更新源
             merged_order = [s for s in merged_order if s not in anime_sources]
 
-        return [
-            {
+        def entry(src_key: str) -> Dict[str, str]:
+            def_cls = display.get(src_key)
+            return {
                 "key": src_key,
                 "name": registered.get(src_key, src_key),
+                "icon": getattr(def_cls, "icon", "") or "mdi-magnify",
+                "color": getattr(def_cls, "color", "") or "grey",
             }
-            for src_key in merged_order
-        ]
+
+        return [entry(src_key) for src_key in merged_order]
 
 
 

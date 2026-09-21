@@ -10,7 +10,7 @@ import {createCheckinSection} from "./fields/checkin.js";
 
 export function createConfigSections(options, config = {}) {
   const cloudDriveItems = createCloudDriveItems(options);
-  const resourceTypeItems = createResourceTypeItems(cloudDriveItems, config);
+  const resourceTypeItems = createResourceTypeItems(options, config);
   return [
     createBasicSection(cloudDriveItems, options),
     createTransferSection(options),

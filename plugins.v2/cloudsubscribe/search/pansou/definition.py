@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import PanSouClient
 from .provider import create_pansou_provider
 from .service import PanSouSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class PanSouSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class PanSouSourceDefinition(SearchSourceDefinition):
     id = "pansou"
     name = "PanSou"
     icon = "mdi-magnify-scan"
+    color = "indigo"
     order = 5
 
     @classmethod

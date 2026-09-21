@@ -878,6 +878,8 @@ const options = reactive({
   mediaLibraryWebhookUrls: {},
   notificationTypes: [],
   cloudDrives: [],
+  resourceTypes: [],
+  sources: [],
   account: {},
   accounts: {},
   searchAccounts: {},
@@ -1052,6 +1054,12 @@ function applyOptions(data) {
   }
   if ("cloud_drives" in data) {
     options.cloudDrives = Array.isArray(data.cloud_drives) ? data.cloud_drives : []
+  }
+  if ("resource_types" in data) {
+    options.resourceTypes = Array.isArray(data.resource_types) ? data.resource_types : [];
+  }
+  if ("sources" in data) {
+    options.sources = Array.isArray(data.sources) ? data.sources : [];
   }
   if ("account" in data) {
     options.account = data.account && typeof data.account === "object" ? data.account : {}
@@ -1894,10 +1902,10 @@ watch(
 )
 
 watch(
-  [() => config.cloud_drive, () => config.cross_transfer_enabled, () => options.cloudDrives],
+  [() => config.cloud_drive, () => config.cross_transfer_enabled, () => options.cloudDrives, () => options.resourceTypes],
   ([provider, crossTransfer, drives], [previousProvider, previousCrossTransfer, previousDrives]) => {
     if (provider === previousProvider && crossTransfer === previousCrossTransfer && drives === previousDrives) return
-    const supported = new Set(createResourceTypeItems(options.cloudDrives, config).map((item) => item.value))
+    const supported = new Set(createResourceTypeItems(options, config).map((item) => item.value));
     config.resource_type_order = (config.resource_type_order || []).filter((value) => supported.has(value))
   },
 )

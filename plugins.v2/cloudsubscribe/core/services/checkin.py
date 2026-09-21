@@ -224,21 +224,6 @@ class CheckinService(OwnerDelegator):
         histories = snapshot.get("histories") if isinstance(snapshot, dict) else None
         return histories if isinstance(histories, dict) else {}
 
-    def _today_records(
-            self,
-            provider: CheckinDefinition,
-            today: str,
-    ) -> List[Dict[str, Any]]:
-        records = []
-        for record in reversed(self._load_history(provider)):
-            try:
-                executed_at = self._parse_executed_at(record)
-            except ValueError:
-                continue
-            if executed_at.date().isoformat() == today:
-                records.append(record)
-        return records
-
     def _get_provider_current_points(
             self, provider: CheckinDefinition
     ) -> Optional[int]:
@@ -419,6 +404,7 @@ class CheckinService(OwnerDelegator):
         return {
             "provider": provider.key,
             "provider_name": provider.name,
+            "icon": provider.icon,
             "points_label": provider.points_label,
             "enabled": enabled,
             "configured": configured,
@@ -853,10 +839,32 @@ class CheckinService(OwnerDelegator):
             value = self._DEFAULT_RETRY_COUNT
         return max(1, min(value, self._MAX_RETRY_COUNT))
 
+    def _today_records_map(
+            self,
+            providers: List[CheckinDefinition],
+            today: str,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """一次快照读取全部渠道的今日签到记录，避免逐渠道查询。"""
+        histories = self._checkin_histories()
+        return {
+            provider.key: [
+                record
+                for record in self._normalize_history(histories.get(provider.key))
+                if self._record_date_key(record) == today
+            ]
+            for provider in providers
+        }
+
+    @staticmethod
+    def _signed_today(records: List[Dict[str, Any]]) -> bool:
+        """今日是否已有成功记录：手动签到与定时签到同等对待。"""
+        return any(record.get("success") for record in records)
+
     def _load_schedule_state(
             self,
             today: str,
             providers: List[CheckinDefinition],
+            today_records: Dict[str, List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         """读取当日调度状态；状态失效时按当天签到记录重建。"""
         provider_keys = sorted(provider.key for provider in providers)
@@ -871,53 +879,42 @@ class CheckinService(OwnerDelegator):
         ):
             return copy.deepcopy(stored)
 
-        records_by_provider = {
-            provider.key: self._today_records(provider, today)
-            for provider in providers
-        }
         full_completed = any(
             record.get("trigger") == "scheduled"
-            for records in records_by_provider.values()
+            for records in today_records.values()
             for record in records
         )
-        pending = [
-            provider.key
-            for provider in providers
-            if full_completed and retry_count
-               and not any(
-                record.get("success")
-                for record in records_by_provider[provider.key]
-            )
-        ]
         return {
             "date": today,
             "providers": provider_keys,
             "full_completed": full_completed,
             "retry_count": retry_count,
-            "pending_providers": pending,
+            "pending_providers": [
+                provider.key
+                for provider in providers
+                if full_completed
+                   and retry_count
+                   and not self._signed_today(today_records[provider.key])
+            ],
             "completed_retry_count": 0,
         }
 
-    def _pending_retry_providers(
+    def _save_schedule_state(
             self,
-            state: Dict[str, Any],
-            providers: List[CheckinDefinition],
             today: str,
-    ) -> List[CheckinDefinition]:
-        """当日标记为失败且尚未成功的渠道。"""
-        provider_by_key = {provider.key: provider for provider in providers}
-        return [
-            provider
-            for provider in (
-                provider_by_key.get(str(key))
-                for key in state.get("pending_providers", [])
-            )
-            if provider is not None
-               and not any(
-                record.get("success")
-                for record in self._today_records(provider, today)
-            )
-        ]
+            providers: List[CheckinDefinition],
+            pending_keys: List[str],
+            completed_retry_count: int,
+    ) -> None:
+        """记录当日调度进度：已执行、待重试渠道与已完成重试次数。"""
+        self.save_data(self._SCHEDULE_STATE_KEY, {
+            "date": today,
+            "providers": sorted(provider.key for provider in providers),
+            "full_completed": True,
+            "retry_count": self._configured_retry_count(),
+            "pending_providers": [str(key) for key in pending_keys],
+            "completed_retry_count": max(0, int(completed_retry_count or 0)),
+        })
 
     def _execute_scheduled_providers(
             self,
@@ -968,7 +965,7 @@ class CheckinService(OwnerDelegator):
         }
 
     def run_scheduled_checkins(self) -> Dict[str, Any]:
-        """单任务入口：每天首次全量签到，随后仅重试失败渠道。"""
+        """单任务入口：每天首次只签到尚未成功的渠道，随后仅重试失败渠道。"""
         if not self._schedule_lock.acquire(blocking=False):
             return self._skipped_result("签到调度正在执行", success=False)
         try:
@@ -976,51 +973,68 @@ class CheckinService(OwnerDelegator):
             providers = self._ready_providers()
             if not providers:
                 return self._scheduled_result([], "scheduled")
-            state = self._load_schedule_state(today=today, providers=providers)
 
+            retry_count = self._configured_retry_count()
+            today_records = self._today_records_map(providers, today)
+            # 手动签到与定时签到同等对待：今日已成功的渠道不再重复执行。
+            pending = [
+                provider
+                for provider in providers
+                if not self._signed_today(today_records[provider.key])
+            ]
+            if not pending:
+                self._save_schedule_state(today, providers, [], retry_count)
+                return self._skipped_result("今日签到已全部完成")
+
+            state = self._load_schedule_state(
+                today=today,
+                providers=providers,
+                today_records=today_records,
+            )
             if not state["full_completed"]:
                 results = self._execute_scheduled_providers(
-                    providers, trigger="scheduled"
+                    pending, trigger="scheduled"
                 )
-                retry_count = self._configured_retry_count()
-                state.update({
-                    "full_completed": True,
-                    "retry_count": retry_count,
-                    "pending_providers": [
+                self._save_schedule_state(
+                    today,
+                    providers,
+                    [
                         item["provider"]
                         for item in results
                         if retry_count and not item.get("success")
                     ],
-                    "completed_retry_count": 0,
-                })
-                self.save_data(self._SCHEDULE_STATE_KEY, state)
+                    0,
+                )
                 self._notify_checkin_summary(results, "签到汇总")
                 return self._scheduled_result(results, "scheduled")
 
-            retry_count = self._configured_retry_count()
             completed_retry_count = self._number(
                 state.get("completed_retry_count")
             )
             if not retry_count or completed_retry_count >= retry_count:
                 return self._skipped_result("签到异常重试已关闭或已完成")
 
-            pending = self._pending_retry_providers(state, providers, today)
-            if not pending:
-                state["pending_providers"] = []
-                state["completed_retry_count"] = retry_count
-                self.save_data(self._SCHEDULE_STATE_KEY, state)
+            planned = {str(key) for key in (state.get("pending_providers") or [])}
+            retry_targets = [
+                provider for provider in pending if provider.key in planned
+            ]
+            if not retry_targets:
+                self._save_schedule_state(today, providers, [], retry_count)
                 return self._skipped_result("没有需要重试的签到渠道")
 
             results = self._execute_scheduled_providers(
-                pending, trigger="retry"
+                retry_targets, trigger="retry"
             )
-            state["pending_providers"] = [
-                item["provider"]
-                for item in results
-                if not item.get("success")
-            ]
-            state["completed_retry_count"] = completed_retry_count + 1
-            self.save_data(self._SCHEDULE_STATE_KEY, state)
+            self._save_schedule_state(
+                today,
+                providers,
+                [
+                    item["provider"]
+                    for item in results
+                    if not item.get("success")
+                ],
+                completed_retry_count + 1,
+            )
             self._notify_checkin_summary(results, "签到重试汇总")
             return self._scheduled_result(results, "retry")
         finally:

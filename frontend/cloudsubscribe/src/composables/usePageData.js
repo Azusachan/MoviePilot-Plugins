@@ -1,4 +1,5 @@
 import {computed, reactive, ref} from "vue";
+import {applyDisplayCatalog} from "./resourceUtils";
 
 export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
   const historyGroups = ref([]);
@@ -89,6 +90,7 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribe") {
       if (!result?.success) throw new Error(result?.message || "加载失败");
       if (requestId !== pageRequestSequence) return false;
       const data = result.data || {};
+      applyDisplayCatalog(data);
       const pageData = data.history_page || {};
       historyGroups.value = Array.isArray(data.history_groups) ? data.history_groups : [];
       embyPlayItems.value = data.emby_play_items || {};

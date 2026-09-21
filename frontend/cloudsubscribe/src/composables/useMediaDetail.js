@@ -1,10 +1,10 @@
 import {computed, ref, watch} from "vue";
 import {
-  DEFAULT_CHANNELS,
   getChannelDefaultIcon,
   getNormalizedResourceType,
   getResourceTabIcon,
   getResourceTypeName,
+  getResourceTypeRank,
   getSourceName,
   isPointUnlockResource,
   responseItems,
@@ -44,15 +44,9 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
       .filter((channel) => Boolean(channel.key));
   }
 
-  const availableChannels = ref(normalizeChannels(DEFAULT_CHANNELS));
-  const availableDrives = ref([
-    {key: "115", name: "115网盘"},
-    {key: "quark", name: "夸克网盘"},
-    {key: "alipan", name: "阿里云盘"},
-    {key: "123", name: "123云盘"},
-    {key: "tianyi", name: "天翼云盘"},
-    {key: "guangya", name: "光鸭网盘"},
-  ]);
+  // 渠道与网盘列表均由后端下发（available_sources / available_drives）
+  const availableChannels = ref([]);
+  const availableDrives = ref([]);
   const activeChannelTab = ref("pansou");
   const activeResourceTab = ref("");
   const resourceSearchQuery = ref("");
@@ -106,28 +100,10 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
       const type = getNormalizedResourceType(item);
       counts[type] = (counts[type] || 0) + 1;
     }
-    const order = [
-      "115",
-      "quark",
-      "alipan",
-      "uc",
-      "guangya",
-      "tianyi",
-      "123",
-      "xunlei",
-      "baidu",
-      "magnet",
-      "ed2k",
-      "other",
-    ];
     return Object.keys(counts)
       .sort((a, b) => {
-        const aIndex = order.indexOf(a);
-        const bIndex = order.indexOf(b);
-        if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
-        if (aIndex >= 0) return -1;
-        if (bIndex >= 0) return 1;
-        return counts[b] - counts[a];
+        const rankDiff = getResourceTypeRank(a) - getResourceTypeRank(b);
+        return rankDiff !== 0 ? rankDiff : counts[b] - counts[a];
       })
       .map((type) => ({
         value: type,

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import PirateBayClient
 from .provider import create_piratebay_provider
 from .service import PirateBaySearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class PirateBaySourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class PirateBaySourceDefinition(SearchSourceDefinition):
     id = "piratebay"
     name = "海盗湾"
     icon = "mdi-pirate"
+    color = "teal"
     order = 90
 
     @classmethod

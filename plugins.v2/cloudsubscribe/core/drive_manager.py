@@ -11,6 +11,7 @@ from .cloud import (
 )
 from .transfer import CrossTransferTaskManager
 from ..drive.scanner import DriverRegistry
+from ..search.types import normalize_resource_type
 
 
 class CloudDriveManager:
@@ -142,7 +143,6 @@ class CloudDriveManager:
         if not self.active_drive:
             return
 
-        aliases = {"189": "tianyi", "aliyun": "alipan"}
         cross_enabled = getattr(self._plugin, "_cross_transfer_enabled", False)
 
         def resource_supported(value: str) -> bool:
@@ -151,7 +151,7 @@ class CloudDriveManager:
             if not cross_enabled:
                 return False
             try:
-                source = self.registry.get(aliases.get(str(value).lower(), str(value).lower()))
+                source = self.registry.get(normalize_resource_type(value))
             except KeyError:
                 return False
             return (

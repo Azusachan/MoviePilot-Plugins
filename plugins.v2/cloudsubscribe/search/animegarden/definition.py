@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import AnimeGardenClient
 from .provider import create_animegarden_provider
 from .service import AnimeGardenSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class AnimeGardenSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class AnimeGardenSourceDefinition(SearchSourceDefinition):
     id = "animegarden"
     name = "AnimeGarden"
     icon = "mdi-flower-tulip-outline"
+    color = "deep-orange-darken-1"
     order = 70
 
     @classmethod

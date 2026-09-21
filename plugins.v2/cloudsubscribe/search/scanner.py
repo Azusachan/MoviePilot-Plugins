@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 from app.log import logger
 
-from ..core.search import SearchRegistry
-from ..core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
+from ..core.definitions import SearchSourceDefinition
 
 
 class SearchSourceRegistry:
@@ -69,6 +67,28 @@ class SearchSourceRegistry:
                 cls._definitions.values(), key=lambda d: getattr(d, "order", 100)
             ))
         return list(cls._ordered_definitions)
+
+    @classmethod
+    def get_source_catalog(cls) -> List[Dict[str, Any]]:
+        """返回搜索渠道展示目录（含手动与未知占位），供前端直接渲染。"""
+        catalog = [
+            {
+                "key": def_cls.id,
+                "name": def_cls.name,
+                "icon": def_cls.icon,
+                "color": def_cls.color,
+            }
+            for def_cls in cls.get_definitions()
+        ]
+        catalog.append({
+            "key": "manual", "name": "手动添加",
+            "icon": "mdi-hand-pointing-right", "color": "grey",
+        })
+        catalog.append({
+            "key": "unknown", "name": "未知",
+            "icon": "mdi-help-circle-outline", "color": "grey",
+        })
+        return catalog
 
     @classmethod
     def get_search_schemas(cls, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

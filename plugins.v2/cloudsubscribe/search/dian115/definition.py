@@ -22,6 +22,7 @@ class Dian115SourceDefinition(SearchSourceDefinition):
     id = "dian115"
     name = "Dian115"
     icon = "mdi-cloud-search"
+    color = "amber-darken-2"
     order = 30
 
     @classmethod

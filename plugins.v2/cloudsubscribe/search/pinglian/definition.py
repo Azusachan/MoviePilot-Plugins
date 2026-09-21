@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import PinglianClient
 from .provider import create_pinglian_provider
 from .service import PinglianSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class PinglianSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class PinglianSourceDefinition(SearchSourceDefinition):
     id = "pinglian"
     name = "盘链"
     icon = "mdi-link-variant"
+    color = "cyan"
     order = 50
 
     @classmethod

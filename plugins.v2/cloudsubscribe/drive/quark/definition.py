@@ -106,7 +106,7 @@ class QuarkDriverDefinition(DriverDefinition):
                         type="number",
                         min=5,
                         max=300,
-                        cols=12,
+                        cols=6,
                     ),
                 ],
             ),

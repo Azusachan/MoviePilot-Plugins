@@ -272,14 +272,8 @@ const selectedList = computed(() => {
   return current.map((val) => map.get(String(val)) || {title: String(val), value: val});
 });
 
-const displaySummaryText = computed(() => {
-  if (selectedList.value.length === 0) return "";
-  return selectedList.value.map((i) => i.title).join(", ");
-});
-
 // 触发器中最多展示前 3 个 Chip
 const visibleChips = computed(() => selectedList.value.slice(0, 3));
-const remainingCount = computed(() => Math.max(0, selectedList.value.length - 3));
 
 // 是否展示搜索栏（选项大于 8 项或配置了 searchable）
 const showSearch = computed(() => {

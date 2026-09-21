@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import UIndexClient
 from .provider import create_uindex_provider
 from .service import UIndexSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class UIndexSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class UIndexSourceDefinition(SearchSourceDefinition):
     id = "uindex"
     name = "UIndex"
     icon = "mdi-magnet"
+    color = "blue"
     order = 100
 
     @classmethod

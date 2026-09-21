@@ -1,6 +1,7 @@
 /**
  * 网盘资源页面共享的工具函数和常量。
  * 所有纯函数和静态数据集中在此，供 composables 和组件共用。
+ * 资源类型与搜索渠道的名称/图标/配色由后端下发，这里只做缓存与查找。
  */
 
 // RAW SVG ICONS
@@ -208,122 +209,97 @@ export function resKey(res, idx) {
   return `${res.source || "s"}_${res.url || res.title || idx}_${idx}`;
 }
 
-// 资源类型
+// 展示目录：后端 ui_options / page_data 下发 resource_types、resource_type_aliases、sources
+const displayCatalog = {
+  types: [],
+  typeIndex: {},
+  aliases: {},
+  sources: [],
+  sourceIndex: {},
+};
+
+export function applyDisplayCatalog(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (Array.isArray(payload.resource_types) && payload.resource_types.length) {
+    displayCatalog.types = payload.resource_types.slice();
+    displayCatalog.typeIndex = Object.fromEntries(
+      displayCatalog.types.map((item) => [String(item?.value || "").toLowerCase(), item]),
+    );
+  }
+  if (payload.resource_type_aliases && typeof payload.resource_type_aliases === "object") {
+    displayCatalog.aliases = Object.fromEntries(
+      Object.entries(payload.resource_type_aliases).map(([key, value]) => [
+        String(key).toLowerCase(),
+        String(value).toLowerCase(),
+      ]),
+    );
+  }
+  if (Array.isArray(payload.sources) && payload.sources.length) {
+    displayCatalog.sources = payload.sources.slice();
+    displayCatalog.sourceIndex = Object.fromEntries(
+      displayCatalog.sources.map((item) => [String(item?.key || "").toLowerCase(), item]),
+    );
+  }
+}
+
+function normalizeType(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "other";
+  return displayCatalog.aliases[raw] || raw;
+}
+
+function typeMeta(type) {
+  return displayCatalog.typeIndex[normalizeType(type)] || null;
+}
+
 export function getNormalizedResourceType(item) {
-  const raw = String(item?.resource_type || item?.pan_type || "")
-    .toLowerCase()
-    .trim();
-  const aliases = {aliyun: "alipan", ali: "alipan", "115pan": "115", "123pan": "123", magnetlink: "magnet"};
-  return aliases[raw] || raw || "other";
+  return normalizeType(item?.resource_type || item?.pan_type);
 }
 
 export function getResourceTypeName(type) {
-  const map = {
-    115: "115网盘",
-    quark: "夸克网盘",
-    alipan: "阿里云盘",
-    baidu: "百度网盘",
-    uc: "UC网盘",
-    tianyi: "天翼云盘",
-    123: "123网盘",
-    xunlei: "迅雷网盘",
-    magnet: "磁力链接",
-    ed2k: "电驴链接",
-    torrent: "BT种子",
-    pikpak: "PikPak",
-    guangya: "光鸭网盘",
-  };
-  const key = String(type || "").toLowerCase();
-  return map[key] || (type ? String(type).toUpperCase() : "未知类型");
+  const meta = typeMeta(type);
+  if (meta?.name) return meta.name;
+  const raw = String(type || "").trim();
+  return raw ? raw.toUpperCase() : "未知类型";
 }
 
 export function getResourceTabIcon(type) {
-  const map = {
-    all: "mdi-apps",
-    115: "mdi-cloud",
-    quark: "mdi-cloud-outline",
-    alipan: "mdi-cloud-sync-outline",
-    baidu: "mdi-cloud-circle-outline",
-    uc: "mdi-cloud-download-outline",
-    tianyi: "mdi-cloud-check-outline",
-    123: "mdi-cloud-refresh-outline",
-    guangya: "mdi-cloud-outline",
-    xunlei: "mdi-flash",
-    magnet: "mdi-magnet",
-    ed2k: "mdi-link-variant",
-    torrent: "mdi-seed",
-    pikpak: "mdi-cloud-upload-outline",
-  };
-  return map[String(type || "").toLowerCase()] || "mdi-folder-outline";
+  if (String(type || "").trim().toLowerCase() === "all") return "mdi-apps";
+  return typeMeta(type)?.icon || "mdi-folder-outline";
 }
 
-export function getResourceTypeIcon(type) {
-  return getResourceTabIcon(type);
+export const getResourceTypeIcon = getResourceTabIcon;
+
+export function getTypeColor(type) {
+  return typeMeta(type)?.color || "blue-grey";
 }
 
-export function getSourceColor(source) {
-  const map = {
-    hdhive: "amber-darken-1",
-    piratebay: "teal",
-    uindex: "blue",
-    mikan: "pink",
-    animegarden: "deep-orange-darken-1",
-    seedhub: "deep-purple",
-    pansou: "indigo",
-    juying: "orange",
-    pinglian: "cyan",
-    dian115: "amber-darken-2",
-  };
-  return map[String(source).toLowerCase()] || "grey";
+function isPreviewableResourceType(type) {
+  return Boolean(typeMeta(type)?.previewable);
+}
+
+export function isOfflineResourceType(type) {
+  return Boolean(typeMeta(type)?.offline);
+}
+
+export function getResourceTypeRank(type) {
+  const key = normalizeType(type);
+  const index = displayCatalog.types.findIndex(
+    (item) => String(item?.value || "").toLowerCase() === key,
+  );
+  return index < 0 ? displayCatalog.types.length : index;
+}
+
+export function getSourceMeta(source) {
+  return displayCatalog.sourceIndex[String(source || "").trim().toLowerCase()] || null;
 }
 
 export function getSourceName(source) {
-  const map = {
-    pansou: "PanSou",
-    hdhive: "HDHive",
-    dian115: "Dian115",
-    juying: "聚影",
-    seedhub: "SeedHub",
-    pinglian: "盘链",
-    piratebay: "海盗湾",
-    uindex: "UIndex",
-    mikan: "Mikan",
-    animegarden: "AnimeGarden",
-    online_docs: "在线文档",
-  };
-  return map[String(source).toLowerCase()] || source || "未知";
-}
-
-export function getTypeColor(type) {
-  const map = {
-    115: "primary",
-    quark: "amber-darken-3",
-    alipan: "blue",
-    baidu: "indigo",
-    uc: "deep-orange",
-    tianyi: "teal",
-    123: "purple",
-    xunlei: "light-blue-darken-1",
-    magnet: "red-darken-1",
-    ed2k: "blue-grey-darken-1",
-    pikpak: "deep-purple",
-  };
-  return map[String(type || "").toLowerCase()] || "blue-grey";
+  return getSourceMeta(source)?.name || String(source || "").trim() || "未知";
 }
 
 export function getChannelDefaultIcon(key) {
-  const map = {
-    piratebay: "mdi-skull-crossbones",
-    uindex: "mdi-magnet",
-    mikan: "mdi-animation-play",
-    animegarden: "mdi-flower-tulip-outline",
-    pansou: "mdi-cloud-search",
-    seedhub: "mdi-seed",
-    juying: "mdi-filmstrip",
-    pinglian: "mdi-link-variant",
-    dian115: "mdi-cloud-download",
-  };
-  return map[key] || "mdi-magnify";
+  return getSourceMeta(key)?.icon || "mdi-magnify";
 }
 
 // 标签提取
@@ -550,20 +526,6 @@ export function mediaFilterTitle(value, group) {
   return text;
 }
 
-// 默认渠道
-export const DEFAULT_CHANNELS = [
-  {key: "pansou", name: "PanSou", icon: "mdi-cloud-search"},
-  {key: "hdhive", name: "HDHive", icon: "mdi-hexagon-multiple-outline"},
-  {key: "dian115", name: "Dian115", icon: "mdi-cloud-download"},
-  {key: "juying", name: "聚影", icon: "mdi-filmstrip"},
-  {key: "seedhub", name: "SeedHub", icon: "mdi-seed"},
-  {key: "pinglian", name: "盘链", icon: "mdi-link-variant"},
-  {key: "piratebay", name: "海盗湾", icon: "mdi-skull-crossbones"},
-  {key: "uindex", name: "UIndex", icon: "mdi-magnet"},
-  {key: "mikan", name: "Mikan", icon: "mdi-animation-play"},
-  {key: "animegarden", name: "AnimeGarden", icon: "mdi-flower-tulip-outline"},
-];
-
 // 推荐 Tab
 export const RECOMMEND_TABS = [
   {value: "tmdb_trending", title: "流行趋势", icon: "mdi-fire"},
@@ -576,20 +538,15 @@ export const RECOMMEND_TABS = [
 
 // 跨盘转存判断
 export function isCrossTransferResource(res, mainDrive) {
-  const t = String(res?.resource_type || "").toLowerCase();
-  if (!t || ["magnet", "ed2k", "cloud"].includes(t)) return false;
-  return t !== String(mainDrive || "115").toLowerCase();
+  if (!res?.resource_type && !res?.pan_type) return false;
+  const resType = getNormalizedResourceType(res);
+  if (isOfflineResourceType(resType)) return false;
+  return resType !== normalizeType(mainDrive || "115");
 }
 
 // 预览资源判断
 export function canPreviewResource(item) {
-  const resType = getNormalizedResourceType(item);
-  if (resType === "ed2k") return false;
-  const previewableType = Boolean(
-    item?.can_preview ||
-    ["115", "quark", "alipan", "uc", "tianyi", "baidu", "123", "guangya", "magnet", "torrent"].includes(resType),
-  );
-  if (!previewableType) return false;
+  if (!isPreviewableResourceType(getNormalizedResourceType(item))) return false;
   const hasUrl = Boolean(item?.url);
   const isPendingResolvable = Boolean(
     item?.pending_resolution ||

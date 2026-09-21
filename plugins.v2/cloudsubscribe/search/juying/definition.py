@@ -23,6 +23,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
     id = "juying"
     name = "聚影"
     icon = "mdi-movie-search-outline"
+    color = "orange"
     order = 40
 
     @classmethod
@@ -108,6 +109,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="juying_result_limit",
                         label="候选上限",
+                        hint="最大保留候选数量",
                         type="number",
                         min=1,
                         max=20,
@@ -116,7 +118,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="juying_request_interval",
                         label="请求访问间隔",
-                        hint="登录、影片查询、资源分页和票据兑换共用统一限速，并自动加入随机抖动。",
+                        hint="接口请求基础间隔秒数",
                         type="number",
                         min=0.5,
                         max=10,
@@ -127,7 +129,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="juying_timeout",
                         label="搜索超时",
-                        hint="单次搜索最大等待时间，超时自动中断并上报熔断，默认 60 秒",
+                        hint="单次搜索超时秒数，默认 60 秒",
                         type="number",
                         min=5,
                         max=120,

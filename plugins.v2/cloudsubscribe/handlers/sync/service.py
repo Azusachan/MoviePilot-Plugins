@@ -3,14 +3,12 @@
 负责核心的同步逻辑：处理电影订阅、处理电视剧订阅
 """
 import copy
-import datetime
 import hashlib
 import re
 import threading
 import time
 import traceback
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
-from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping, Iterable
 
@@ -71,17 +69,13 @@ from ...core import (
     MediaScraper,
 )
 from ...core.media import (
-    apply_media_identity,
     legacy_media_ids,
     list_subscribes_by_tmdb_id,
-    media_identity,
-    recognize_media,
-    search_medias,
     tmdb_id_of,
-    tmdb_identity_update,
 )
-from ...utils import FileMatcher, MediaFileParser, StrmGenerator, StrmTemplateError
-from ...utils.cache import create_platform_ttl_cache, normalize_platform_cache_key
+from ...drive.scanner import get_driver_definitions
+from ...utils import StrmGenerator, StrmTemplateError
+from ...utils.cache import create_platform_ttl_cache
 
 _COMPONENT_TYPES = (
     MovieSyncProcessor,
@@ -348,14 +342,7 @@ class SyncHandler:
 
         paths = cloud_transfer_paths or _get_val("cloud_transfer_paths")
         if paths is None and plugin is not None:
-            paths = {
-                "115": getattr(plugin, "_p115_transfer_path", "/"),
-                "123": getattr(plugin, "_p123_transfer_path", "/"),
-                "quark": getattr(plugin, "_quark_transfer_path", "/"),
-                "guangya": getattr(plugin, "_guangya_transfer_path", "/"),
-                "tianyi": getattr(plugin, "_tianyi_transfer_path", "/"),
-                "alipan": getattr(plugin, "_alipan_transfer_path", "/"),
-            }
+            paths = self._configured_transfer_paths(plugin)
         self._cloud_transfer_paths = {
             str(key).strip().lower(): self._normalize_cloud_path(value)
             for key, value in dict(paths or {}).items()
@@ -2396,6 +2383,17 @@ class SyncHandler:
     def _normalize_cloud_path(path: str) -> str:
         return str(PurePosixPath("/" + str(path or "/").strip().lstrip("/")))
 
+    @staticmethod
+    def _configured_transfer_paths(plugin: Any) -> Dict[str, str]:
+        """按驱动自描述读取各网盘的转存路径，新增网盘无需改动此处。"""
+        return {
+            definition_cls.id: getattr(
+                plugin, f"_{definition_cls.get_transfer_path_key()}", "/"
+            )
+            for definition_cls in get_driver_definitions()
+            if definition_cls.get_transfer_path_key()
+        }
+
     def _cross_transfer_staging_path(self, provider_key: str) -> str:
         base_path = self._cloud_transfer_paths.get(
             str(provider_key or "").strip().lower(), "/"
@@ -2581,6 +2579,11 @@ class SyncHandler:
                 if not cloud_resource:
                     # 只清理分享转存产生的源盘暂存文件，绝不删除用户选择的网盘文件。
                     self._cleanup_cross_transfer_staging(source, "", item)
+        if source and not source.supports(CloudDriveCapability.SHARE_TRANSFER):
+            logger.warning(
+                f"{source.name}暂不支持分享转存，已跳过该资源：{share_url}"
+            )
+            return False
         service = source.require(CloudDriveCapability.SHARE_TRANSFER) if source else self._share_transfer
         target_check_name = target_name or file_item.get("name")
         success = bool(service.transfer_file(

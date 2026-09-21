@@ -1,20 +1,6 @@
 import {enabled} from "../helpers.js";
 
-const SOURCE_ITEMS = [
-  {title: "HDHive", value: "hdhive"},
-  {title: "Dian115", value: "dian115"},
-  {title: "PanSou", value: "pansou"},
-  {title: "聚影", value: "juying"},
-  {title: "盘链", value: "pinglian"},
-  {title: "SeedHub", value: "seedhub"},
-  {title: "海盗湾", value: "piratebay"},
-  {title: "UIndex", value: "uindex"},
-  {title: "Mikan", value: "mikan"},
-  {title: "AnimeGarden", value: "animegarden"},
-  {title: "在线文档", value: "online_docs"},
-]
-
-export function createCommonSearchGroups(resourceTypeItems) {
+export function createCommonSearchGroups(resourceTypeItems, sourceItems = []) {
   return [
     {
       tab: "common",
@@ -25,7 +11,7 @@ export function createCommonSearchGroups(resourceTypeItems) {
           key: "search_source_order",
           label: "搜索资源优先级",
           type: "priority-order",
-          items: SOURCE_ITEMS,
+          items: sourceItems,
           cols: 12,
         },
         {

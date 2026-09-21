@@ -552,17 +552,6 @@ function rankClass(index) {
   return "";
 }
 
-const summary = computed(() => {
-  if (isListMode.value) {
-    if (!rulesList.value.length) return "未配置（默认）";
-    const labels = rulesList.value.slice(0, 3).map((v, i) => `${i + 1}. ${v.title}`);
-    const suffix = rulesList.value.length > 3 ? ` 等共 ${rulesList.value.length} 项` : "";
-    return labels.join("、") + suffix;
-  }
-  if (!selectedRegions.value.length) return "未选择";
-  return selectedRegions.value.map((region) => `${regionLabel(region)} (${values(region).length})`).join("、");
-});
-
 function regionLabel(region) {
   const match = props.field.items?.find((item) => String(item.value) === String(region));
   return match?.title || region;

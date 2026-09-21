@@ -16,6 +16,7 @@ from ...core import (
     SearchCapability,
 )
 from ...search.types import (
+    CANDIDATE_RESOURCE_TYPES,
     normalize_resource_type,
     resource_type_from_url,
     resource_type_name,
@@ -686,29 +687,21 @@ class ResourceTransferService(OwnerDelegator):
     def _supported_resource_type(
             resource: Dict[str, Any], share_url: str
     ) -> str:
-        resource_type = str(
+        """识别候选资源类型：先取显式声明，再按域名匹配（规则见 search.types）。"""
+        resource_type = normalize_resource_type(
             resource.get("resource_type") or resource.get("pan_type") or ""
-        ).strip().lower()
+        )
         if resource_type:
             return resource_type
-        normalized_url = str(share_url).lstrip().lower()
+        normalized_url = str(share_url).strip().lower()
         if normalized_url.startswith("cloud://"):
             return "cloud"
         if normalized_url.startswith("ed2k://"):
             return "ed2k"
         if normalized_url.startswith("magnet:?"):
             return "magnet"
-        for marker, value in (
-                ("quark", "quark"), ("189.cn", "tianyi"),
-                ("cloud.189", "tianyi"), ("guangya", "guangya"),
-                ("123pan", "123"), ("123.cn", "123"),
-                ("123684.com", "123"), ("123865.com", "123"),
-                ("115cdn.com", "115"),
-                ("alipan.com", "alipan"), ("aliyundrive.com", "alipan"),
-        ):
-            if marker in normalized_url:
-                return value
-        return "115"
+        # 历史行为：无法识别来源的候选按 115 分享处理。
+        return resource_type_from_url(normalized_url) or "115"
 
     def _is_cross_drive_resource(
             self, resource: Dict[str, Any], share_url: str = ""
@@ -724,15 +717,16 @@ class ResourceTransferService(OwnerDelegator):
             if source:
                 return source.key != self._cloud_drive.key
         resource_type = self._supported_resource_type(resource, actual_url)
-        resource_type = {
-            "189": "tianyi", "aliyun": "alipan",
-        }.get(resource_type, resource_type)
-        return not self._cloud_drive.supports_resource_type(resource_type)
+        return not self._cloud_drive.supports_resource_type(
+            normalize_resource_type(resource_type)
+        )
 
     def _normalize_candidate_resource_type(self, resource: Dict[str, Any]) -> str:
         """获取并规范化候选资源的类型键（与 resource_type_order 配置保持一致）。"""
-        rtype = str(resource.get("resource_type") or resource.get("pan_type") or "").strip().lower()
-        if rtype in {"115", "ed2k", "magnet", "189", "aliyun", "quark", "uc", "cloud"}:
+        rtype = normalize_resource_type(
+            resource.get("resource_type") or resource.get("pan_type") or ""
+        )
+        if rtype in CANDIDATE_RESOURCE_TYPES:
             return rtype
         url = str(resource.get("url") or "").strip()
         if url:
@@ -819,9 +813,8 @@ class ResourceTransferService(OwnerDelegator):
                 except KeyError:
                     return None
             return self._cloud_drive
-        aliases = {"189": "tianyi", "aliyun": "alipan"}
         try:
-            return self._cloud_drive_registry.get(aliases.get(key, key))
+            return self._cloud_drive_registry.get(normalize_resource_type(key))
         except KeyError:
             return self._cloud_drive if key == "115" else None
 

@@ -4,7 +4,6 @@
 """
 import copy
 import datetime
-import re
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event as ThreadEvent, Lock, RLock, local
 from typing import Optional, Any, List, Dict, Tuple, Callable
@@ -20,11 +19,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .core import (
-    CloudDriveCapability,
     CloudDriveManager,
     CloudDriveProvider,
     CloudDriveRegistry,
-    CrossTransferTaskManager,
     get_component,
     resolve_component,
 )
@@ -102,7 +99,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.4"
+    plugin_version = "1.5.5"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -446,10 +443,11 @@ class CloudSubscribe(_PluginBase):
                 policy = "block"
             config["platform_download_policy"] = policy
         if config != original_config:
-            if self.update_config(config):
-                logger.info("插件配置已清理并迁移到当前格式")
-            else:
+            # 宿主仅在真正失败时返回 False，None 表示库中已是该配置（无需更新）。
+            if self.update_config(config) is False:
                 logger.warning("订阅接管配置迁移持久化失败，本次运行仍使用迁移后配置")
+            else:
+                logger.info("插件配置已清理并迁移到当前格式")
         hot_keys = {
             "show_sidebar_nav",
             "agent_enabled",
@@ -878,10 +876,27 @@ class CloudSubscribe(_PluginBase):
 
     def _persist_config_values(self, **updates: Any) -> None:
         """基于当前完整配置更新少量运行时值，避免遗漏其他配置项。"""
+        updates = {
+            key: value
+            for key, value in updates.items()
+            if value is not None
+        }
+        if not updates:
+            return
         config = copy.deepcopy(self.get_config() or self._applied_config or {})
+        if all(config.get(key) == value for key, value in updates.items()):
+            # 与库中配置一致时无需写库：宿主对“值未变化”的写入返回 None。
+            self._applied_config = config
+            return
         config.update(updates)
-        if not self.update_config(config):
-            logger.warning(f"插件运行时配置持久化失败：{', '.join(updates)}")
+        try:
+            # 宿主仅在真正失败时返回 False，None 表示值未变化、无需更新。
+            if self.update_config(config) is False:
+                logger.warning(f"插件运行时配置持久化失败：{', '.join(updates)}")
+        except Exception as error:
+            logger.warning(
+                f"插件运行时配置持久化异常：{', '.join(updates)}：{error}"
+            )
         self._applied_config = config
 
     def _run_auto_subscribe_once(self) -> None:

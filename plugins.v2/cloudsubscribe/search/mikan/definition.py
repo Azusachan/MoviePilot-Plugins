@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import MikanClient
 from .provider import create_mikan_provider
 from .service import MikanSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class MikanSourceDefinition(SearchSourceDefinition):
@@ -16,6 +16,7 @@ class MikanSourceDefinition(SearchSourceDefinition):
     id = "mikan"
     name = "Mikan"
     icon = "mdi-animation-play-outline"
+    color = "pink"
     order = 60
 
     @classmethod

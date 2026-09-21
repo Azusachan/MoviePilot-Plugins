@@ -14,12 +14,27 @@ from app.schemas.types import MediaType, NotificationType
 from .. import CloudDriveCapability, OwnerDelegator
 from ..config import UIConfig
 from ..media import call_with_supported_kwargs, recognize_media
-from ...search.pansou import PanSouClient
-from ...search.types import PANSOU_RESOURCE_TYPES, resource_type_name
-from ...search.matching import is_anime_media
-from ...utils.cache import create_platform_ttl_cache
 from ...drive.scanner import DriverRegistry
+from ...search.matching import is_anime_media
+from ...search.pansou import PanSouClient
 from ...search.scanner import SearchSourceRegistry
+from ...search.types import (
+    PANSOU_RESOURCE_TYPES,
+    resource_type_aliases,
+    resource_type_catalog,
+    resource_type_name,
+)
+from ...utils.cache import create_platform_ttl_cache
+
+
+def _display_catalog() -> dict:
+    """资源类型与搜索渠道的展示元数据：名称、图标、配色与顺序全部由后端下发。"""
+    return {
+        "resource_types": resource_type_catalog(),
+        "resource_type_aliases": resource_type_aliases(),
+        "sources": SearchSourceRegistry.get_source_catalog(),
+    }
+
 
 _UI_OPTIONS_CACHE = create_platform_ttl_cache(
     "ui:options", maxsize=16, ttl=2 * 60
@@ -245,6 +260,7 @@ class PageApi(OwnerDelegator):
         return {
             "success": True,
             "data": {
+                **_display_catalog(),
                 "history_groups": history_groups,
                 "history_page": {
                     "page": page_result["page"],
@@ -402,6 +418,7 @@ class PageApi(OwnerDelegator):
                 result = {
                     "success": True,
                     "data": {
+                        **_display_catalog(),
                         "defaults": UIConfig.normalize_config(UIConfig.get_default_config()),
                         "mediaservers": UIConfig.get_media_server_options(),
                         "checkin_schemas": get_checkin_schemas(),
@@ -512,6 +529,7 @@ class PageApi(OwnerDelegator):
         result = {
             "success": True,
             "data": {
+                **_display_catalog(),
                 "search_accounts": search_accounts,
                 "pansou": pansou_options,
                 "available_sources": available_sources,
@@ -670,7 +688,6 @@ class PageApi(OwnerDelegator):
 
     def api_vue_create_local_directory(self, payload: dict) -> dict:
         """在本地当前目录创建子文件夹。"""
-        import os
         from pathlib import Path
 
         request = payload or {}

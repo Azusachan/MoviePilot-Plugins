@@ -136,7 +136,9 @@ class ConfigApi(OwnerDelegator):
             checkin_error = self._validate_checkin_config(payload)
             if checkin_error:
                 return {"success": False, "message": checkin_error}
-            self.update_config(payload)
+            # 宿主 update_config 仅在真正失败时返回 False，None 表示配置未变化。
+            if self.update_config(payload) is False:
+                return {"success": False, "message": "配置保存失败，请重试"}
             clear_ui_options_cache()
             clear_account_cache()
             if not sync_lock.acquire(blocking=False):
@@ -356,7 +358,8 @@ class ConfigApi(OwnerDelegator):
         if not changed:
             return {"success": True, "message": "配置未变化", "data": {"changed": {}}}
         payload.update(changed)
-        self.update_config(payload)
+        if self.update_config(payload) is False:
+            return {"success": False, "message": "配置保存失败，请重试"}
         if not sync_lock.acquire(blocking=False):
             self._queue_pending_config(payload)
             return {

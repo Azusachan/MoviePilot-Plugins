@@ -3,7 +3,7 @@
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse
 
 from app.log import logger
 
@@ -16,6 +16,7 @@ from ..http_client import (
     requests,
 )
 from ..types import (
+    append_share_password,
     normalize_resource_type,
     resource_type_from_url,
 )
@@ -349,20 +350,8 @@ class PinglianClient:
 
     @staticmethod
     def apply_password(resource_type: str, target: str, password: str) -> str | bytes:
-        password = str(password or "").strip()
-        if not password:
-            return target
-        parsed = urlparse(target)
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        key = {
-            "115": "password", "123": "pwd", "guangya": "code", "baidu": "pwd"
-        }.get(resource_type)
-        if key and key not in query:
-            query[key] = password
-            return urlunparse(parsed._replace(query=urlencode(query)))
-        if resource_type in {"quark", "alipan", "tianyi"}:
-            return f"{target} 提取码: {password}"
-        return target
+        """按资源类型把提取码附加到直链，规则与搜索层保持同一份定义。"""
+        return append_share_password(resource_type, target, password)
 
     def resolve_resource(
             self,

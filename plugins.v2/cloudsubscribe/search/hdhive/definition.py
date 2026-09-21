@@ -49,6 +49,7 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
     id = "hdhive"
     name = "HDHive"
     icon = "mdi-hexagon-multiple-outline"
+    color = "amber-darken-1"
     order = 10
     _TEST_CLIENT_LIMIT = 4
     _test_clients_lock = threading.RLock()
