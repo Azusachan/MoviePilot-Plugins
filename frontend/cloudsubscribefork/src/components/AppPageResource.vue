@@ -1,6 +1,7 @@
 <template>
   <div class="cloud-resource-page">
     <TabsHeader
+      v-if="!isHeaderTabInjected"
       :tabs="recommendTabs"
       :active-tab="activeTab"
       :search-mode="isSearchMode"
@@ -137,7 +138,7 @@
 </template>
 
 <script setup>
-import {computed, nextTick, onMounted, onUnmounted, ref} from "vue";
+import {computed, nextTick, onMounted, onUnmounted, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
 import TabsHeader from "./resource/TabsHeader.vue";
 import FilterBar from "./resource/FilterBar.vue";
@@ -1134,10 +1135,65 @@ function detachScrollListeners() {
   observedScrollParents = [];
 }
 
+const isHeaderTabInjected = ref(false);
+
+function syncDynamicHeaderTab() {
+  if (typeof window === "undefined") return false;
+  const registerFn = window.__VUE_INJECT_DYNAMIC_HEADER_TAB__;
+  if (typeof registerFn !== "function") return false;
+
+  const items = recommendTabs.map((tab) => ({
+    title: tab.title,
+    icon: tab.icon,
+    tab: tab.value,
+  }));
+
+  const appendButtons = [
+    {
+      icon: "mdi-filter-variant",
+      variant: showFilterBar.value ? "tonal" : "text",
+      color: showFilterBar.value || activeMediaFilterCount.value ? "primary" : undefined,
+      size: "small",
+      action: () => {
+        showFilterBar.value = !showFilterBar.value;
+      },
+    },
+  ];
+
+  registerFn({
+    items,
+    modelValue: isSearchMode.value ? "" : activeTab.value,
+    appendButtons,
+    onUpdateModelValue: (val) => {
+      if (val) onTabChange(val);
+    },
+  });
+  return true;
+}
+
+function clearDynamicHeaderTab() {
+  if (typeof window === "undefined") return;
+  const registerFn = window.__VUE_INJECT_DYNAMIC_HEADER_TAB__;
+  if (typeof registerFn === "function") {
+    registerFn({
+      items: [],
+      modelValue: "",
+      appendButtons: [],
+    });
+  }
+}
+
+watch([activeTab, isSearchMode, showFilterBar, activeMediaFilterCount], () => {
+  if (isHeaderTabInjected.value) {
+    syncDynamicHeaderTab();
+  }
+});
+
 onMounted(() => {
   loadPluginConfig();
   loadRecommend(activeTab.value);
   setupTopSearchInterceptor();
+  isHeaderTabInjected.value = syncDynamicHeaderTab();
   nextTick(() => {
     setupSentinelObserver();
     attachScrollListeners();
@@ -1146,6 +1202,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  if (isHeaderTabInjected.value) {
+    clearDynamicHeaderTab();
+  }
   cleanupTopSearchInterceptor();
   cleanupTimers();
   detachScrollListeners();

@@ -1,16 +1,18 @@
-"""UIndex 磁力搜索客户端。"""
-
 import html
 import re
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse, urlsplit
+
+from app.log import logger
 
 from ..http_client import (
     RequestGate,
-    gated_request,
+    gated_idempotent_request,
     normalize_proxies,
-    normalize_proxy_address,
+    request_error_summary,
     requests,
 )
 from ...utils.cache import create_platform_ttl_cache
@@ -48,10 +50,18 @@ class UIndexClient:
     _HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     }
 
     def __init__(
@@ -60,11 +70,13 @@ class UIndexClient:
             proxy: Optional[str] = None,
             timeout: int = 20,
             request_interval: float = 1.0,
+            request_timeout: Optional[int] = None,
     ) -> None:
         self._raw_base_url = str(base_url or self.DEFAULT_BASE_URL).strip()
         self.base_url = self._raw_base_url.rstrip("/") or self.DEFAULT_BASE_URL
-        self._proxy = normalize_proxy_address(proxy)
-        self.timeout = max(5, int(timeout or 20))
+        self._proxy = str(proxy or "").strip()
+        effective_timeout = request_timeout if request_timeout is not None else timeout
+        self.timeout = max(5, int(effective_timeout or 20))
         self.request_interval = max(0.2, float(request_interval or 1.0))
         self._gate = RequestGate.shared(
             "UIndex",
@@ -75,6 +87,9 @@ class UIndexClient:
         )
         self._cache = create_platform_ttl_cache("uindex_search", ttl=1800, maxsize=500)
         self._cache_lock = threading.Lock()
+        self._browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="UIndex-Browser")
+        self._browser_context = None
+        self._browser_lock = threading.RLock()
 
     @property
     def proxy(self) -> str:
@@ -86,15 +101,17 @@ class UIndexClient:
             proxy: Optional[str] = None,
             timeout: Optional[int] = None,
             request_interval: Optional[float] = None,
+            request_timeout: Optional[int] = None,
     ) -> None:
         if base_url is not None:
             raw = str(base_url).strip()
             self._raw_base_url = raw or self.DEFAULT_BASE_URL
             self.base_url = self._raw_base_url.rstrip("/") or self.DEFAULT_BASE_URL
         if proxy is not None:
-            self._proxy = normalize_proxy_address(proxy)
-        if timeout is not None:
-            self.timeout = max(5, int(timeout or 20))
+            self._proxy = str(proxy or "").strip()
+        effective_timeout = request_timeout if request_timeout is not None else timeout
+        if effective_timeout is not None:
+            self.timeout = max(5, int(effective_timeout or 20))
         if request_interval is not None:
             self.request_interval = max(0.2, float(request_interval or 1.0))
         self._gate = RequestGate.shared(
@@ -104,6 +121,121 @@ class UIndexClient:
             minimum_interval=0.2,
             serial_requests=False,
         )
+        self._close_browser()
+
+    def _browser_proxy(self) -> Optional[Dict[str, str]]:
+        proxies = normalize_proxies(self._proxy) or {}
+        proxy = proxies.get("https") or proxies.get("http")
+        if not proxy:
+            return None
+        parsed = urlparse(str(proxy))
+        if not parsed.scheme or not parsed.hostname:
+            return None
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        server = f"{parsed.scheme}://{host}"
+        if parsed.port:
+            server += f":{parsed.port}"
+        result = {"server": server}
+        if parsed.username:
+            result["username"] = unquote(parsed.username)
+        if parsed.password:
+            result["password"] = unquote(parsed.password)
+        return result
+
+    def _close_browser(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def _fetch_page_with_browser(self, url: str) -> str:
+        """按需在独立纯净线程中通过 CloakBrowser 穿透 Cloudflare 盾并获取搜索页面 HTML。"""
+
+        def _worker() -> str:
+            import asyncio
+            try:
+                asyncio.set_event_loop(None)
+            except Exception:
+                pass
+
+            from app.core.config import settings
+            from cloakbrowser import launch_context
+
+            context = launch_context(
+                headless=True,
+                proxy=self._browser_proxy(),
+                humanize=getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
+                human_preset="careful",
+            )
+            try:
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                started = time.monotonic()
+                deadline = started + 30
+                clicked = False
+                while time.monotonic() < deadline:
+                    try:
+                        title = page.title()
+                    except Exception:
+                        page.wait_for_timeout(500)
+                        continue
+
+                    if "Just a moment" not in title:
+                        try:
+                            content = page.content()
+                            if len(content) > 5000:
+                                return content
+                        except Exception:
+                            page.wait_for_timeout(500)
+                            continue
+
+                    if not clicked:
+                        for frame in page.frames:
+                            if urlsplit(frame.url).hostname == "challenges.cloudflare.com":
+                                try:
+                                    element = frame.frame_element()
+                                    if element.is_visible():
+                                        box = element.bounding_box()
+                                        if box and box["width"] >= 60 and box["height"] >= 30:
+                                            page.mouse.click(box["x"] + 30, box["y"] + box["height"] / 2)
+                                            clicked = True
+                                            break
+                                except Exception:
+                                    pass
+                    page.wait_for_timeout(500)
+
+                try:
+                    final_content = page.content()
+                    if "Just a moment" not in page.title():
+                        return final_content
+                except Exception:
+                    pass
+                raise TimeoutError("Cloudflare 验证等待超时")
+            finally:
+                try:
+                    context.close()
+                except Exception as err:
+                    logger.debug(f"关闭 UIndex 浏览器上下文异常：{err}")
+
+        result_holder = [None]
+        error_holder = [None]
+
+        def _runner():
+            try:
+                result_holder[0] = _worker()
+            except BaseException as err:
+                error_holder[0] = err
+
+        thread = threading.Thread(target=_runner, name="UIndex-Cloak-Thread", daemon=True)
+        thread.start()
+        thread.join(timeout=35)
+        if thread.is_alive():
+            raise UIndexError("CloakBrowser 渲染执行超时")
+        if error_holder[0] is not None:
+            raise UIndexError(f"CloakBrowser 渲染页面失败：{error_holder[0]}") from error_holder[0]
+        return result_holder[0]
 
     def search(self, query: str) -> List[Dict[str, Any]]:
         keyword = str(query or "").strip()
@@ -118,21 +250,42 @@ class UIndexClient:
         url = f"{self.base_url}/search.php?search={quote(keyword)}"
         proxies = normalize_proxies(self._proxy)
 
-        def _requester() -> Any:
-            return requests.get(
+        # 1. 优先执行标准 HTTP 快速请求（不需要 CF 时零浏览器开销）
+        is_cf_blocked = False
+        page_html = ""
+        try:
+            response = gated_idempotent_request(
+                self._gate,
+                requests.request,
+                "GET",
                 url,
                 headers=self._HEADERS,
                 proxies=proxies,
                 timeout=self.timeout,
             )
+            status_code = getattr(response, "status_code", 0)
+            page_text = getattr(response, "text", "") or ""
 
-        try:
-            response = gated_request(self._gate, _requester, max_retries=2, initial_delay=1.0)
-            if response.status_code != 200:
-                raise UIndexError(f"HTTP {response.status_code}")
-            page_html = response.text
-        except Exception as error:
-            raise UIndexError(f"UIndex 请求失败: {error}") from error
+            # 智能判断是否受到 Cloudflare Managed Challenge 拦截
+            is_cf_blocked = (
+                    status_code == 403
+                    or "challenges.cloudflare.com" in page_text
+                    or "cf-mitigated" in str(getattr(response, "headers", {}))
+                    or "<title>Just a moment..." in page_text
+            )
+
+            if not is_cf_blocked:
+                if status_code != 200:
+                    raise UIndexError(f"UIndex 请求异常：HTTP {status_code}")
+                page_html = page_text
+        except requests.exceptions.RequestException as error:
+            logger.debug(f"UIndex 直连请求异常：{request_error_summary(error)}，准备尝试浏览器渲染")
+            is_cf_blocked = True
+
+        # 2. 仅在检测到需要过 CF 盾时，才按需调起 CloakBrowser 浏览器过盾
+        if is_cf_blocked:
+            logger.info(f"UIndex 检测到 Cloudflare 盾防护，按需调用 CloakBrowser 浏览器过盾渲染：{keyword}")
+            page_html = self._fetch_page_with_browser(url)
 
         results = self._parse_search_page(page_html)
         with self._cache_lock:

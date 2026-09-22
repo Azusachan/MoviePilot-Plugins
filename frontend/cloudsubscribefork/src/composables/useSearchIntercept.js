@@ -86,7 +86,7 @@ export function useSearchIntercept({onSearch, onExit}) {
       const topInput = document.querySelector("header.layout-navbar input, #global-media-search");
       if (topInput) {
         originalSearchPlaceholder = topInput.getAttribute("placeholder") || "";
-        topInput.setAttribute("placeholder", "在网盘资源中搜索电影、剧集... (Ctrl+K)");
+        topInput.setAttribute("placeholder", "在网盘资源中搜索电影、剧集...");
       }
     });
   }

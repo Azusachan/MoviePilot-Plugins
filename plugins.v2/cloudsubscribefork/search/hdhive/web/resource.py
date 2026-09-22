@@ -963,9 +963,15 @@ class HDHiveResourceService:
                 share_url_from_values(row, resource_type)
                 if is_unlocked else ""
             )
+            remark = str(row.get("remark") or "").strip()
+            title = (
+                    remark
+                    or str(row.get("title") or "").strip()
+                    or f"HDHive {resource_type.upper()}资源"
+            )
             common = {
-                "title": str(row.get("title") or f"HDHive {resource_type.upper()}资源"),
-                "description": str(row.get("remark") or ""),
+                "title": title,
+                "description": remark,
                 "resolution": row.get("video_resolution") or "",
                 "quality": "",
                 "subtitle": row.get("subtitle_language") or "",

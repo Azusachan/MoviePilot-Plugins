@@ -230,7 +230,7 @@ onUnmounted(() => {
 /* 媒体卡片网格布局 */
 .media-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
   gap: 16px;
   align-items: start;
 }
@@ -240,10 +240,10 @@ onUnmounted(() => {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: 12px;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-border-color), 0.12);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
   cursor: pointer;
   transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
   box-shadow 0.22s ease,
@@ -509,15 +509,15 @@ onUnmounted(() => {
 /* 响应式断点 */
 @media (max-width: 960px) {
   .media-grid {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+    gap: 14px;
   }
 }
 
 @media (max-width: 600px) {
   .media-grid {
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 10px;
   }
 
   .media-caption {
@@ -525,7 +525,7 @@ onUnmounted(() => {
   }
 
   .media-title {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
   }
 
   .media-year {

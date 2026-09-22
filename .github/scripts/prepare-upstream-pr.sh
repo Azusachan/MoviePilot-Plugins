@@ -56,6 +56,10 @@ gh api "repos/$GH_REPO/statuses/$(git rev-parse HEAD)" \
 published="$(git rev-parse HEAD)"
 for target in "$base" "$upstream_sha"; do
   if ! git merge --no-ff --no-edit "$target"; then
+    if python3 .github/scripts/resolve_version_conflicts.py; then
+      git commit --no-edit
+      continue
+    fi
     conflicts="$(git diff --name-only --diff-filter=U)"
     git merge --abort
     gh pr comment "$pr" --body "Upstream merge blocked by conflicts in:

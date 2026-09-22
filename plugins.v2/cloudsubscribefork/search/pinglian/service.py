@@ -1,7 +1,6 @@
 """盘链作品匹配与资源候选构造。"""
 
 import re
-import time
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.log import logger
@@ -13,7 +12,6 @@ from ..types import (
     RESOURCE_TYPE_ORDER,
     SUPPORTED_RESOURCE_TYPES,
     normalize_resource_type,
-    resource_type_from_url,
 )
 from ...core.search import SearchQuery, format_search_log_prefix
 
@@ -31,8 +29,8 @@ class PinglianSearchService:
 
     @staticmethod
     def _video_title(row: Dict[str, Any]) -> str:
-        name = str(row.get("vod_name") or "").strip()
-        row_year = extract_year(row.get("vod_year"))
+        name = str(row.get("title") or row.get("vod_name") or "").strip()
+        row_year = extract_year(row.get("year") or row.get("vod_year"))
         if not name or not row_year:
             return name
         normalized = re.sub(
@@ -51,7 +49,7 @@ class PinglianSearchService:
             name = cls._video_title(row)
             if not title_matches(name, titles):
                 continue
-            row_year = extract_year(row.get("vod_year"))
+            row_year = extract_year(row.get("year") or row.get("vod_year"))
             if year and row_year and row_year != year:
                 continue
             exact = any(name.casefold() == title.casefold() for title in titles)
@@ -106,152 +104,191 @@ class PinglianSearchService:
         prefix = str(log_prefix or "[PINGLIAN]")
         video = None
         selected_keyword = ""
+
+        # 1. 搜索影视条目
         for keyword in titles:
-            payload = self._client.request_json(
-                "/api/get_videos.php", params={"wd": keyword, "pg": 1}
-            )
-            rows = payload.get("list") or []
+            try:
+                payload = self._client.request_json(
+                    "/api/videos",
+                    params={
+                        "search": keyword,
+                        "sort": "year_desc",
+                        "page": 1,
+                        "page_size": 20,
+                    },
+                )
+            except Exception as error:
+                logger.warning(f"{prefix} 搜索影视条目失败（{keyword}）：{error}")
+                continue
+
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            if isinstance(data, dict):
+                rows = data.get("list") or []
+            elif isinstance(payload, dict):
+                rows = payload.get("list") or []
+            else:
+                rows = []
             rows = rows if isinstance(rows, list) else []
-            logger.debug(f"{prefix} get_videos：关键词={keyword}，条目={len(rows)}")
+
+            logger.debug(f"{prefix} 检索作品：关键词={keyword}，条目={len(rows)}")
             video = self._select_video(rows, titles, expected_year)
             if video:
                 selected_keyword = keyword
                 break
+
         if not video:
             logger.debug(f"{prefix} 未选中作品：关键词={','.join(titles)}")
             return []
-        vod_id = video.get("vod_id")
+
+        vod_id = video.get("id") or video.get("vod_id")
+        video_name = self._video_title(video)
         logger.debug(
-            f"{prefix} 选中作品：vod_id={vod_id}，标题={self._video_title(video)}"
+            f"{prefix} 选中作品：id={vod_id}，标题={video_name}"
         )
-        payload = self._client.request_json(
-            "/api/search_pan_links.php",
-            params={
-                "keyword": selected_keyword,
-                "vod_id": vod_id,
-                "_t": int(time.time() * 1000),
-            },
-        )
-        groups = payload.get("data") if payload.get("success") else None
-        if not isinstance(groups, dict):
-            logger.debug(f"{prefix} search_pan_links：分组=0，原始链接=0")
+
+        # 2. 获取作品详情及网盘链接列表
+        try:
+            detail_payload = self._client.request_json(f"/api/videos/{vod_id}")
+        except Exception as error:
+            logger.warning(f"{prefix} 获取作品详情失败（id={vod_id}）：{error}")
             return []
+
+        detail_data = detail_payload.get("data") if isinstance(detail_payload, dict) else {}
+        if not isinstance(detail_data, dict):
+            logger.debug(f"{prefix} 作品详情数据格式异常")
+            return []
+
+        raw_links = detail_data.get("links") or []
+        if not isinstance(raw_links, list):
+            logger.debug(f"{prefix} 作品未包含网盘链接列表")
+            return []
+
         type_order = {value: index for index, value in enumerate(allowed)}
         candidates = []
         raw_link_count = 0
         type_counts: Dict[str, int] = {}
         filtered_type_counts: Dict[str, int] = {}
-        for group_key, group in groups.items():
-            rows = (group.get("links") or []) if isinstance(group, dict) else []
-            for row in rows:
-                raw_link_count += 1
-                if not isinstance(row, dict):
-                    continue
-                direct_target = str(row.get("url") or "").strip()
-                raw_type = (
-                        row.get("type") or group_key
-                        or (group.get("name") if isinstance(group, dict) else "")
-                )
-                resource_type = normalize_resource_type(raw_type)
-                if not resource_type and direct_target:
-                    resource_type = resource_type_from_url(direct_target)
-                token = str(row.get("token") or "").strip()
-                if resource_type:
-                    type_counts[resource_type] = type_counts.get(resource_type, 0) + 1
-                if resource_type not in type_order or (not direct_target and not token):
-                    continue
-                filtered_type_counts[resource_type] = (
-                        filtered_type_counts.get(resource_type, 0) + 1
-                )
-                candidates.append((
-                    type_order[resource_type], row, resource_type,
-                    direct_target, token,
-                ))
+
+        for row in raw_links:
+            if not isinstance(row, dict):
+                continue
+            raw_link_count += 1
+            link_id = str(row.get("id") or "").strip()
+            if not link_id:
+                continue
+
+            raw_type = (
+                "magnet" if row.get("is_magnet")
+                else str(row.get("pan_type") or "")
+            )
+            resource_type = normalize_resource_type(raw_type)
+            if resource_type:
+                type_counts[resource_type] = type_counts.get(resource_type, 0) + 1
+
+            if resource_type not in type_order:
+                continue
+
+            filtered_type_counts[resource_type] = (
+                    filtered_type_counts.get(resource_type, 0) + 1
+            )
+            candidates.append((
+                type_order[resource_type], row, resource_type, link_id
+            ))
+
         logger.debug(
-            f"{prefix} search_pan_links：分组={len(groups)}，"
-            f"原始链接={raw_link_count}，"
+            f"{prefix} 链接过滤：原始链接={raw_link_count}，"
             f"类型={'/'.join(f'{k}={v}' for k, v in type_counts.items()) or '无'}，"
             f"已选类型候选={'/'.join(f'{k}={v}' for k, v in filtered_type_counts.items()) or '无'}，"
             f"可用候选={len(candidates)}"
         )
 
-        def user_tier(item: tuple) -> int:
-            try:
-                return int(item[1].get("user_tier") or 0)
-            except (TypeError, ValueError):
-                return 0
-
-        candidates.sort(key=lambda item: (item[0], -user_tier(item)))
+        candidates.sort(key=lambda item: item[0])
         if resource_list_mode:
             candidates = self._round_robin(candidates)
+
         results = []
         seen = set()
-        direct_count = 0
         resolved_count = 0
         resolve_failed_count = 0
         normalized_limit = max(1, min(int(limit or 20), 80))
-        for _, row, resource_type, direct_target, token in candidates:
+
+        source_url = f"{self._client.base_url}/videos/{vod_id}"
+
+        for _, row, resource_type, link_id in candidates:
             if len(results) >= normalized_limit:
                 break
-            key = (
-                resource_type,
-                str(row.get("title") or "").strip(),
-                direct_target or token,
-            )
+            key = (resource_type, str(row.get("title") or "").strip(), link_id)
             if key in seen:
                 continue
             seen.add(key)
-            source_url = f"{self._client.base_url}/pages/video.php?id={vod_id}"
-            target = direct_target
-            if target:
-                if resource_type_from_url(target) != resource_type:
-                    resolve_failed_count += 1
-                    logger.debug(f"{prefix} 跳过类型不匹配的直链")
-                    continue
-                direct_count += 1
-            elif resource_list_mode:
+
+            title = str(row.get("title") or video_name or "盘链资源").strip()
+            desc_parts = []
+            if row.get("username"):
+                desc_parts.append(f"分享人: {row.get('username')}")
+            if row.get("note"):
+                desc_parts.append(str(row.get("note")))
+            desc = " | ".join(desc_parts)
+
+            update_time = str(
+                row.get("updated_at") or row.get("created_at") or ""
+            )
+
+            # 延迟解析模式（用于前端展示，避免无谓消耗用户的每日解锁额度）
+            if resource_list_mode:
                 results.append({
-                    "title": str(row.get("title") or "盘链资源").strip(),
-                    "description": str(row.get("source") or "").strip(),
+                    "title": title,
+                    "description": desc,
                     "url": "",
                     "resource_type": resource_type,
-                    "update_time": str(row.get("time") or ""),
+                    "update_time": update_time,
                     "source_url": source_url,
                     "pending_resolution": True,
                     "provider_data": {
-                        "resource_id": str(row.get("id") or ""),
-                        "token": token,
+                        "resource_id": link_id,
+                        "link_id": link_id,
+                        "token": link_id,
+                        "video_id": str(vod_id),
                         "password": str(row.get("password") or ""),
                     },
                 })
                 continue
-            else:
-                try:
-                    resolved = self._client.resolve_resource(
-                        token, resource_type, str(row.get("password") or "")
-                    )
-                    target = resolved.get("url") or ""
-                    resolved_count += 1
-                except PinglianError as error:
-                    resolve_failed_count += 1
-                    logger.debug(f"{prefix} 跳过不可用资源：{error.code}")
-                    continue
-            if direct_target:
-                target = self._client.apply_password(
-                    resource_type, target, str(row.get("password") or "")
+
+            # 直接解析模式（用于订阅下载，直接换取最终真实链接）
+            try:
+                resolved = self._client.resolve_resource(
+                    link_id=link_id,
+                    token=link_id,
+                    resource_type=resource_type,
+                    password=str(row.get("password") or ""),
                 )
+                target_url = str(resolved.get("url") or "").strip()
+                if not target_url:
+                    raise PinglianError("未获取到有效直链")
+                resolved_count += 1
+            except PinglianError as error:
+                resolve_failed_count += 1
+                logger.debug(f"{prefix} 解析盘链资源失败（id={link_id}）：{error}")
+                continue
+
             results.append({
-                "title": str(row.get("title") or "盘链资源").strip(),
-                "description": str(row.get("source") or "").strip(),
-                "url": target,
+                "title": title,
+                "description": desc,
+                "url": target_url,
                 "resource_type": resource_type,
-                "update_time": str(row.get("time") or ""),
+                "update_time": update_time,
                 "source_url": source_url,
-                "provider_data": {"resource_id": str(row.get("id") or "")},
+                "provider_data": {
+                    "resource_id": link_id,
+                    "link_id": link_id,
+                    "token": link_id,
+                    "video_id": str(vod_id),
+                },
             })
+
         logger.debug(
-            f"{prefix} 候选解析：直链={direct_count}，"
-            f"token回退={resolved_count}，跳过={resolve_failed_count}"
+            f"{prefix} 候选构造完成：最终输出={len(results)}，"
+            f"直接解析={resolved_count}，解析失败={resolve_failed_count}"
         )
         return results
 
