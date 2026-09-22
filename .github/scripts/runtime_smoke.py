@@ -14,6 +14,8 @@ from app.plugins.cloudsubscribefork.core.config import UIConfig
 from app.plugins.cloudsubscribefork.core.storage import CloudSubscribeForkDataStore
 from app.plugins.cloudsubscribefork.search.scanner import SearchSourceRegistry
 from app.plugins.cloudsubscribefork.drive.scanner import DriverRegistry
+from app.plugins.cloudsubscribefork.handlers.search.service import SearchHandler
+from app.schemas.types import MediaType
 
 assert CloudSubscribeFork.plugin_config_prefix == 'cloudsubscribefork_'
 sources = {definition.id for definition in SearchSourceRegistry.get_definitions()}
@@ -26,6 +28,26 @@ original = dict(config)
 UIConfig.normalize_config(config)
 for key, value in original.items():
     assert config[key] == value, key
+
+# Exercise the actual common result boundary, including non-anime bypass.
+handler = SimpleNamespace(
+    _prefilter_resource_order=lambda rows, **kwargs: rows,
+    _search_label=lambda *args: 'fixture',
+    _filter_by_platform_rules=lambda rows, *args, **kwargs: rows,
+)
+anime = SimpleNamespace(category='日番', original_language='ja', genre_ids=[16])
+movie = SimpleNamespace(category='电影', original_language='en', genre_ids=[18])
+titles = ['[桜都字幕组] Fixture [08][CHS]', '[SweetSub] Fixture [08][CHS]',
+          'Fixture [08][CHS]', '[LoliHouse] Fixture [08][CHS]',
+          '[SweetSub] Fixture [08][无字幕]']
+for source in ('pansou', 'mikan', 'animegarden'):
+    rows = [{'title': title} for title in titles]
+    accepted = SearchHandler._prepare_source_results(
+        handler, rows, source, anime, MediaType.TV, None, 1, [8], True)
+    assert [row['title'] for row in accepted] == [titles[1], titles[0]], source
+rows = [{'title': 'Fixture movie without fansub tags'}]
+assert SearchHandler._prepare_source_results(
+    handler, rows, 'pansou', movie, MediaType.MOVIE, None, None, None, True) == rows
 
 # The model schema is unchanged from stable 1.3.7. Exercise reopening the same
 # persistent file and initialization twice, with pending/history payloads.
