@@ -226,4 +226,3 @@ class HDHavenSourceDefinition(SearchSourceDefinition):
         if hdhaven_service and getattr(hdhaven_service, "available", False):
             return create_hdhaven_provider(hdhaven_service)
         return None
-

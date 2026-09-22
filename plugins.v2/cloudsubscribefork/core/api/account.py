@@ -35,7 +35,7 @@ class AccountApi(OwnerDelegator):
         """从搜索处理器读取已归一化的渠道运行参数。"""
         handler = self._search_handler
         return getattr(handler, name, default) if handler else default
-    
+
     def _search_account_card(
             self, source: str, info: Dict[str, Any]
     ) -> Dict[str, Any]:

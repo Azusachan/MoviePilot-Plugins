@@ -190,4 +190,3 @@ class AnimeGardenSourceDefinition(SearchSourceDefinition):
             AnimeGardenSearchService(client, result_limit=limit),
             {"base_url": client.base_url, "limit": limit},
         )
-

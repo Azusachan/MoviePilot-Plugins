@@ -412,4 +412,3 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
         if hdhive_service and getattr(hdhive_service, "available", False):
             return create_hdhive_provider(hdhive_service)
         return None
-

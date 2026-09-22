@@ -244,4 +244,3 @@ class Dian115SourceDefinition(SearchSourceDefinition):
         if dian115_service and getattr(dian115_service, "available", False):
             return create_dian115_provider(dian115_service)
         return None
-

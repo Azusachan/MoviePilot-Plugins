@@ -72,6 +72,9 @@ jobs:
           pnpm --dir frontend/cloudsubscribefork install --frozen-lockfile
           pnpm --dir frontend/cloudsubscribefork build
           test -f plugins.v2/cloudsubscribefork/dist/assets/remoteEntry.js
+      - name: Runtime and database compatibility
+        if: steps.prepare.outputs.changed == 'true'
+        run: bash .github/scripts/runtime-smoke.sh
       - name: Merge tested PR with a merge commit
         if: steps.prepare.outputs.changed == 'true'
         run: |

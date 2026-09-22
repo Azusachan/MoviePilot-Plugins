@@ -2455,7 +2455,7 @@ class SyncHandler:
             item: Optional[CloudFile] = None,
     ) -> None:
         """清理跨盘转存生成的临时源盘文件。
-        
+
         注意：绝对不能删除 staged_path 目录本身！因为该目录直接复用用户配置的转存路径（如 /整理/待整理）。
         """
         if not source or not source.supports(CloudDriveCapability.FILE_MUTATION):

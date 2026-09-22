@@ -2,8 +2,9 @@
 
 This fork tracks `odomu/MoviePilot-Plugins` and publishes CloudSubscribeFork builds
 that use MoviePilot's generic media-server API when calculating existing TV
-episodes. This removes the upstream Emby-only gate while preserving the
-Emby-specific path and media-stream logic used elsewhere.
+episodes. Since upstream 1.5.7, this uses the native generic resolver. Native
+Mikan and dynamic source definitions replace our old adapter. Personal subtitle
+policy remains fork-owned; see `docs/refactor-1.5.7.md` for migration ownership.
 
 ## Versioning
 
@@ -25,12 +26,14 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
    `.github/UPSTREAM_TARGET`, and opens a PR
    against fork `main` **before** attempting the merge.
 2. Merges current fork `main` and the upstream commit into that branch using
-   `git merge --no-ff`. Conflicts are never auto-resolved: the merge is aborted,
+   `git merge --no-ff`. Only numeric version metadata conflicts may be resolved
+   automatically. Business conflicts stop the merge: it is aborted,
    conflicting paths are commented on the PR, and its validation status fails.
    The proposal branch need not show GitHub's native conflict banner: its failed
    validation status is the gate. Never manually merge a failed proposal PR.
 3. Checks the fail-closed Plex/Mikan integration and derives a commit-based version.
-4. Runs backend tests, compilation, and a frontend build, publishing the
+4. Runs backend tests, compilation, a frontend build and disposable runtime/DB
+   smoke checks with network access blocked during the test, publishing the
    `upstream-sync/validation` commit status and failure comments on the PR.
 5. After successful validation, merges the exact tested PR head using a merge
    commit, then explicitly dispatches `plugins-release.yml` for CloudSubscribeFork.

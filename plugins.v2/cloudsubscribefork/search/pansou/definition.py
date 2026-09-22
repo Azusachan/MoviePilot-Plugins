@@ -196,4 +196,3 @@ class PanSouSourceDefinition(SearchSourceDefinition):
                 "timeout": getattr(owner, "_pansou_timeout", 30),
             },
         )
-
