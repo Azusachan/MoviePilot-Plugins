@@ -38,6 +38,7 @@ from .parser import (
 from .parser import (
     file_preview_capability,
     is_challenge_page,
+    is_login_page,
     resource_detail_path,
     resource_group_data,
     response_text,
@@ -731,19 +732,23 @@ class HDHiveResourceService:
             return select_rows(rows)
 
     def _group_data_from_response(self, response) -> Dict[str, Any]:
+        if is_login_page(response):
+            raise HDHiveWebError(
+                "HDHive 详情页返回登录页面，会话已失效",
+                code="login_required",
+            )
         page_text = response_text(response)
         group_data = resource_group_data(page_text)
         if group_data is not None:
             return group_data
-        if is_challenge_page(page_text):
+        if is_challenge_page(response):
             self._client.activate_risk_cooldown("详情页挑战保护")
             raise HDHiveWebError(
                 "HDHive 详情页触发安全验证，已进入 600 秒风险保护冷却",
                 code="rate_limited",
             )
-        raise HDHiveWebError(
-            "HDHive 详情页未解析到 groupData", code="schema_changed"
-        )
+        logger.debug("HDHive 详情页未包含资源分组，按正常空结果处理")
+        return {}
 
     def _load_torrentclaw_rows(
             self, media_type: str, tmdb_id: int, log_prefix: str

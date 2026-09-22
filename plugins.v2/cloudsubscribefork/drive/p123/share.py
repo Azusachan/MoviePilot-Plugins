@@ -3,24 +3,19 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, List, Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from app.log import logger
 
-from .client import P123_AVAILABLE, is_success
+from .client import is_success
 from .files import cloud_file
-from ..common import iter_transfer_batches
+from ..common import iter_transfer_batches, safe_int
 from ...core.cloud import ShareLinkStatus
-
-try:
-    from p123client.tool import share_iterdir
-except ImportError:
-    share_iterdir = None
 
 
 class P123ShareService:
-    """使用 p123client 枚举分享树并将选中文件转存到账户。"""
+    """枚举分享树并将选中文件转存到账户。"""
 
     def __init__(self, client: Any, files: Any):
         self.client = client
@@ -65,20 +60,51 @@ class P123ShareService:
     def _cache_key(info: Mapping[str, Any]) -> str:
         return f"{info.get('share_key', '')}|{info.get('share_pwd', '')}"
 
+    def _iterate_share_directory(
+            self, share_key: str, share_pwd: str, parent_id: int = 0
+    ) -> List[dict]:
+        """获取单个分享目录下的所有文件/目录。"""
+        page = 1
+        items = []
+        while True:
+            resp = self.client.list_share(
+                share_key=share_key,
+                share_pwd=share_pwd,
+                parent_id=parent_id,
+                page=page,
+                limit=100,
+            )
+            data = resp.get("data") or {}
+            info_list = data.get("InfoList") or data.get("infoList") or []
+            if not info_list:
+                break
+            for raw in info_list:
+                is_dir = safe_int(raw.get("Type") or raw.get("type")) == 1
+                item = {
+                    "id": str(raw.get("FileId") or raw.get("fileId") or ""),
+                    "name": str(raw.get("FileName") or raw.get("fileName") or ""),
+                    "is_dir": is_dir,
+                    "size": 0 if is_dir else safe_int(raw.get("Size") or raw.get("size")),
+                    "md5": str(raw.get("Etag") or raw.get("etag") or ""),
+                    "s3keyflag": str(raw.get("S3KeyFlag") or raw.get("s3KeyFlag") or ""),
+                    "raw": raw,
+                    "total_siblings": safe_int(data.get("Total") or len(info_list)),
+                }
+                items.append(item)
+            next_val = str(data.get("Next") or data.get("next") or "-1").strip()
+            if next_val == "-1" or len(info_list) == 0:
+                break
+            page += 1
+        return items
+
     def _iterate_share(self, info: Mapping[str, Any], max_depth: int = -1):
-        if not P123_AVAILABLE or share_iterdir is None:
-            raise RuntimeError("p123client 未安装")
+        share_key = str(info.get("share_key") or "")
+        share_pwd = str(info.get("share_pwd") or "")
         stack = [(0, 0)]
         while stack:
             parent_id, depth = stack.pop()
             items = self.client.rate_limiter.call(
-                lambda: list(share_iterdir(
-                    share_key=str(info.get("share_key") or ""),
-                    share_pwd=str(info.get("share_pwd") or ""),
-                    payload=parent_id,
-                    max_depth=1,
-                    keep_raw=True,
-                ))
+                lambda p=parent_id: self._iterate_share_directory(share_key, share_pwd, p)
             )
             for item in items:
                 yield item
@@ -132,21 +158,17 @@ class P123ShareService:
     def list_share_directory(
             self, share_url: str, parent_id: str = ""
     ) -> list:
-        """列出分享中的当前目录，并向预览接口保留真实异常。"""
+        """列出分享中的当前目录。"""
         info = self.extract_share_info(share_url)
         if not info:
             raise ValueError("无效的 123 分享链接")
-        if not P123_AVAILABLE or share_iterdir is None:
-            raise RuntimeError("p123client 未安装")
         directory_id = int(parent_id or 0)
         rows = self.client.rate_limiter.call(
-            lambda: list(share_iterdir(
-                share_key=str(info.get("share_key") or ""),
-                share_pwd=str(info.get("share_pwd") or ""),
-                payload=directory_id,
-                max_depth=1,
-                keep_raw=True,
-            ))
+            lambda: self._iterate_share_directory(
+                str(info.get("share_key") or ""),
+                str(info.get("share_pwd") or ""),
+                directory_id,
+            )
         )
         result = []
         for raw in rows:
@@ -169,20 +191,6 @@ class P123ShareService:
             cached = self._share_items.get(cache_key, {})
         return info, {file_id: cached[file_id] for file_id in requested if file_id in cached}
 
-    @staticmethod
-    def _copy_payload(item: Mapping[str, Any]) -> Dict[str, Any]:
-        normalized = item.get("item") or {}
-        raw = item.get("raw") or {}
-        return {
-            "file_id": normalized.get("id") or raw.get("FileId"),
-            "file_name": normalized.get("name") or raw.get("FileName"),
-            "etag": normalized.get("md5") or raw.get("Etag") or "",
-            "size": normalized.get("size") or raw.get("Size") or 0,
-            "type": raw.get("Type", 0),
-            "drive_id": raw.get("DriveId", 0),
-            "s3_key_flag": normalized.get("s3keyflag") or raw.get("S3KeyFlag") or "",
-        }
-
     def _copy(self, share_url: str, file_ids: list, save_path: str) -> bool:
         info, items = self._resolve_items(share_url, file_ids)
         if not info or len(items) != len({str(value) for value in file_ids}):
@@ -190,13 +198,24 @@ class P123ShareService:
         lookup = self._files.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             return False
-        response = self.client.share_fs_copy(
-            {
-                "share_key": info["share_key"],
-                "share_pwd": info["share_pwd"],
-                "file_list": [self._copy_payload(items[str(file_id)]) for file_id in file_ids],
-            },
-            parent_id=int(lookup.directory_id),
+        file_list = []
+        for file_id in file_ids:
+            entry = items[str(file_id)]
+            normalized = entry.get("item") or {}
+            raw = entry.get("raw") or {}
+            file_list.append({
+                "file_id": normalized.get("id") or raw.get("FileId"),
+                "file_name": normalized.get("name") or raw.get("FileName"),
+                "etag": normalized.get("md5") or raw.get("Etag") or "",
+                "size": normalized.get("size") or raw.get("Size") or 0,
+                "type": raw.get("Type", 0),
+                "s3_key_flag": normalized.get("s3keyflag") or raw.get("S3KeyFlag") or "",
+            })
+        response = self.client.transfer_share(
+            share_key=info["share_key"],
+            share_pwd=info["share_pwd"],
+            file_list=file_list,
+            parent_id=lookup.directory_id,
         )
         return is_success(response)
 
@@ -212,19 +231,31 @@ class P123ShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs: Any,
+            target_name: str = "", **kwargs: Any,
     ) -> bool:
-        return self._copy(share_url, [str(file_id)], save_path)
+        success = self._copy(share_url, [str(file_id)], save_path)
+        if not success:
+            if target_name and self._files.find_file(save_path, target_name):
+                return True
+            info, items = self._resolve_items(share_url, [file_id])
+            raw_name = str((items.get(str(file_id)) or {}).get("item", {}).get("name") or "")
+            if raw_name and self._files.find_file(save_path, raw_name):
+                return True
+        return success
 
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = list(dict.fromkeys(str(value) for value in file_ids))
-        succeeded = []
-        failed = []
+        if not normalized:
+            return [], []
+        succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 100,
         ):
-            (succeeded if self._copy(share_url, batch, save_path) else failed).extend(batch)
+            if self._copy(share_url, batch, save_path):
+                succeeded.extend(batch)
+            else:
+                failed.extend(batch)
         return succeeded, failed

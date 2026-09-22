@@ -1,46 +1,28 @@
+import asyncio
 import html
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, unquote, urlparse, urlsplit
+from urllib.parse import quote, unquote
 
 from app.log import logger
 
+from ..cloudflare import fetch_cloudflare_html, is_cloudflare_challenge
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
+    gated_request,
     normalize_proxies,
     request_error_summary,
     requests,
 )
+from ..magnet import _HASH_REGEX, _MAGNET_REGEX, parse_size_str
 from ...utils.cache import create_platform_ttl_cache
 
 
 class UIndexError(RuntimeError):
     """UIndex 请求或解析失败。"""
-
-
-_SIZE_REGEX = re.compile(r"(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|B)", re.IGNORECASE)
-_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>]*", re.IGNORECASE)
-_HASH_REGEX = re.compile(r"urn:btih:([a-zA-Z0-9]{32,40})", re.IGNORECASE)
-
-
-def parse_size_str(size_text: str) -> int:
-    """解析字符串大小为字节数。"""
-    match = _SIZE_REGEX.search(size_text or "")
-    if not match:
-        return 0
-    val, unit = float(match.group(1)), match.group(2).upper()
-    units = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024 ** 2,
-        "GB": 1024 ** 3,
-        "TB": 1024 ** 4,
-    }
-    return int(val * units.get(unit, 1))
 
 
 class UIndexClient:
@@ -87,9 +69,6 @@ class UIndexClient:
         )
         self._cache = create_platform_ttl_cache("uindex_search", ttl=1800, maxsize=500)
         self._cache_lock = threading.Lock()
-        self._browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="UIndex-Browser")
-        self._browser_context = None
-        self._browser_lock = threading.RLock()
 
     @property
     def proxy(self) -> str:
@@ -121,121 +100,13 @@ class UIndexClient:
             minimum_interval=0.2,
             serial_requests=False,
         )
-        self._close_browser()
-
-    def _browser_proxy(self) -> Optional[Dict[str, str]]:
-        proxies = normalize_proxies(self._proxy) or {}
-        proxy = proxies.get("https") or proxies.get("http")
-        if not proxy:
-            return None
-        parsed = urlparse(str(proxy))
-        if not parsed.scheme or not parsed.hostname:
-            return None
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        server = f"{parsed.scheme}://{host}"
-        if parsed.port:
-            server += f":{parsed.port}"
-        result = {"server": server}
-        if parsed.username:
-            result["username"] = unquote(parsed.username)
-        if parsed.password:
-            result["password"] = unquote(parsed.password)
-        return result
-
-    def _close_browser(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
 
     def _fetch_page_with_browser(self, url: str) -> str:
-        """按需在独立纯净线程中通过 CloakBrowser 穿透 Cloudflare 盾并获取搜索页面 HTML。"""
-
-        def _worker() -> str:
-            import asyncio
-            try:
-                asyncio.set_event_loop(None)
-            except Exception:
-                pass
-
-            from app.core.config import settings
-            from cloakbrowser import launch_context
-
-            context = launch_context(
-                headless=True,
-                proxy=self._browser_proxy(),
-                humanize=getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
-                human_preset="careful",
-            )
-            try:
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                started = time.monotonic()
-                deadline = started + 30
-                clicked = False
-                while time.monotonic() < deadline:
-                    try:
-                        title = page.title()
-                    except Exception:
-                        page.wait_for_timeout(500)
-                        continue
-
-                    if "Just a moment" not in title:
-                        try:
-                            content = page.content()
-                            if len(content) > 5000:
-                                return content
-                        except Exception:
-                            page.wait_for_timeout(500)
-                            continue
-
-                    if not clicked:
-                        for frame in page.frames:
-                            if urlsplit(frame.url).hostname == "challenges.cloudflare.com":
-                                try:
-                                    element = frame.frame_element()
-                                    if element.is_visible():
-                                        box = element.bounding_box()
-                                        if box and box["width"] >= 60 and box["height"] >= 30:
-                                            page.mouse.click(box["x"] + 30, box["y"] + box["height"] / 2)
-                                            clicked = True
-                                            break
-                                except Exception:
-                                    pass
-                    page.wait_for_timeout(500)
-
-                try:
-                    final_content = page.content()
-                    if "Just a moment" not in page.title():
-                        return final_content
-                except Exception:
-                    pass
-                raise TimeoutError("Cloudflare 验证等待超时")
-            finally:
-                try:
-                    context.close()
-                except Exception as err:
-                    logger.debug(f"关闭 UIndex 浏览器上下文异常：{err}")
-
-        result_holder = [None]
-        error_holder = [None]
-
-        def _runner():
-            try:
-                result_holder[0] = _worker()
-            except BaseException as err:
-                error_holder[0] = err
-
-        thread = threading.Thread(target=_runner, name="UIndex-Cloak-Thread", daemon=True)
-        thread.start()
-        thread.join(timeout=35)
-        if thread.is_alive():
-            raise UIndexError("CloakBrowser 渲染执行超时")
-        if error_holder[0] is not None:
-            raise UIndexError(f"CloakBrowser 渲染页面失败：{error_holder[0]}") from error_holder[0]
-        return result_holder[0]
+        """按需通过统一反盾工具穿透 Cloudflare 盾并获取搜索页面 HTML。"""
+        try:
+            return fetch_cloudflare_html(url, proxy=self._proxy)
+        except Exception as err:
+            raise UIndexError(f"CloakBrowser 渲染页面失败：{err}") from err
 
     def search(self, query: str) -> List[Dict[str, Any]]:
         keyword = str(query or "").strip()
@@ -267,11 +138,8 @@ class UIndexClient:
             page_text = getattr(response, "text", "") or ""
 
             # 智能判断是否受到 Cloudflare Managed Challenge 拦截
-            is_cf_blocked = (
-                    status_code == 403
-                    or "challenges.cloudflare.com" in page_text
-                    or "cf-mitigated" in str(getattr(response, "headers", {}))
-                    or "<title>Just a moment..." in page_text
+            is_cf_blocked = is_cloudflare_challenge(
+                page_text, status_code, getattr(response, "headers", {})
             )
 
             if not is_cf_blocked:
@@ -324,7 +192,6 @@ class UIndexClient:
                 # 尝试从 magnet 的 dn 参数提取
                 dn_match = re.search(r"dn=([^&]+)", magnet_url)
                 if dn_match:
-                    from urllib.parse import unquote
                     title = unquote(dn_match.group(1))
 
             if not title:

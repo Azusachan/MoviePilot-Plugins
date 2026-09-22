@@ -200,7 +200,7 @@ class AliPanClient:
     ) -> Dict[str, Any]:
         response = self.raw_request(
             "POST", self.API + path, authenticated=authenticated,
-            headers=headers, json=payload or {}, raise_for_status=False,
+            retry=retry, headers=headers, json=payload or {}, raise_for_status=False,
         )
         data = response.json()
         if (
@@ -248,23 +248,41 @@ class AliPanClient:
         if not self.access_token:
             self.refresh()
         if not self.drive_id:
-            headers = {
-                "Authorization": (
-                    self.access_token
-                    if self.access_token.lower().startswith("bearer ")
-                    else f"Bearer {self.access_token}"
+            response = None
+            for attempt in range(2):
+                headers = {
+                    "Authorization": (
+                        self.access_token
+                        if self.access_token.lower().startswith("bearer ")
+                        else f"Bearer {self.access_token}"
+                    )
+                }
+                response = self.rate_limiter.call(
+                    self.session.post,
+                    f"{self.API}/v2/user/get",
+                    headers=headers,
+                    json={},
+                    timeout=self.timeout,
+                    retry_exceptions=(requests.Timeout, requests.ConnectionError),
                 )
-            }
-            response = self.rate_limiter.call(
-                self.session.post,
-                f"{self.API}/v2/user/get",
-                headers=headers,
-                json={},
-                timeout=self.timeout,
-                retry_exceptions=(requests.Timeout, requests.ConnectionError),
-            )
+                data = response.json()
+                if (
+                        attempt == 0
+                        and self.refresh_token
+                        and (
+                        response.status_code in (401, 403)
+                        or data.get("code") in {
+                            "AccessTokenInvalid",
+                            "InvalidParameter.RefreshToken",
+                        }
+                )
+                ):
+                    self.refresh()
+                    continue
+                break
+            if response is None:
+                raise RuntimeError("阿里云盘会话初始化失败")
             response.raise_for_status()
-            data = response.json()
             if data.get("code"):
                 raise RuntimeError(
                     f"阿里云盘用户信息读取失败：{data.get('code')} - "

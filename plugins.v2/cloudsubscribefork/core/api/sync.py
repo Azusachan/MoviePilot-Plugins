@@ -11,9 +11,15 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from .. import CloudDriveCapability, OwnerDelegator
+from .. import CloudDriveCapability, OwnerDelegator, SearchCapability
 from ..media import recognize_media, tmdb_id_of
-from ...search.types import normalize_resource_type
+from ...search.matching import positive_ints
+from ...search.types import (
+    normalize_resource_type,
+    resource_type_from_text,
+    resource_type_from_url,
+    resource_type_name,
+)
 from ...utils.cache import create_platform_ttl_cache
 
 _RECENT_MANUAL_SUBMITS = create_platform_ttl_cache(
@@ -46,36 +52,20 @@ class SyncApi(OwnerDelegator):
 
     @staticmethod
     def _manual_resource_type(link: str, default: str) -> str:
-        value = str(link or "").lower()
-        for marker, resource_type in (
-                ("quark", "quark"), ("189.cn", "tianyi"),
-                ("cloud.189", "tianyi"), ("guangya", "guangya"),
-                ("123pan", "123"), ("123.cn", "123"),
-                ("123684.com", "123"), ("123865.com", "123"),
-                ("alipan.com", "alipan"), ("aliyundrive.com", "alipan"),
-                ("pan.baidu.com", "baidu"), ("baidu.com", "baidu"),
-                ("drive.uc.cn", "uc"), ("uc.cn", "uc"),
-                ("115.com", "115"), ("anxia.com", "115"),
-                ("pan.xunlei.com", "xunlei"), ("xunlei.com", "xunlei"),
-                ("mypikpak.com", "pikpak"), ("pikpak", "pikpak"),
-                ("115cdn.com", "115"),
-        ):
-            if marker in value:
-                return resource_type
-        return default
+        return (
+            resource_type_from_url(link)
+            or resource_type_from_text(link)
+            or default
+        )
 
     def _manual_share_service(self, resource_type: str):
+        normalized = normalize_resource_type(resource_type)
         registry = getattr(self, "_cloud_drive_registry", None)
         if registry:
-            try:
-                return registry.get({
-                                        "189": "tianyi", "aliyun": "alipan"
-                                    }.get(resource_type, resource_type)).require(
-                    CloudDriveCapability.SHARE_TRANSFER
-                )
-            except (KeyError, RuntimeError):
-                pass
-        if self._cloud_drive and resource_type == self._cloud_drive.key:
+            provider = registry.get(normalized)
+            if provider and provider.supports(CloudDriveCapability.SHARE_TRANSFER):
+                return provider.require(CloudDriveCapability.SHARE_TRANSFER)
+        if self._cloud_drive and normalized == getattr(self._cloud_drive, "key", ""):
             return self._share_transfer
         return None
 
@@ -86,35 +76,16 @@ class SyncApi(OwnerDelegator):
 
     @staticmethod
     def _manual_resource_name(resource_type: str) -> str:
-        return {
-            "115": "115网盘",
-            "123": "123网盘",
-            "quark": "夸克网盘",
-            "guangya": "光鸭网盘",
-            "tianyi": "天翼云盘",
-            "aliyun": "阿里云盘",
-            "alipan": "阿里云盘",
-            "baidu": "百度网盘",
-            "uc": "UC网盘",
-            "xunlei": "迅雷网盘",
-            "pikpak": "PikPak",
-        }.get(resource_type, (resource_type.upper() if resource_type else "未知网盘"))
+        return resource_type_name(
+            resource_type,
+            fallback=(resource_type.upper() if resource_type else "未知网盘"),
+        )
 
-    @staticmethod
-    def _positive_ints(values: Any) -> List[int]:
-        result = set()
+    @classmethod
+    def _positive_ints(cls, values: Any) -> List[int]:
         if isinstance(values, dict):
             values = values.keys()
-        elif not isinstance(values, (list, tuple, set)):
-            values = []
-        for value in values:
-            try:
-                normalized = int(value or 0)
-            except (TypeError, ValueError):
-                continue
-            if normalized > 0:
-                result.add(normalized)
-        return sorted(result)
+        return sorted(positive_ints(values or []))
 
     @classmethod
     def _normalize_history_search_targets(
@@ -460,61 +431,48 @@ class SyncApi(OwnerDelegator):
                 unlock_points = int(item.get("unlock_points") or 0)
             except (TypeError, ValueError):
                 unlock_points = 0
+            registry = getattr(self._search_handler, "_search_registry", None) if self._search_handler else None
+            provider = registry.get(source) if registry else None
+            supports_unlock = bool(provider and provider.supports(SearchCapability.RESOURCE_UNLOCK))
+            supports_resolve = bool(provider and provider.supports(SearchCapability.RESOURCE_RESOLVE))
+
+            has_identifier = bool(
+                resource_ref
+                or any(provider_data.get(k) for k in ("slug", "resource_id", "seed_id", "token"))
+            )
             can_resolve = bool(
                 self._search_handler
                 and not raw_item_url
-                and source in {"hdhive", "juying", "seedhub", "pinglian"}
-                and (
-                        resource_ref
-                        or provider_data.get("resource_id")
-                        or provider_data.get("seed_id")
-                        or provider_data.get("token")
+                and (supports_unlock or supports_resolve)
+                and has_identifier
+            )
+            # 付费资源仍需先解锁；已解锁、零积分及其它延迟解析渠道，在提交转存时统一由后端解析为真实链接。
+            if supports_unlock:
+                can_resolve = can_resolve and (
+                    bool(item.get("is_unlocked")) or unlock_points <= 0
                 )
-            )
-            # 付费 HDHive 仍需先解锁；已解锁、零积分及其它渠道的延迟资源，
-            # 在提交转存时统一由后端解析为真实链接。
-            can_resolve = can_resolve and (
-                    source != "hdhive"
-                    or bool(item.get("is_unlocked"))
-                    or unlock_points <= 0
-            )
             if can_resolve:
                 try:
-                    if source == "hdhive":
+                    if supports_unlock:
                         resolve_item = dict(item)
                         if bool(item.get("is_unlocked")):
                             resolve_item["unlock_points"] = 0
                         resolved = self._search_handler.unlock_resource(
                             source, resolve_item, search_label="资源列表转存"
                         )
-                    elif source == "juying":
+                    elif supports_resolve:
+                        resolve_kwargs = {
+                            "resource_id": str(provider_data.get("resource_id") or resource_ref).strip(),
+                            "token": str(provider_data.get("token") or resource_ref),
+                            "resource_type": str(item.get("resource_type") or ""),
+                            "password": str(provider_data.get("password") or ""),
+                            "kind": str(provider_data.get("kind") or ""),
+                            "seed_id": str(provider_data.get("seed_id") or resource_ref),
+                            "path": str(provider_data.get("path") or ""),
+                            "host": str(provider_data.get("host") or ""),
+                        }
                         resolved = self._search_handler.resolve_source_resource(
-                            source,
-                            resource_id=str(
-                                provider_data.get("resource_id") or resource_ref
-                            ).strip(),
-                        )
-                    elif source == "seedhub":
-                        resolved = self._search_handler.resolve_source_resource(
-                            source,
-                            kind=str(provider_data.get("kind") or ""),
-                            resource_type=str(
-                                item.get("resource_type") or ""
-                            ),
-                            seed_id=str(
-                                provider_data.get("seed_id") or resource_ref
-                            ),
-                            path=str(provider_data.get("path") or ""),
-                            host=str(provider_data.get("host") or ""),
-                        )
-                    else:
-                        resolved = self._search_handler.resolve_source_resource(
-                            source,
-                            token=str(provider_data.get("token") or resource_ref),
-                            resource_type=str(
-                                item.get("resource_type") or ""
-                            ),
-                            password=str(provider_data.get("password") or ""),
+                            source, **resolve_kwargs
                         )
                     resolved_url = (
                         resolved.get("url") if isinstance(resolved, dict) else resolved
@@ -544,11 +502,9 @@ class SyncApi(OwnerDelegator):
                 values = value if isinstance(value, (list, tuple, set)) else [value]
                 raw_links.extend(values)
 
-        links = []
-        for value in raw_links:
-            link = str(value or "").strip()
-            if link and link not in links:
-                links.append(link)
+        links = list(dict.fromkeys(
+            str(value).strip() for value in raw_links if str(value or "").strip()
+        ))
         if len(links) > 50:
             return {"success": False, "message": "单次最多处理 50 个资源链接"}
 
@@ -630,6 +586,10 @@ class SyncApi(OwnerDelegator):
                 return {"success": False, "message": "指定订阅不存在"}
             if subscribe.type not in {MediaType.TV.value, MediaType.MOVIE.value}:
                 return {"success": False, "message": "仅支持电影或电视剧订阅"}
+            # 资源链接提交到已启用洗版的 best_version 订阅时，沿用订阅洗版策略。
+            # 这样 Telegram 等入口不会把已入库媒体误判为普通重复资源。
+            if "manual_upgrade" not in (payload or {}):
+                payload = {**(payload or {}), "manual_upgrade": True}
 
         share_transfer = None
         offline_download = None
@@ -663,11 +623,10 @@ class SyncApi(OwnerDelegator):
         resources = []
         skip_history = bool((payload or {}).get("skip_history"))
         resource_titles = (payload or {}).get("resource_titles") or {}
-        title_map = {}
-        if isinstance(resource_titles, dict):
-            for k, v in resource_titles.items():
-                if k and v:
-                    title_map[str(k).strip()] = str(v).strip()
+        title_map = (
+            {str(k).strip(): str(v).strip() for k, v in resource_titles.items() if k and v}
+            if isinstance(resource_titles, dict) else {}
+        )
         resource_meta_by_url = {}
         for r in resource_items:
             values = r.get("url") or r.get("share_url")

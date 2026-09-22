@@ -119,9 +119,29 @@ def safe_int(value: Any) -> int:
         return 0
 
 
-def format_size(value: Any) -> str:
+def positive_int(value: Any) -> Optional[int]:
+    """将外部接口值转换为正整数，空值或非正值返回 None。"""
+    val = safe_int(value)
+    return val if val > 0 else None
+
+
+def format_size(value: Any, default: str = "") -> str:
     """通过 MoviePilot 平台工具格式化外部字节值。"""
-    return StringUtils.format_size(max(0, safe_int(value)))
+    size = safe_int(value)
+    if size <= 0 and default:
+        return default
+    if StringUtils and hasattr(StringUtils, "format_size"):
+        try:
+            return StringUtils.format_size(max(0, size))
+        except Exception:
+            pass
+    amount = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024 or unit == "TB":
+            digits = 0 if amount >= 100 else 1
+            return f"{amount:.{digits}f} {unit}"
+        amount /= 1024
+    return default or "0 B"
 
 
 def extract_list(data: Any, keys: Sequence[str]) -> list:
@@ -264,7 +284,7 @@ def resolve_directory_path(
                 path_cache.set(current_path, current_id)
             return DirectoryLookup(True, current_id)
     except Exception as error:
-        logger.warning(f"解析{provider_name}目录失败：{path} - {error}")
+        logger.debug(f"解析{provider_name}目录失败：{path} - {error}")
         return DirectoryLookup(False)
 
 
@@ -344,7 +364,7 @@ class CloudDriveFileServiceBase:
                 tuple(self._list(directory_id or self.root_directory_id)),
             )
         except Exception as error:
-            logger.warning(f"读取{self.provider_name}目录失败：{error}")
+            logger.debug(f"读取{self.provider_name}目录失败：{error}")
             return DirectoryListing(False)
 
     def list_directories(self, path: str) -> list[Dict[str, str]]:
@@ -415,7 +435,10 @@ class CloudDriveFileServiceBase:
             self._invalidate_path_cache()
         if target_name and target_name != item.name:
             if not self._is_success(self.client.rename_file(item.id, target_name)):
-                return None
+                logger.warning(
+                    f"{self.provider_name} 文件移入目录后重命名失败，保留原名：{item.name} -> {target_name}"
+                )
+                return self.find_file(save_path, item.name)
         return self.find_file(save_path, target_name or item.name)
 
     def delete_file(self, file_id: str) -> bool:

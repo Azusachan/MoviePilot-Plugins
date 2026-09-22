@@ -154,7 +154,7 @@ class PluginEventHandler(OwnerDelegator):
 
     def on_subscribe_added(self, event: Event):
         """将接管范围内的新增订阅立即加入现有防抖搜索队列。"""
-        if not self._enabled or not self._takeover_new_subscribes:
+        if not getattr(self, "_enabled", True) or not getattr(self, "_takeover_new_subscribes", True):
             return
         sid = self._get_subscribe_id_from_event(event)
         if not sid or sid <= 0:
@@ -162,17 +162,17 @@ class PluginEventHandler(OwnerDelegator):
         if self._is_subscribe_excluded(sid):
             logger.debug(f"新增订阅不在插件处理范围：subscribe_id={sid}")
             return
-        if self.queue_subscribe_search(subscribe_id=sid, subscribe_state="N"):
-            logger.info(f"新增订阅已提交即时搜索队列：subscribe_id={sid}")
+        queue_search = getattr(self, "queue_subscribe_search", None)
+        if queue_search and queue_search(subscribe_id=sid, subscribe_state="N"):
+            logger.debug(f"新增订阅已入队即时搜索：id={sid}")
         else:
-            logger.warning(f"新增订阅即时搜索未入队，保留定时重试：subscribe_id={sid}")
+            logger.debug(f"新增订阅即时搜索未入队，保留定时重试：id={sid}")
 
     def on_subscribe_modified(self, event: Event):
         """ 用户手动修改订阅站点时，不自动覆盖用户操作 """
         sid = self._get_subscribe_id_from_event(event)
         if not sid:
             return
-        logger.debug(f"订阅配置已修改，不改写站点：subscribe_id={sid}")
         return
 
     def on_transfer_complete(self, event: Event):
@@ -580,7 +580,7 @@ class PluginEventHandler(OwnerDelegator):
                 str(record.get("status") or item.get("message") or "签到失败"),
             ]
             if record.get("points_change") is not None:
-                points_label = "枫叶" if item.get("provider") == "p115" else "积分"
+                points_label = str(item.get("points_label") or "积分")
                 details.append(f"{points_label} {int(record.get('points_change') or 0):+d}")
             if record.get("points_after") is not None:
                 details.append(f"当前 {record.get('points_after')}")

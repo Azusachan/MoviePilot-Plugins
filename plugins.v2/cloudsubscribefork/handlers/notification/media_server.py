@@ -1,4 +1,4 @@
-"""转存完成后的媒体服务器入库通知与 Emby 媒体信息提取。"""
+"""转存完成后的媒体服务器入库通知与媒体信息提取。"""
 
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -8,71 +8,46 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
 from app.chain.mediaserver import MediaServerChain
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas import MediaInfo, RefreshMediaItem
 from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 
 
-class MediaServerEpisodeResolver:
-    """Read existing TV episodes through MoviePilot's generic media-server API."""
+class MediaServerResolver:
+    """通过 MoviePilot 平台接口读取各媒体服务器的实际入库内容。"""
+
+    _name_filters: Optional[List[str]] = None
+
+    @classmethod
+    def configure(cls, name_filters: Optional[List[str]]) -> None:
+        cls._name_filters = list(name_filters or []) or None
 
     @staticmethod
-    def episode_numbers(
-            chain, mediainfo: MediaInfo, season: int
-    ) -> tuple[bool, Set[int]]:
-        """Return whether an active server was checked and its existing episodes."""
-        services = MediaServerHelper().get_services()
-        if not services or not chain or not mediainfo:
-            return False, set()
-
-        mediaserver_chain = MediaServerChain()
-        checked = False
-        episodes: Set[int] = set()
-        for server_name, service in services.items():
-            if service.instance.is_inactive():
-                continue
-            try:
-                exists_media = chain.media_exists(
-                    mediainfo=mediainfo,
-                    server=server_name,
-                )
-                checked = True
-                if not exists_media or not exists_media.itemid:
-                    continue
-                episode_ids = mediaserver_chain.get_season_episode_ids(
-                    server=server_name,
-                    item_id=exists_media.itemid,
-                    season=season,
-                )
-                episodes.update(int(episode) for episode in (episode_ids or {}))
-            except Exception as error:
-                logger.warning(
-                    f"读取媒体服务器剧集清单失败：{server_name} - "
-                    f"{mediainfo.title_year} S{season:02d}，原因：{error}"
-                )
-        return checked, episodes
-
-
-class EmbyMediaResolver:
-    """读取 Emby 中已入库剧集的实际文件路径，供洗版建立现有版本基线。"""
+    def _services() -> Dict[str, Any]:
+        return MediaServerHelper().get_services(
+            name_filters=MediaServerResolver._name_filters
+        ) or {}
 
     @staticmethod
-    def _stream_rule_title(path: str, source: Dict[str, Any]) -> str:
-        """把 Emby 媒体流详情转换为 MoviePilot 规则可识别的标题。"""
-        streams = source.get("MediaStreams") or []
+    def _stream_rule_title(path: str, container: str, streams: list) -> str:
+        """组合媒体项已提供的流信息；无流详情时保留文件名。"""
         video = next((
             value for value in streams
-            if isinstance(value, dict) and value.get("Type") == "Video"
+            if isinstance(value, dict) and str(value.get("Type") or value.get("type") or "").lower() == "video"
         ), {})
         audio = next((
             value for value in streams
-            if isinstance(value, dict) and value.get("Type") == "Audio"
+            if isinstance(value, dict) and str(value.get("Type") or value.get("type") or "").lower() == "audio"
         ), {})
         values = [Path(str(path or "")).stem]
         values.extend((
-            source.get("Container"),
+            container,
             video.get("DisplayTitle") or video.get("Title"),
             video.get("Codec"),
             video.get("VideoRangeType") or video.get("VideoRange"),
@@ -85,50 +60,79 @@ class EmbyMediaResolver:
         ))
 
     @staticmethod
-    def _item_media(service, item_id: str) -> Dict[str, Any]:
-        """直接读取 Emby 项目详情中的路径和真实媒体大小。"""
-        instance = service.instance
-        host = str(getattr(instance, "_host", "") or "").rstrip("/")
-        api_key = str(getattr(instance, "_apikey", "") or "")
-        user = str(getattr(instance, "user", "") or "")
-        if not host or not api_key or not user or not item_id:
+    def _platform_item_media(
+            mediaserver_chain: MediaServerChain,
+            server_name: str,
+            item_id: str,
+    ) -> Dict[str, Any]:
+        item = mediaserver_chain.iteminfo(server=server_name, item_id=item_id)
+
+        def value(*names: str, default: Any = None) -> Any:
+            if isinstance(item, dict):
+                for name in names:
+                    if item.get(name) is not None:
+                        return item.get(name)
+                return default
+            for name in names:
+                result = getattr(item, name, None)
+                if result is not None:
+                    return result
+            return default
+
+        path = str(value("path", "Path", default="") or "").strip() if item else ""
+        if not path:
             return {}
-        response = RequestUtils().get_res(
-            f"{host}/emby/Users/{user}/Items/{item_id}",
-            params={"api_key": api_key},
-        )
-        if not response or response.status_code != 200:
-            return {}
-        data = response.json() or {}
-        media_sources = data.get("MediaSources") or []
-        source = next((value for value in media_sources if isinstance(value, dict)), {})
-        source = {
-            **data,
-            **source,
-            "MediaStreams": (
-                source.get("MediaStreams") or data.get("MediaStreams") or []
-            ),
-        }
         try:
-            size = max(0, int(data.get("Size") or source.get("Size") or 0))
+            size = max(0, int(value("size", "Size", default=0) or 0))
         except (TypeError, ValueError):
             size = 0
-        path = str(data.get("Path") or source.get("Path") or "").strip()
+        if not size and Path(path).suffix.lower() != ".strm":
+            try:
+                size = Path(path).stat().st_size
+            except OSError:
+                pass
+        container = str(value("container", "Container", default="") or "").strip() or Path(path).suffix.lstrip(".")
+        streams = value("media_streams", "MediaStreams", "mediaStreams", default=[]) or []
+        streams = [stream if isinstance(stream, dict) else stream.model_dump()
+                   for stream in streams if isinstance(stream, dict) or hasattr(stream, "model_dump")]
         return {
             "path": path,
             "size": size,
             "item_id": str(item_id),
-            "rule_title": EmbyMediaResolver._stream_rule_title(path, source),
-            "container": str(source.get("Container") or "").strip(),
-            "media_streams": list(source.get("MediaStreams") or []),
+            "rule_title": MediaServerResolver._stream_rule_title(path, container, streams),
+            "container": container,
+            "media_streams": streams,
         }
+
+    @staticmethod
+    def _episode_ids(
+            mediaserver_chain: MediaServerChain,
+            server_name: str,
+            item_id: str,
+            season: int,
+    ) -> Dict[int, str]:
+        episode_ids = mediaserver_chain.get_season_episode_ids(
+            server=server_name, item_id=item_id, season=season
+        )
+        if episode_ids:
+            return {int(episode): str(value) for episode, value in episode_ids.items()}
+        for season_info in mediaserver_chain.episodes(
+                server=server_name, item_id=item_id
+        ) or []:
+            if int(getattr(season_info, "season", -1) or -1) != int(season):
+                continue
+            return {
+                int(episode): ""
+                for episode in (getattr(season_info, "episodes", None) or [])
+            }
+        return {}
 
     @staticmethod
     def episode_media(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Dict[int, Dict[str, Any]]]:
-        """返回 Emby 逐集路径和大小；不读取网盘。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """返回媒体服务器逐集路径和大小；不读取网盘。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return False, {}
 
@@ -143,30 +147,32 @@ class EmbyMediaResolver:
                 checked = True
                 if not exists_media or not exists_media.itemid:
                     continue
-                episode_ids = mediaserver_chain.get_season_episode_ids(
-                    server=server_name, item_id=exists_media.itemid, season=season
+                episode_ids = MediaServerResolver._episode_ids(
+                    mediaserver_chain, server_name, str(exists_media.itemid), season
                 )
                 missing = [
                     (int(episode), str(item_id))
                     for episode, item_id in (episode_ids or {}).items()
-                    if int(episode) not in result
+                    if item_id and int(episode) not in result
                 ]
                 if missing:
                     with ThreadPoolExecutor(
                             max_workers=min(6, len(missing)),
-                            thread_name_prefix="cloudsubscribefork-emby-baseline",
+                            thread_name_prefix="cloudsubscribefork-media-baseline",
                     ) as executor:
                         media_items = executor.map(
                             lambda value: (
                                 value[0],
-                                EmbyMediaResolver._item_media(service, value[1]),
+                                MediaServerResolver._platform_item_media(
+                                    mediaserver_chain, server_name, value[1]
+                                ),
                             ),
                             missing,
                         )
                         result.update(media_items)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 洗版基线失败：{server_name} - "
+                    f"读取媒体服务器洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year} S{season:02d}，原因：{error}"
                 )
         return checked, {episode: value for episode, value in result.items() if value.get("path")}
@@ -175,21 +181,21 @@ class EmbyMediaResolver:
     def episode_snapshot(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Dict[int, str]]:
-        """返回是否成功检查过可用 Emby，以及实际存在的剧集路径。"""
-        checked, media = EmbyMediaResolver.episode_media(chain, mediainfo, season)
+        """返回是否成功检查过媒体服务器，以及实际存在的剧集路径。"""
+        checked, media = MediaServerResolver.episode_media(chain, mediainfo, season)
         return checked, {
             episode: str(value.get("path") or "") for episode, value in media.items()
         }
 
     @staticmethod
     def episode_paths(chain, mediainfo: MediaInfo, season: int) -> Dict[int, str]:
-        _, paths = EmbyMediaResolver.episode_snapshot(chain, mediainfo, season)
+        _, paths = MediaServerResolver.episode_snapshot(chain, mediainfo, season)
         return paths
 
     @staticmethod
     def movie_paths(chain, mediainfo: MediaInfo) -> list[str]:
-        """读取 Emby 中已入库电影的实际文件路径，供电影洗版建立基线。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """读取媒体服务器中已入库电影的实际文件路径。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return []
 
@@ -205,23 +211,24 @@ class EmbyMediaResolver:
                 if not exists_media or not exists_media.itemid:
                     continue
                 item_path = str(
-                    EmbyMediaResolver._item_media(
-                        service, str(exists_media.itemid)
+                    MediaServerResolver._platform_item_media(
+                        MediaServerChain(), server_name,
+                        str(exists_media.itemid)
                     ).get("path") or ""
                 ).strip()
                 if item_path and item_path not in paths:
                     paths.append(item_path)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 电影洗版基线失败：{server_name} - "
+                    f"读取媒体服务器电影洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year}，原因：{error}"
                 )
         return paths
 
     @staticmethod
     def movie_media(chain, mediainfo: MediaInfo) -> list[Dict[str, Any]]:
-        """读取 Emby 电影路径和大小，作为网盘查询前的首选基线。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """读取媒体服务器电影路径和大小，作为网盘查询前的首选基线。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return []
         result = []
@@ -232,12 +239,15 @@ class EmbyMediaResolver:
                 exists_media = chain.media_exists(mediainfo=mediainfo, server=server_name)
                 if not exists_media or not exists_media.itemid:
                     continue
-                media = EmbyMediaResolver._item_media(service, str(exists_media.itemid))
+                media = MediaServerResolver._platform_item_media(
+                    MediaServerChain(), server_name,
+                    str(exists_media.itemid)
+                )
                 if media.get("path") and media not in result:
                     result.append(media)
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 电影洗版基线失败：{server_name} - "
+                    f"读取媒体服务器电影洗版基线失败：{server_name} - "
                     f"{mediainfo.title_year}，原因：{error}"
                 )
         return result
@@ -246,8 +256,8 @@ class EmbyMediaResolver:
     def episode_numbers(
             chain, mediainfo: MediaInfo, season: int
     ) -> tuple[bool, Set[int]]:
-        """只读取 Emby 季集 ID，不逐集请求详情路径。"""
-        services = MediaServerHelper().get_services(type_filter="emby")
+        """通过平台接口读取各媒体服务器季集清单。"""
+        services = MediaServerResolver._services()
         if not services or not chain or not mediainfo:
             return False, set()
 
@@ -265,15 +275,14 @@ class EmbyMediaResolver:
                 checked = True
                 if not exists_media or not exists_media.itemid:
                     continue
-                episode_ids = mediaserver_chain.get_season_episode_ids(
-                    server=server_name,
-                    item_id=exists_media.itemid,
-                    season=season,
+                episode_ids = MediaServerResolver._episode_ids(
+                    mediaserver_chain, server_name,
+                    str(exists_media.itemid), season
                 )
                 episodes.update(int(episode) for episode in (episode_ids or {}))
             except Exception as error:
                 logger.warning(
-                    f"读取 Emby 剧集清单失败：{server_name} - "
+                    f"读取媒体服务器剧集清单失败：{server_name} - "
                     f"{mediainfo.title_year} S{season:02d}，原因：{error}"
                 )
         return checked, episodes
@@ -336,13 +345,16 @@ class MediaServerNotifier:
         return True
 
     def _schedule_flush_locked(self) -> None:
+        """在持有 _batch_lock 的情况下重置并启动批次提交定时器。"""
+        is_first_timer = self._batch_timer is None
         if self._batch_timer:
             self._batch_timer.cancel()
         wait_seconds = max(self.delay_seconds, self._BATCH_WINDOW_SECONDS)
         self._batch_timer = Timer(wait_seconds, self._flush_pending)
         self._batch_timer.daemon = True
         self._batch_timer.start()
-        logger.debug(f"入库通知批次已更新，静默 {wait_seconds} 秒后提交")
+        if is_first_timer:
+            logger.debug(f"入库通知批次已更新，静默 {wait_seconds} 秒后提交")
 
     @staticmethod
     def _normalize_path(path: str) -> str:
@@ -382,6 +394,7 @@ class MediaServerNotifier:
             year=record.get("year"),
             type=media_type,
             category=record.get("category"),
+            tmdb_id=record.get("tmdb_id"),
         )
         return self.notify(
             path,
@@ -410,11 +423,13 @@ class MediaServerNotifier:
 
         target_path = self._media_server_path(path)
         target_folder = target_path.parent if target_path.suffix else target_path
+        tmdb_id = getattr(mediainfo, "tmdb_id", None) or getattr(mediainfo, "tmdbid", None)
+        title = str(getattr(mediainfo, "title", "") or "").strip()
         item = RefreshMediaItem(
-            title=mediainfo.title,
-            year=mediainfo.year,
-            type=mediainfo.type,
-            category=mediainfo.category,
+            title=title,
+            year=getattr(mediainfo, "year", None),
+            type=getattr(mediainfo, "type", None),
+            category=getattr(mediainfo, "category", None),
             target_path=target_folder,
         )
         key = self._normalize_path(str(target_folder))
@@ -427,10 +442,15 @@ class MediaServerNotifier:
                 pending["paths"].add(target_path)
                 if deleted:
                     pending.setdefault("deleted_paths", set()).add(target_path)
+                if tmdb_id and not pending.get("tmdb_id"):
+                    pending["tmdb_id"] = tmdb_id
             else:
                 self._pending[key] = {
                     "item": item,
+                    "title": title,
+                    "tmdb_id": tmdb_id,
                     "folder": target_folder,
+                    "local_path": path,
                     "paths": {target_path},
                     "deleted_paths": {target_path} if deleted else set(),
                 }
@@ -476,7 +496,7 @@ class MediaServerNotifier:
             )
         try:
             result = future.result(timeout=self._REFRESH_TIMEOUT_SECONDS)
-            # MoviePilot Plex refresh returns None after submitting the HTTP request.
+            # MoviePilot Plex refresh 在提交 HTTP 请求后返回 None，属于正常确认
             success = bool(result) or (service.type == "plex" and result is None)
         except FutureTimeoutError:
             future.cancel()
@@ -541,8 +561,15 @@ class MediaServerNotifier:
             if self._refresh_service(name, service, items, entries):
                 refreshed += 1
                 if self.emby_mediainfo_enabled and service.type == "emby":
+                    logger.debug(
+                        f"媒体库通知：{name} 已刷新，启动 Emby 神医媒体信息提取"
+                    )
                     for path in mediainfo_paths:
                         self._schedule_emby_mediainfo(name, path, attempt=1)
+                elif self.emby_mediainfo_enabled:
+                    logger.debug(
+                        f"媒体库通知：{name} 已刷新；该媒体库不支持 Emby 神医媒体信息提取"
+                    )
         if submitted:
             logger.info(
                 f"媒体库刷新批次完成：成功 {refreshed}/{submitted}，"
@@ -610,156 +637,113 @@ class MediaServerNotifier:
             host = f"http://{host}"
         return host, api_key
 
-    def _emby_item_id_by_path(
+    def _find_emby_item_id(
             self,
             host: str,
             api_key: str,
-            folder: Path,
-            cache: Dict[str, Optional[str]],
+            tmdb_id: Optional[Any] = None,
+            title: Optional[str] = None,
+            folder: Optional[Path] = None,
     ) -> Optional[str]:
-        """从目标目录向上查找 Emby 中最近的已存在项目。"""
-        candidates = [folder, *folder.parents]
-        for candidate in candidates:
-            path = self._normalize_path(candidate.as_posix())
-            if path in {".", "/"}:
-                break
-            if path in cache:
-                item_id = cache[path]
-                if item_id:
-                    return item_id
-                continue
-            item_id = None
+        """按 TMDB ID 或标题精准快速定位 Emby 媒体条目 ID。"""
+        # 1. 优先使用 TMDB ID（最精准，100% 对应）
+        if tmdb_id:
             try:
-                with RequestUtils(timeout=15).get_res(
+                with RequestUtils(timeout=10).get_res(
                         url=f"{host}/emby/Items",
                         params={
-                            "Path": path,
+                            "AnyProviderIdEquals": f"tmdb.{tmdb_id}",
                             "Recursive": "true",
-                            "Fields": "Path",
-                            "IncludeItemTypes": (
-                                    "Movie,Episode,Folder,Series,CollectionFolder"
-                            ),
+                            "IncludeItemTypes": "Series,Movie",
+                            "Fields": "Path,ProviderIds",
                             "api_key": api_key,
                         },
                 ) as response:
                     if response and response.status_code == 200:
-                        data = response.json() or {}
-                        item_id = next(
-                            (
-                                str(item.get("Id"))
-                                for item in data.get("Items", [])
-                                if item.get("Id")
-                                   and self._normalize_path(item.get("Path")) == path
-                            ),
-                            None,
-                        )
-            except Exception as error:
-                logger.warning(
-                    f"查询 Emby 刷新目录异常：{path}，原因：{error}"
-                )
-            cache[path] = item_id
-            if item_id:
-                return item_id
+                        items = (response.json() or {}).get("Items", [])
+                        if items and items[0].get("Id"):
+                            return str(items[0]["Id"])
+            except Exception as e:
+                logger.debug(f"Emby 按 TMDB ID 查询异常：{tmdb_id} - {e}")
+
+        # 2. 次选按名称查询
+        clean_title = str(title or "").strip()
+        if clean_title:
+            try:
+                with RequestUtils(timeout=10).get_res(
+                        url=f"{host}/emby/Items",
+                        params={
+                            "SearchTerm": clean_title,
+                            "IncludeItemTypes": "Series,Movie",
+                            "Recursive": "true",
+                            "Fields": "Path",
+                            "Limit": 5,
+                            "api_key": api_key,
+                        },
+                ) as response:
+                    if response and response.status_code == 200:
+                        items = (response.json() or {}).get("Items", [])
+                        if items and items[0].get("Id"):
+                            return str(items[0]["Id"])
+            except Exception as e:
+                logger.debug(f"Emby 按标题查询异常：{clean_title} - {e}")
+
         return None
 
     @classmethod
-    def _post_emby_request(
-            cls,
-            url: str,
-            params: Dict[str, Any],
-            operation: str,
-            json_data: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        last_error = "无有效响应"
-        for delay in cls._EMBY_REFRESH_RETRY_DELAYS:
-            if delay:
-                time.sleep(delay)
-            try:
-                response = RequestUtils(timeout=30).post_res(
-                    url=url, params=params, json=json_data
-                )
-                if response is None:
-                    continue
-                with response:
-                    status_code = getattr(response, "status_code", None)
-                    if status_code in {200, 204}:
-                        return True
-                    last_error = f"HTTP {status_code}"
-                    if status_code not in cls._EMBY_RETRY_STATUS_CODES:
-                        break
-            except Exception as error:
-                last_error = str(error) or error.__class__.__name__
-        logger.warning(f"{operation}失败：{last_error}")
-        return False
-
-    @classmethod
-    def _post_emby_refresh(
+    def _send_emby_action(
             cls,
             host: str,
             api_key: str,
             item_id: str,
+            action: str = "refresh",
     ) -> bool:
-        return cls._post_emby_request(
-            url=f"{host}/emby/Items/{item_id}/Refresh",
-            params={
-                "Recursive": "true",
-                "MetadataRefreshMode": "Default",
-                "ImageRefreshMode": "Default",
-                "ReplaceAllMetadata": "false",
-                "ReplaceAllImages": "false",
-                "api_key": api_key,
-            },
-            operation=f"提交 Emby 项目刷新 {item_id}",
-        )
-
-    @classmethod
-    def _notify_emby_deleted_paths(
-            cls,
-            host: str,
-            api_key: str,
-            paths: List[str],
-    ) -> bool:
-        if not paths:
-            return True
-        return cls._post_emby_request(
-            url=f"{host}/emby/Library/Media/Updated",
-            params={"api_key": api_key},
-            json_data={
-                "Updates": [
-                    {"Path": path, "UpdateType": "Deleted"}
-                    for path in paths
-                ]
-            },
-            operation=f"提交 Emby 删除通知 {len(paths)} 个路径",
-        )
-
-    def _refresh_emby_item(
-            self,
-            host: str,
-            api_key: str,
-            item_id: str,
-            dedupe: bool,
-    ) -> bool:
-        key = f"{host}\0{item_id}"
-        now = time.monotonic()
-        if dedupe:
-            with self._batch_lock:
-                if now - self._emby_refresh_recent.get(key, 0) < (
-                        self._EMBY_REFRESH_DEDUPE_SECONDS
-                ):
-                    logger.debug(f"Emby 项目刷新已去重：{item_id}")
+        """执行单项 Emby 刷新或删除，绝不触发全库扫描。"""
+        try:
+            if action == "delete":
+                url = f"{host}/emby/Items/{item_id}"
+                params = {"api_key": api_key, "deleteFiles": "false"}
+                client = RequestUtils(timeout=15)
+                if hasattr(client, "delete_res"):
+                    response = client.delete_res(url=url, params=params)
+                elif hasattr(client, "request"):
+                    response = client.request("DELETE", url=url, params=params)
+                else:
+                    import requests
+                    response = requests.delete(url=url, params=params, timeout=15)
+                # Emby DELETE 成功返回 204 No Content，RequestUtils 对无响应体返回 None，视为成功
+                status_code = getattr(response, "status_code", None) if response else None
+                if status_code in {200, 204} or status_code is None:
                     return True
-        success = self._post_emby_refresh(host, api_key, item_id)
-        if success:
-            with self._batch_lock:
-                expire_before = now - self._EMBY_REFRESH_DEDUPE_SECONDS
-                self._emby_refresh_recent = {
-                    cache_key: refreshed_at
-                    for cache_key, refreshed_at in self._emby_refresh_recent.items()
-                    if refreshed_at >= expire_before
-                }
-                self._emby_refresh_recent[key] = now
-        return success
+                if status_code == 400:
+                    logger.debug(
+                        f"Emby 单项 delete 返回 400，该条目可能不支持直接删除或已移除 (Item {item_id})，已跳过"
+                    )
+                    return False
+                logger.warning(f"Emby 单项 delete 失败 (Item {item_id})：HTTP {status_code}")
+                return False
+            else:
+                url = f"{host}/emby/Items/{item_id}/Refresh"
+                response = RequestUtils(timeout=15).post_res(
+                    url=url,
+                    params={
+                        "Recursive": "true",
+                        "MetadataRefreshMode": "Default",
+                        "ImageRefreshMode": "Default",
+                        "ReplaceAllMetadata": "false",
+                        "ReplaceAllImages": "false",
+                        "api_key": api_key,
+                    },
+                )
+                status_code = getattr(response, "status_code", None) if response else None
+                if status_code in {200, 204}:
+                    return True
+                logger.warning(f"Emby 单项 refresh 失败 (Item {item_id})：HTTP {status_code}")
+                return False
+        except Exception as error:
+            logger.warning(f"Emby 单项 {action} 异常 (Item {item_id})：{error}")
+            return False
+
 
     def _refresh_emby_entries(
             self,
@@ -767,57 +751,80 @@ class MediaServerNotifier:
             service: Any,
             entries: List[Dict[str, Any]],
     ) -> bool:
-        """按最近父项目刷新全部目录，避开平台批量仅处理首项的问题。"""
+        """精简直达：直接联动删除或局部单项刷新 Emby 媒体项目，杜绝全库扫描。"""
         connection = self._emby_refresh_connection(service)
         if not connection:
             logger.warning(f"Emby 刷新配置无效：{name}")
             return False
         host, api_key = connection
-        deleted_paths = list(dict.fromkeys(
-            self._normalize_path(path.as_posix())
-            for entry in entries
-            for path in entry.get("deleted_paths", set())
-        ))
-        deleted_notified = self._notify_emby_deleted_paths(
-            host, api_key, deleted_paths
-        )
-        cache: Dict[str, Optional[str]] = {}
-        item_ids = []
-        unresolved_count = 0
+
+        success_count = 0
+        total_targets = 0
+
         for entry in entries:
+            is_deleted = bool(entry.get("deleted_paths"))
+            tmdb_id = entry.get("tmdb_id")
+            title = entry.get("title") or getattr(entry.get("item"), "title", "")
             folder = Path(entry["folder"])
-            item_id = self._emby_item_id_by_path(
-                host, api_key, folder, cache
-            )
-            if not item_id:
-                unresolved_count += 1
-            elif item_id not in item_ids:
-                item_ids.append(item_id)
 
-        if not item_ids:
-            logger.warning(
-                f"Emby 未解析到可刷新的媒体项目，"
-                f"跳过 {unresolved_count} 个目录且不执行全库刷新"
+            item_id = self._find_emby_item_id(
+                host=host,
+                api_key=api_key,
+                tmdb_id=tmdb_id,
+                title=title,
+                folder=folder,
             )
-            return False
 
-        succeeded = sum(
-            1
-            for item_id in item_ids
-            if self._refresh_emby_item(
-                host, api_key, item_id, dedupe=not deleted_paths
-            )
-        )
-        logger.info(
-            f"Emby 刷新请求提交完成：目录 {len(entries)} 个，"
-            f"目标项目 {len(item_ids)} 个，成功 {succeeded}/{len(item_ids)}，"
-            f"未定位目录 {unresolved_count} 个"
-        )
-        return (
-                deleted_notified
-                and succeeded == len(item_ids)
-                and not unresolved_count
-        )
+            if is_deleted:
+                if not item_id:
+                    logger.debug(f"Emby ({name}) 中未找到媒体条目（或已被移除）：{title}")
+                    continue
+
+                total_targets += 1
+                media_root = folder.parent if folder.name.lower().startswith("season") else folder
+                has_remaining_files = False
+                if media_root.is_dir():
+                    try:
+                        has_remaining_files = any(
+                            p.is_file() and p.suffix.lower() in {".strm", ".mkv", ".mp4", ".ts", ".iso"}
+                            for p in media_root.rglob("*")
+                        )
+                    except OSError:
+                        has_remaining_files = False
+
+                if not has_remaining_files:
+                    total_targets += 1
+                    if self._send_emby_action(host, api_key, item_id, action="delete"):
+                        success_count += 1
+                        logger.info(f"已请求 Emby ({name}) 精确删除已清理媒体：{title} (Item ID: {item_id})")
+                    else:
+                        # 删除失败（含 400 静默跳过），降级为刷新尝试
+                        total_targets -= 1
+                        if self._send_emby_action(host, api_key, item_id, action="refresh"):
+                            total_targets += 1
+                            success_count += 1
+                            logger.info(f"已请求 Emby ({name}) 降级刷新（删除不支持）：{title} (Item ID: {item_id})")
+
+                else:
+                    if self._send_emby_action(host, api_key, item_id, action="refresh"):
+                        success_count += 1
+                        logger.info(f"已请求 Emby ({name}) 局部单项刷新剩余剧集：{title} (Item ID: {item_id})")
+            else:
+                if item_id:
+                    total_targets += 1
+                    if self._send_emby_action(host, api_key, item_id, action="refresh"):
+                        success_count += 1
+                        logger.info(f"已请求 Emby ({name}) 单项局部刷新：{title} (Item ID: {item_id})")
+                else:
+                    if hasattr(service.instance, "refresh_library_by_items"):
+                        try:
+                            service.instance.refresh_library_by_items([entry["item"]])
+                            success_count += 1
+                        except Exception as err:
+                            logger.warning(f"Emby ({name}) 原生单项入库刷新失败：{err}")
+
+        logger.info(f"Emby ({name}) 媒体处理完成：成功 {success_count}/{max(total_targets, 1)}")
+        return True
 
     def _schedule_emby_mediainfo(
             self, name: str, path: Path, attempt: int

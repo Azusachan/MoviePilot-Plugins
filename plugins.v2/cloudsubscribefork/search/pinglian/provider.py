@@ -24,6 +24,7 @@ def create_pinglian_provider(
             SearchCapability.RESOURCE_RESOLVE: service,
             SearchCapability.ACCOUNT: client,
             SearchCapability.CACHE_MAINTENANCE: service,
+            SearchCapability.LIFECYCLE: client,
         },
         policy=SearchPolicy(cache_context=cache_context),
     )

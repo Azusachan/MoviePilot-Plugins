@@ -84,8 +84,10 @@ class QuarkClient:
             cookie: str = "",
             on_cookie_refresh: Optional[Callable[[str], None]] = None,
             timeout: int = 30,
+            checkin_url: str = "",
     ):
         self._cookie = str(cookie or "").strip()
+        self._checkin_url = str(checkin_url or "").strip()
         self._on_cookie_refresh = on_cookie_refresh
         self._timeout = max(5, int(timeout or 30))
         self.rate_limiter = DriveRateLimiter.shared(
@@ -360,9 +362,11 @@ class QuarkClient:
             index += 1
         return f"{size:.2f} {units[index]}"
 
-    def checkin(self, checkin_url: str) -> Dict[str, Any]:
-        """查询夸克成长签到状态，未签到时领取空间奖励。"""
-        params = self._checkin_params(checkin_url)
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        """查询夸克成长签到状态，未签到时领取空间奖励（夸克仅普通签到一种模式）。"""
+        if not self._checkin_url:
+            raise RuntimeError("夸克签到 URL 未配置")
+        params = self._checkin_params(self._checkin_url)
         info = self.request(
             "GET", "1/clouddrive/capacity/growth/info",
             params=params, base_url=self.CHECKIN_BASE_URL,

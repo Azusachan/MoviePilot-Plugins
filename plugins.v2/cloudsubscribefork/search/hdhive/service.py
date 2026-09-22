@@ -9,6 +9,7 @@ from app.log import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
+from .open import HDHiveOpenAPIError
 from .web import (
     HDHIVE_DETAIL_RESOURCE_TYPES,
     HDHIVE_RESOURCE_TYPES,
@@ -18,6 +19,7 @@ from .web import (
     valid_share_url,
 )
 from ..budget import PointBudgetLedger
+from ..http_client import RequestGateCooldown
 from ...core import OwnerDelegator, SearchQuery, format_search_label
 from ...core.media import tmdb_id_of
 from ...utils.cache import create_platform_ttl_cache
@@ -50,18 +52,18 @@ class HDHiveSearchService(OwnerDelegator):
 
     @property
     def available(self) -> bool:
-        return bool(self._hdhive_enabled and (
-                (
-                        self._hdhive_query_mode == "web"
-                        and self._hdhive_username
-                        and self._hdhive_password
-                )
-                or (
-                        self._hdhive_query_mode == "api"
-                        and self._hdhive_client
-                        and self._hdhive_client.is_ready
-                )
-        ))
+        return bool(
+            (
+                    self._hdhive_query_mode == "web"
+                    and self._hdhive_username
+                    and self._hdhive_password
+            )
+            or (
+                    self._hdhive_query_mode == "api"
+                    and self._hdhive_client
+                    and self._hdhive_client.is_ready
+            )
+        )
 
     @property
     def resource_types(self):
@@ -168,10 +170,13 @@ class HDHiveSearchService(OwnerDelegator):
                     proxy=proxy,
                     request_interval=self._hdhive_request_interval,
                     should_stop=self._stop_requested,
+                    get_data_func=getattr(self, "get_data", None),
+                    save_data_func=getattr(self, "save_data", None),
                 )
                 self._hdhive_web_client = client
                 self._hdhive_web_client_owned = True
                 self._hdhive_web_resources = None
+
             resources = self._hdhive_web_resources
             if resources is None or not resources.matches_config(
                     client,
@@ -312,6 +317,15 @@ class HDHiveSearchService(OwnerDelegator):
         try:
             started = time.monotonic()
             resources = self._get_hdhive_web_resources()
+            client = getattr(resources, "client", None)
+            if client and hasattr(client, "cooldown_remaining") and client.cooldown_remaining > 0:
+                logger.warning(
+                    f"{search_prefix} WebAPI 处于风控冷却中（剩余 {client.cooldown_remaining:.1f}s），快速跳过"
+                )
+                raise RequestGateCooldown(
+                    f"HDHive WebAPI 处于风控冷却中，剩余 {client.cooldown_remaining:.1f}s"
+                )
+
             if resource_list_mode:
                 results = resources.search_test_resources(
                     tmdb_id=int(tmdb_id),
@@ -378,6 +392,8 @@ class HDHiveSearchService(OwnerDelegator):
                 )
             return results
 
+        except RequestGateCooldown:
+            raise
         except HDHiveWebError as e:
             message = (
                 f"{locals().get('search_prefix', f'[{mediainfo.title}][HDHIVE]')} "
@@ -388,15 +404,14 @@ class HDHiveSearchService(OwnerDelegator):
                 logger.debug(message)
             else:
                 logger.error(message)
-            return None
+            raise
         except Exception as e:
             logger.error(
                 f"{locals().get('search_prefix', f'[{mediainfo.title}][HDHIVE]')} "
                 f"WebAPI 查询失败：{e}，"
                 f"耗时={time.monotonic() - locals().get('started', time.monotonic()):.2f}s"
             )
-            # 暂态失败不能伪装成正常空结果，否则上层会写入负缓存。
-            return None
+            raise
 
     def _search_openapi(
             self, mediainfo: MediaInfo, hdhive_media_type: str,
@@ -408,7 +423,6 @@ class HDHiveSearchService(OwnerDelegator):
         使用 API 模式查询 HDHive 资源
         需要应用 Secret + 用户授权（OpenAPI 客户端）
         """
-        from .open import HDHiveOpenAPIError
         search_label = format_search_label(
             mediainfo,
             MediaType.MOVIE if hdhive_media_type == "movie" else MediaType.TV,
@@ -800,7 +814,6 @@ class HDHiveSearchService(OwnerDelegator):
                     )
                     return None
             else:
-                from .open import HDHiveOpenAPIError
                 if not self._hdhive_client or not self._hdhive_client.is_ready:
                     logger.warning("HDHive API 模式需要应用 Secret 和有效用户 Token 才能解锁")
                     return None

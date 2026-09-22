@@ -1,6 +1,7 @@
 /**
  * 网盘资源页面共享的工具函数和常量。
  * 所有纯函数和静态数据集中在此，供 composables 和组件共用。
+ * 资源类型与搜索渠道的名称/图标/配色由后端下发，这里只做缓存与查找。
  */
 
 // RAW SVG ICONS
@@ -208,116 +209,97 @@ export function resKey(res, idx) {
   return `${res.source || "s"}_${res.url || res.title || idx}_${idx}`;
 }
 
-// 资源类型
+// 展示目录：后端 ui_options / page_data 下发 resource_types、resource_type_aliases、sources
+const displayCatalog = {
+  types: [],
+  typeIndex: {},
+  aliases: {},
+  sources: [],
+  sourceIndex: {},
+};
+
+export function applyDisplayCatalog(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (Array.isArray(payload.resource_types) && payload.resource_types.length) {
+    displayCatalog.types = payload.resource_types.slice();
+    displayCatalog.typeIndex = Object.fromEntries(
+      displayCatalog.types.map((item) => [String(item?.value || "").toLowerCase(), item]),
+    );
+  }
+  if (payload.resource_type_aliases && typeof payload.resource_type_aliases === "object") {
+    displayCatalog.aliases = Object.fromEntries(
+      Object.entries(payload.resource_type_aliases).map(([key, value]) => [
+        String(key).toLowerCase(),
+        String(value).toLowerCase(),
+      ]),
+    );
+  }
+  if (Array.isArray(payload.sources) && payload.sources.length) {
+    displayCatalog.sources = payload.sources.slice();
+    displayCatalog.sourceIndex = Object.fromEntries(
+      displayCatalog.sources.map((item) => [String(item?.key || "").toLowerCase(), item]),
+    );
+  }
+}
+
+function normalizeType(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "other";
+  return displayCatalog.aliases[raw] || raw;
+}
+
+function typeMeta(type) {
+  return displayCatalog.typeIndex[normalizeType(type)] || null;
+}
+
 export function getNormalizedResourceType(item) {
-  const raw = String(item?.resource_type || item?.pan_type || "")
-    .toLowerCase()
-    .trim();
-  const aliases = {aliyun: "alipan", ali: "alipan", "115pan": "115", "123pan": "123", magnetlink: "magnet"};
-  return aliases[raw] || raw || "other";
+  return normalizeType(item?.resource_type || item?.pan_type);
 }
 
 export function getResourceTypeName(type) {
-  const map = {
-    115: "115网盘",
-    quark: "夸克网盘",
-    alipan: "阿里云盘",
-    baidu: "百度网盘",
-    uc: "UC网盘",
-    tianyi: "天翼云盘",
-    123: "123网盘",
-    xunlei: "迅雷网盘",
-    magnet: "磁力链接",
-    ed2k: "电驴链接",
-    torrent: "BT种子",
-    pikpak: "PikPak",
-    guangya: "光鸭网盘",
-  };
-  const key = String(type || "").toLowerCase();
-  return map[key] || (type ? String(type).toUpperCase() : "未知类型");
+  const meta = typeMeta(type);
+  if (meta?.name) return meta.name;
+  const raw = String(type || "").trim();
+  return raw ? raw.toUpperCase() : "未知类型";
 }
 
 export function getResourceTabIcon(type) {
-  const map = {
-    all: "mdi-apps",
-    115: "mdi-cloud",
-    quark: "mdi-cloud-outline",
-    alipan: "mdi-cloud-sync-outline",
-    baidu: "mdi-cloud-circle-outline",
-    uc: "mdi-cloud-download-outline",
-    tianyi: "mdi-cloud-check-outline",
-    123: "mdi-cloud-refresh-outline",
-    guangya: "mdi-cloud-outline",
-    xunlei: "mdi-flash",
-    magnet: "mdi-magnet",
-    ed2k: "mdi-link-variant",
-    torrent: "mdi-seed",
-    pikpak: "mdi-cloud-upload-outline",
-  };
-  return map[String(type || "").toLowerCase()] || "mdi-folder-outline";
+  if (String(type || "").trim().toLowerCase() === "all") return "mdi-apps";
+  return typeMeta(type)?.icon || "mdi-folder-outline";
 }
 
-export function getResourceTypeIcon(type) {
-  return getResourceTabIcon(type);
+export const getResourceTypeIcon = getResourceTabIcon;
+
+export function getTypeColor(type) {
+  return typeMeta(type)?.color || "blue-grey";
 }
 
-export function getSourceColor(source) {
-  const map = {
-    hdhive: "amber-darken-1",
-    piratebay: "teal",
-    uindex: "blue",
-    seedhub: "deep-purple",
-    pansou: "indigo",
-    juying: "orange",
-    pinglian: "cyan",
-    dian115: "amber-darken-2",
-  };
-  return map[String(source).toLowerCase()] || "grey";
+function isPreviewableResourceType(type) {
+  return Boolean(typeMeta(type)?.previewable);
+}
+
+export function isOfflineResourceType(type) {
+  return Boolean(typeMeta(type)?.offline);
+}
+
+export function getResourceTypeRank(type) {
+  const key = normalizeType(type);
+  const index = displayCatalog.types.findIndex(
+    (item) => String(item?.value || "").toLowerCase() === key,
+  );
+  return index < 0 ? displayCatalog.types.length : index;
+}
+
+export function getSourceMeta(source) {
+  return displayCatalog.sourceIndex[String(source || "").trim().toLowerCase()] || null;
 }
 
 export function getSourceName(source) {
-  const map = {
-    pansou: "PanSou",
-    hdhive: "HDHive",
-    dian115: "Dian115",
-    juying: "聚影",
-    seedhub: "SeedHub",
-    pinglian: "盘链",
-    piratebay: "海盗湾",
-    uindex: "UIndex",
-    online_docs: "在线文档",
-  };
-  return map[String(source).toLowerCase()] || source || "未知";
-}
-
-export function getTypeColor(type) {
-  const map = {
-    115: "primary",
-    quark: "amber-darken-3",
-    alipan: "blue",
-    baidu: "indigo",
-    uc: "deep-orange",
-    tianyi: "teal",
-    123: "purple",
-    xunlei: "light-blue-darken-1",
-    magnet: "red-darken-1",
-    ed2k: "blue-grey-darken-1",
-    pikpak: "deep-purple",
-  };
-  return map[String(type || "").toLowerCase()] || "blue-grey";
+  return getSourceMeta(source)?.name || String(source || "").trim() || "未知";
 }
 
 export function getChannelDefaultIcon(key) {
-  const map = {
-    piratebay: "mdi-skull-crossbones",
-    uindex: "mdi-magnet",
-    pansou: "mdi-cloud-search",
-    seedhub: "mdi-seed",
-    juying: "mdi-filmstrip",
-    pinglian: "mdi-link-variant",
-    dian115: "mdi-cloud-download",
-  };
-  return map[key] || "mdi-magnify";
+  return getSourceMeta(key)?.icon || "mdi-magnify";
 }
 
 // 标签提取
@@ -338,28 +320,7 @@ export function getTagColorClass(tag) {
 }
 
 export function getExtractedTags(res) {
-  const specs = [];
-  const rawTitle = String(res.title || "");
-  const title = rawTitle.toUpperCase();
-  if (/(?:\b|\[|\.)(?:4K|2160P|UHD)(?:\b|\]|\.)/i.test(title)) specs.push("4K");
-  else if (/(?:\b|\[|\.)(?:1080P|1080I|FHD)(?:\b|\]|\.)/i.test(title)) specs.push("1080P");
-  else if (/(?:\b|\[|\.)(?:720P)(?:\b|\]|\.)/i.test(title)) specs.push("720P");
-  if (/\.ISO\b/i.test(title) || /\[\d+(?:\.\d+)?GB\]\.ISO/i.test(title)) specs.push("原盘ISO");
-  else if (/REMUX/i.test(title)) specs.push("REMUX");
-  else if (/(?:\b|\[|\.)(?:BDMV|BLURAY|BLU-RAY)(?:\b|\]|\.)/i.test(title)) specs.push("BluRay");
-  else if (/WEB-DL|WEBDL|WEB-RIP/i.test(title)) specs.push("WEB-DL");
-  if (/DV|DOLBY\s*VISION|杜比视界/i.test(title)) specs.push("杜比视界");
-  if (/HDR10\+/i.test(title)) specs.push("HDR10+");
-  else if (/(?:\b|\[|\.)HDR10?(?:\b|\]|\.)/i.test(title)) specs.push("HDR");
-  if (/60FPS|60帧/i.test(title)) specs.push("60帧");
-  else if (/120FPS|120帧/i.test(title)) specs.push("120帧");
-  const languageTag = title.match(/内封(?:简繁英|简繁中英|简繁|简中|繁中|中文|英语|英文)/i);
-  if (languageTag) specs.push(languageTag[0]);
-  else if (/中字|内嵌|简繁|双语|中英|\bCHS\b|\bCHT\b/i.test(title)) specs.push("中字");
-  if (/国语|国配|国粤/i.test(title)) specs.push("国语");
-  if (/粤语/i.test(title)) specs.push("粤语");
-  if (/ATMOS|全景声/i.test(title)) specs.push("杜比全景声");
-  return specs;
+  return Array.isArray(res?.tags) ? res.tags : [];
 }
 
 // 库存
@@ -565,18 +526,6 @@ export function mediaFilterTitle(value, group) {
   return text;
 }
 
-// 默认渠道
-export const DEFAULT_CHANNELS = [
-  {key: "pansou", name: "PanSou", icon: "mdi-cloud-search"},
-  {key: "hdhive", name: "HDHive", icon: "mdi-hexagon-multiple-outline"},
-  {key: "dian115", name: "Dian115", icon: "mdi-cloud-download"},
-  {key: "juying", name: "聚影", icon: "mdi-filmstrip"},
-  {key: "seedhub", name: "SeedHub", icon: "mdi-seed"},
-  {key: "pinglian", name: "盘链", icon: "mdi-link-variant"},
-  {key: "piratebay", name: "海盗湾", icon: "mdi-skull-crossbones"},
-  {key: "uindex", name: "UIndex", icon: "mdi-magnet"},
-];
-
 // 推荐 Tab
 export const RECOMMEND_TABS = [
   {value: "tmdb_trending", title: "流行趋势", icon: "mdi-fire"},
@@ -589,32 +538,27 @@ export const RECOMMEND_TABS = [
 
 // 跨盘转存判断
 export function isCrossTransferResource(res, mainDrive) {
-  const t = String(res?.resource_type || "").toLowerCase();
-  if (!t || ["magnet", "ed2k", "cloud"].includes(t)) return false;
-  return t !== String(mainDrive || "115").toLowerCase();
+  if (!res?.resource_type && !res?.pan_type) return false;
+  const resType = getNormalizedResourceType(res);
+  if (isOfflineResourceType(resType)) return false;
+  return resType !== normalizeType(mainDrive || "115");
 }
 
 // 预览资源判断
 export function canPreviewResource(item) {
-  const source = String(item?.source || "").toLowerCase();
-  const resType = getNormalizedResourceType(item);
-  if (resType === "ed2k") return false;
-  const previewableType = Boolean(
-    item?.can_preview ||
-    ["115", "quark", "alipan", "uc", "tianyi", "baidu", "123", "guangya", "magnet", "torrent"].includes(resType),
-  );
-  if (!previewableType) return false;
-  const pendingHdhive = source === "hdhive" && Boolean(item?.resource_ref) && item?.supports_file_preview !== false;
-  const pendingProvider = source === "juying" && Boolean(item?.provider_data?.resource_id);
-  const pendingResolution = Boolean(item?.pending_resolution && ["seedhub", "pinglian"].includes(source));
-  return Boolean(item?.url || pendingHdhive || pendingProvider || pendingResolution);
+  if (!isPreviewableResourceType(getNormalizedResourceType(item))) return false;
+  const hasUrl = Boolean(item?.url);
+  const isPendingResolvable = Boolean(
+    item?.pending_resolution ||
+    item?.resource_ref ||
+    item?.provider_data?.resource_id,
+  ) && item?.supports_file_preview !== false;
+  return hasUrl || isPendingResolvable;
 }
 
 export function previewResourceKey(item) {
   const source = String(item?.source || "").toLowerCase();
   const providerData = item?.provider_data || {};
-  const resourceId = String(providerData.resource_id || "");
-  if (source === "juying" && resourceId) return `${source}:${resourceId}`;
   return String(
     item?.url ||
     `${source}:${item?.resource_type || ""}:${
@@ -624,8 +568,11 @@ export function previewResourceKey(item) {
 }
 
 export function isPointUnlockResource(res) {
-  const source = String(res?.source || "").toLowerCase();
-  return ["hdhive", "dian115"].includes(source);
+  return Boolean(
+    res?.is_point_unlock ||
+    res?.need_unlock ||
+    res?.unlock_points !== undefined,
+  );
 }
 
 export function getResourcePointStatus(res) {

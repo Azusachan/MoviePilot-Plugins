@@ -1,20 +1,13 @@
 export const enabled = (key) => (config) => Boolean(config[key]);
 
 export function createCloudDriveItems(options) {
-  return options.cloudDrives?.length ? options.cloudDrives : [{title: "115网盘", value: "115"}];
+  return Array.isArray(options?.cloudDrives) ? options.cloudDrives : [];
 }
 
-export function createResourceTypeItems(cloudDriveItems, config) {
-  const resourceTypes = [
-    {title: "115分享", value: "115"},
-    {title: "123分享", value: "123"},
-    {title: "夸克分享", value: "quark"},
-    {title: "光鸭分享", value: "guangya"},
-    {title: "天翼云盘", value: "tianyi"},
-    {title: "阿里云盘", value: "alipan"},
-    {title: "ED2K", value: "ed2k"},
-    {title: "Magnet", value: "magnet"},
-  ]
+/** 资源类型选项由后端下发（options.resourceTypes），这里只按当前网盘能力过滤。 */
+export function createResourceTypeItems(options, config) {
+  const cloudDriveItems = createCloudDriveItems(options);
+  const catalog = Array.isArray(options.resourceTypes) ? options.resourceTypes : [];
   const activeDrive = cloudDriveItems.find((item) => item.value === (config.cloud_drive || "115"));
   const supportedTypes = new Set(activeDrive?.resource_types || ["115", "ed2k", "magnet"]);
   const targetCanUpload = activeDrive?.capabilities?.includes("local_upload");
@@ -28,10 +21,21 @@ export function createResourceTypeItems(cloudDriveItems, config) {
       ) {
         return;
       }
-      ;(drive.resource_types || []).forEach((value) => {
+      (drive.resource_types || []).forEach((value) => {
         if (!["ed2k", "magnet"].includes(value)) supportedTypes.add(value);
-      })
-    })
+      });
+    });
   }
-  return resourceTypes.filter((item) => supportedTypes.has(item.value));
+  return catalog
+    .filter((item) => supportedTypes.has(item?.value))
+    .map((item) => ({title: item.name, value: item.value, icon: item.icon}));
+}
+
+/** 搜索渠道选项由后端下发（options.sources）。 */
+export function createSourceItems(options) {
+  return (Array.isArray(options.sources) ? options.sources : []).map((item) => ({
+    title: item.name,
+    value: item.key,
+    icon: item.icon,
+  }));
 }

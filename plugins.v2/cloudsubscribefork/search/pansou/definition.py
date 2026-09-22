@@ -1,0 +1,199 @@
+"""PanSou 搜索渠道自描述规范与表单声明。"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from .client import PanSouClient
+from .provider import create_pansou_provider
+from .service import PanSouSearchService
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
+
+
+class PanSouSourceDefinition(SearchSourceDefinition):
+    """PanSou 搜索渠道规范。"""
+
+    id = "pansou"
+    name = "PanSou"
+    icon = "mdi-magnify-scan"
+    color = "indigo"
+    order = 5
+
+    @classmethod
+    def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
+        ctx = context or {}
+        base_url = str(cls.config_value(config, "pansou_url", "") or "").strip()
+        if not base_url:
+            return None
+        owner = ctx.get("storage_owner")
+        return PanSouClient(
+            base_url=base_url,
+            username=str(cls.config_value(config, "pansou_username", "") or ""),
+            password=str(cls.config_value(config, "pansou_password", "") or ""),
+            auth_enabled=bool(cls.config_value(config, "pansou_auth_enabled", False)),
+            proxy=ctx.get("proxy"),
+            search_timeout=int(cls.config_value(config, "pansou_timeout", 60) or 60),
+            get_data_func=getattr(owner, "get_data", None),
+            save_data_func=getattr(owner, "save_data", None),
+        )
+
+    @classmethod
+    def get_config_groups(cls, context: Optional[Dict[str, Any]] = None) -> List[GroupSpec]:
+        return [
+            GroupSpec(
+                tab="pansou",
+                title="连接配置",
+                icon="mdi-server-network",
+                fields=[
+                    FieldSpec(
+                        key="pansou_url",
+                        label="服务地址",
+                        placeholder="https://pansou.cc",
+                        cols=8,
+                    ),
+                    FieldSpec(
+                        key="pansou_auth_enabled",
+                        label="启用身份认证",
+                        type="switch",
+                        cols=4,
+                    ),
+                    FieldSpec(
+                        key="pansou_username",
+                        label="用户名",
+                        cols=4,
+                        show_condition="config.pansou_auth_enabled",
+                    ),
+                    FieldSpec(
+                        key="pansou_password",
+                        label="密码",
+                        type="password",
+                        cols=4,
+                        show_condition="config.pansou_auth_enabled",
+                    ),
+                    FieldSpec(
+                        key="test_pansou",
+                        label="测试搜索",
+                        type="test-source",
+                        source="pansou",
+                        cols=12,
+                    ),
+                ],
+            ),
+            GroupSpec(
+                tab="pansou",
+                title="搜索范围",
+                icon="mdi-source-branch",
+                fields=[
+                    FieldSpec(
+                        key="pansou_channels",
+                        label="限定频道",
+                        type="select",
+                        cols=4,
+                        multiple=True,
+                        searchable=True,
+                        extra={
+                            "dynamicOptions": {
+                                "scope": "pansou",
+                                "key": "channels",
+                                "refreshable": True,
+                            },
+                        },
+                    ),
+                    FieldSpec(
+                        key="pansou_plugins",
+                        label="限定插件",
+                        type="select",
+                        cols=4,
+                        multiple=True,
+                        searchable=True,
+                        extra={
+                            "dynamicOptions": {
+                                "scope": "pansou",
+                                "key": "plugins",
+                                "refreshable": True,
+                            },
+                        },
+                    ),
+                ],
+            ),
+            GroupSpec(
+                tab="pansou",
+                title="过滤与性能",
+                icon="mdi-filter-cog-outline",
+                fields=[
+                    FieldSpec(
+                        key="pansou_refresh",
+                        label="强制刷新",
+                        hint="开启时绕过服务端缓存",
+                        type="switch",
+                        cols=12,
+                    ),
+                    FieldSpec(
+                        key="pansou_filter_include",
+                        label="必须包含任一关键词",
+                        hint="至少包含一个关键词 (OR)",
+                        type="combobox",
+                        cols=6,
+                    ),
+                    FieldSpec(
+                        key="pansou_filter_exclude",
+                        label="排除任一关键词",
+                        hint="包含任一关键词即排除 (OR)",
+                        type="combobox",
+                        cols=6,
+                    ),
+                    FieldSpec(
+                        key="pansou_concurrency",
+                        label="并发数（可选）",
+                        placeholder="自动",
+                        type="number",
+                        min=1,
+                        max=10,
+                        cols=4,
+                    ),
+                    FieldSpec(
+                        key="pansou_result_limit",
+                        label="每个提供方最大结果数",
+                        placeholder="自动",
+                        type="number",
+                        min=1,
+                        max=100,
+                        cols=4,
+                    ),
+                    FieldSpec(
+                        key="pansou_timeout",
+                        label="请求超时（秒）",
+                        type="number",
+                        min=5,
+                        max=120,
+                        cols=4,
+                    ),
+                ],
+            ),
+        ]
+
+    @classmethod
+    def create_provider(
+            cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
+    ) -> Any:
+        ctx = context or {}
+        owner = ctx.get("owner")
+        if not client or not owner:
+            return None
+        setattr(owner, "_pansou_client", client)
+        pansou_service = ctx.get("pansou_service") or PanSouSearchService(owner)
+        return create_pansou_provider(
+            pansou_service,
+            ctx.get("resource_types", ()),
+            {
+                "channels": list(getattr(owner, "_pansou_channels", ())),
+                "plugins": list(getattr(owner, "_pansou_plugins", ())),
+                "cloud_types": list(getattr(owner, "_pansou_cloud_types", ())),
+                "filter": dict(getattr(owner, "_pansou_filter", {})),
+                "concurrency": getattr(owner, "_pansou_concurrency", 0),
+                "result_limit": getattr(owner, "_pansou_result_limit", 20),
+                "refresh": getattr(owner, "_pansou_refresh", False),
+                "timeout": getattr(owner, "_pansou_timeout", 30),
+            },
+        )
+

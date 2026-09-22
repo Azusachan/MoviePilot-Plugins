@@ -6,7 +6,11 @@ from typing import Any, Dict, Optional
 from app.chain.mediaserver import MediaServerChain
 from app.db import SessionFactory
 from app.db.models.mediaserver import MediaServerItem
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from sqlalchemy import func
 

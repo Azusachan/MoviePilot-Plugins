@@ -1,0 +1,91 @@
+name: Bug 反馈
+description: 报告网盘订阅助手的问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜索已有 Issue。请只提交一个问题，并附上能定位问题的完整信息。
+
+        **开启 DEBUG 日志**：进入 MoviePilot「系统设定 → 高级设置 → 日志」，将日志等级
+        调整为 `DEBUG`，重新执行一次问题操作后，从 MoviePilot 日志中复制相关时间段的内容。提交前请删除
+        Cookie、Token、密码、分享链接中的私密参数和个人路径。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认不是重复问题
+          required: true
+        - label: 我已使用最新 Release 版本复现，或说明了当前使用的版本
+          required: true
+        - label: 日志已脱敏，不包含 Cookie、Token、密码或其他凭据
+          required: true
+  - type: input
+    id: moviepilot-version
+    attributes:
+      label: MoviePilot 版本
+      placeholder: 例如：v2.14.6 或 v3.x
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 网盘订阅助手版本
+      placeholder: 例如：1.8.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - MoviePilot v2
+        - MoviePilot v3
+        - 不确定
+    validations:
+      required: true
+  - type: dropdown
+    id: media-server
+    attributes:
+      label: 媒体服务器
+      options:
+        - Emby
+        - Plex
+        - 飞牛影视
+        - Jellyfin
+        - 未配置或其他
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明实际结果、预期结果，以及涉及的网盘或功能。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 配置网盘转存目录和媒体库目录
+        2. 说明订阅接管策略、资源类型和搜索内容
+        3. 描述任务停止在哪个处理阶段
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: DEBUG 日志
+      description: 请粘贴从操作前后开始的完整相关日志，并保留异常堆栈。
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他信息
+      description: 可附配置截图、资源名称或相关链接；请先脱敏。

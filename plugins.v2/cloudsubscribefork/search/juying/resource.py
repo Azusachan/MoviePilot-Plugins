@@ -19,6 +19,7 @@ from ..types import (
     RESOURCE_TYPE_ORDER,
     SUPPORTED_RESOURCE_TYPES,
     TYPE_HOSTS,
+    append_share_password,
     resource_type_from_text,
     resource_type_from_url,
 )
@@ -299,19 +300,10 @@ class JuyingResourceService:
         access_code = str(access_code or "").strip()
         if not access_code:
             return target
-        if (
-                resource_type == "115"
-                and re.fullmatch(r"[A-Za-z0-9]{4}", access_code)
-                and not re.search(r"[?&]password=", target, re.I)
-        ):
-            return f"{target}{'&' if '?' in target else '?'}password={access_code}"
-        if resource_type == "123" and not re.search(r"[?&](?:pwd|code)=", target, re.I):
-            return f"{target}{'&' if '?' in target else '?'}pwd={access_code}"
-        if resource_type == "guangya" and not re.search(r"[?&](?:pwd|code)=", target, re.I):
-            return f"{target}{'&' if '?' in target else '?'}code={access_code}"
-        if resource_type == "quark" and not re.search(r"(?:提取码|密码|code)", target, re.I):
-            return f"{target} 提取码: {access_code}"
-        return target
+        if resource_type == "115" and not re.fullmatch(r"[A-Za-z0-9]{4}", access_code):
+            # 115 提取码固定 4 位，其他取值一律不写入链接。
+            return target
+        return append_share_password(resource_type, target, access_code)
 
     def _resolve_resource(self, resource_id: str) -> Dict[str, Any]:
         raw = self._resource_cache.get(resource_id)

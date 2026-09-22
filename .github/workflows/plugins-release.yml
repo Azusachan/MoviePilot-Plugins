@@ -34,7 +34,7 @@ jobs:
       matrix: ${{ steps.detect.outputs.plugins }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -67,12 +67,12 @@ jobs:
     name: Release ${{ matrix.plugin.id }} v${{ matrix.plugin.version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
         # Backend fixtures are checked before publishing the Mikan fork.
         if: ${{ matrix.plugin.has_frontend }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
 
@@ -184,9 +184,15 @@ jobs:
               raise SystemExit(f"Release archive is missing: {missing}")
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ matrix.plugin.tag_name }}
-          name: ${{ matrix.plugin.name }} v${{ matrix.plugin.version }}
-          body: ${{ matrix.plugin.notes }}
-          files: ${{ matrix.plugin.asset_name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ matrix.plugin.tag_name }}
+          RELEASE_NAME: ${{ matrix.plugin.name }} v${{ matrix.plugin.version }}
+          RELEASE_NOTES: ${{ matrix.plugin.notes }}
+          ASSET_NAME: ${{ matrix.plugin.asset_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG_NAME" "$ASSET_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes "$RELEASE_NOTES"

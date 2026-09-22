@@ -8,15 +8,14 @@ from collections import deque
 from contextlib import contextmanager
 from functools import partial
 from typing import Any, Callable, Dict, Optional
+
 from app.log import logger
+
 from ..utils.http_client import (
-    build_proxy_url,
     normalize_proxies,
     normalize_proxy_address,
-    proxy_server,
     request_error_summary,
     requests,
-    validate_proxy_address,
 )
 
 TRANSIENT_REQUEST_EXCEPTIONS = (
@@ -291,8 +290,9 @@ class RequestGate:
                 0.0,
             )
         cooldown_wait = max(self._cooldown_until - now, 0.0)
-        if fail_on_cooldown and cooldown_wait > 0:
-            raise RequestGateCooldown(cooldown_wait, self._cooldown_status)
+        if cooldown_wait > 0:
+            if fail_on_cooldown or cooldown_wait > 3.0:
+                raise RequestGateCooldown(cooldown_wait, self._cooldown_status)
         interval_wait = 0.0
         if not getattr(self._sequence_local, "skip_interval", False):
             interval_wait = (
@@ -325,7 +325,7 @@ class RequestGate:
             self, seconds: int, status: int = 0, reason: str = "风险保护"
     ) -> None:
         """由协议层识别到软风控信号时主动开启共享冷却。"""
-        normalized_seconds = max(1, min(int(seconds or 1), 10 * 60))
+        normalized_seconds = max(1, min(int(seconds or 1), 3 * 60))
         with self._lock:
             cooldown_until = time.monotonic() + normalized_seconds
             if cooldown_until >= self._cooldown_until:
@@ -334,6 +334,12 @@ class RequestGate:
         logger.warning(
             f"{self._name} 触发{reason}，冷却 {normalized_seconds} 秒"
         )
+
+    def clear_cooldown(self) -> None:
+        """重置冷却状态（例如在重新登录刷新成功后解除风控）。"""
+        with self._lock:
+            self._cooldown_until = 0.0
+            self._cooldown_status = 0
 
     def _apply_cooldown(self, response) -> None:
         status = int(getattr(response, "status_code", 0) or 0)
@@ -351,7 +357,7 @@ class RequestGate:
                 return
         retry_after = str(response.headers.get("retry-after") or "").strip()
         try:
-            seconds = max(1, min(int(float(retry_after)), 10 * 60))
+            seconds = max(1, min(int(float(retry_after)), 3 * 60))
         except (TypeError, ValueError):
             seconds = 0
             if status == 429:

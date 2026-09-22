@@ -5,13 +5,15 @@ import os
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import unquote, urljoin, urlparse, urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from app.log import logger
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
+from .security import turnstile_token
+from ..cloudflare import is_cloudflare_challenge
 from ..http_client import (
     AccountActionGate,
     RequestGate,
@@ -50,7 +52,7 @@ class Dian115Client:
     _PROOF_MARGIN_SECONDS = 15
     _RISK_COOLDOWN_SECONDS = 60
     _SERVER_ERROR_COOLDOWN_SECONDS = 5
-    _PORTAL_COOKIES = ("__Host-portal_token", "__Host-portal_browser")
+    _PORTAL_COOKIES = ("portal_token", "__Host-portal_token", "__Host-portal_browser")
     _SESSION_DATA_KEY = "dian115_auth_session"
     _PROOF_RETRY_CODES = ("browser_proof_required", "browser_proof_invalid")
     _AUTH_RETRY_CODES = (
@@ -79,7 +81,11 @@ class Dian115Client:
             timeout: int = 30,
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
+            lottery_enabled: bool = False,
+            lottery_count: int = 0,
     ):
+        self._lottery_enabled = bool(lottery_enabled)
+        self._lottery_count = max(0, int(lottery_count or 0))
         self._email = str(email or "").strip()
         self.base_url = str(base_url or self.BASE_URL).rstrip("/")
         self._password = str(password or "").strip()
@@ -165,7 +171,29 @@ class Dian115Client:
         self._save_auth_cookie("")
 
     def _cookie(self, name: str) -> str:
-        return str(self._session.cookies.get_dict().get(name) or "")
+        try:
+            val = self._session.cookies.get(name)
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        try:
+            val = self._session.cookies.get_dict().get(name)
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        try:
+            for cookie in self._session.cookies:
+                c_name = getattr(cookie, "name", None)
+                if c_name == name and getattr(cookie, "value", None):
+                    return str(cookie.value)
+        except Exception:
+            pass
+        return ""
+
+    def _portal_token(self) -> str:
+        return self._cookie("portal_token") or self._cookie("__Host-portal_token")
 
     def _restore_auth_cookie(self) -> None:
         if not self._get_data_func:
@@ -180,8 +208,9 @@ class Dian115Client:
                 return
             token = str(data.get("token") or "")
             if token:
-                self._session.cookies.delete("__Host-portal_token")
-                self._session.cookies.set("__Host-portal_token", token, secure=True)
+                for cname in ("portal_token", "__Host-portal_token"):
+                    self._session.cookies.delete(cname)
+                    self._session.cookies.set(cname, token, secure=True)
                 self._saved_token = token
                 self._authenticated = True
         except Exception as error:
@@ -234,10 +263,9 @@ class Dian115Client:
     @staticmethod
     def _is_challenge_response(response) -> bool:
         content_type = str(response.headers.get("content-type") or "").lower()
-        cf_mitigated = str(
-            response.headers.get("cf-mitigated") or ""
-        ).strip().lower()
-        return cf_mitigated == "challenge" or "text/html" in content_type
+        return is_cloudflare_challenge(
+            response.text or "", response.status_code, response.headers
+        ) or "text/html" in content_type
 
     def _check_cooldown(self) -> None:
         remaining = self._request_gate.cooldown_remaining
@@ -261,7 +289,7 @@ class Dian115Client:
                 timeout=self._timeout,
                 **kwargs,
             )
-            self._save_auth_cookie(self._cookie("__Host-portal_token"))
+            self._save_auth_cookie(self._portal_token())
             return response
         except requests.exceptions.RequestException as error:
             raise Dian115Error(f"Dian115 请求失败：{error}") from error
@@ -388,27 +416,6 @@ class Dian115Client:
         headers.update(self._browser_signature(method, api_path))
         return headers
 
-    def _browser_proxy(self) -> Optional[Dict[str, str]]:
-        proxies = self._proxies or {}
-        proxy = proxies.get("https") or proxies.get("http")
-        if not proxy:
-            return None
-        parsed = urlparse(str(proxy))
-        if not parsed.scheme or not parsed.hostname:
-            return None
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        server = f"{parsed.scheme}://{host}"
-        if parsed.port:
-            server += f":{parsed.port}"
-        result = {"server": server}
-        if parsed.username:
-            result["username"] = unquote(parsed.username)
-        if parsed.password:
-            result["password"] = unquote(parsed.password)
-        return result
-
     def _login(self, allow_browser_login: bool = True) -> None:
         if self._authenticated:
             return
@@ -423,12 +430,38 @@ class Dian115Client:
                 require_login=False, allow_browser_login=allow_browser_login,
                 json={"email": self._email, "password": self._password},
             )
-            if not payload.get("user") or not self._cookie("__Host-portal_token"):
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            user = payload.get("user") or data.get("user") or (data if "points" in data or "email" in data else None)
+            token = (
+                    self._portal_token()
+                    or payload.get("token")
+                    or data.get("token")
+                    or payload.get("portal_token")
+                    or data.get("portal_token")
+            )
+            if token and not self._portal_token():
+                for cname in ("portal_token", "__Host-portal_token"):
+                    try:
+                        self._session.cookies.set(cname, str(token), secure=True)
+                    except Exception:
+                        pass
+                self._saved_token = str(token)
+
+            if not user or not token:
+                cookie_names = []
+                try:
+                    cookie_names = [getattr(c, "name", str(c)) for c in self._session.cookies]
+                except Exception:
+                    pass
+                logger.warning(
+                    f"Dian115 登录响应异常：payload_keys={list(payload.keys())}, data_keys={list(data.keys())}, cookies={cookie_names}"
+                )
                 raise Dian115Error(
                     "Dian115 登录响应缺少用户信息或认证 Cookie",
                     code="login_failed",
                 )
             self._authenticated = True
+            self._save_auth_cookie(token)
             logger.debug("Dian115 接口登录成功，已保存登录状态")
 
     def _request_json(
@@ -453,7 +486,6 @@ class Dian115Client:
                     self._login(allow_browser_login=allow_browser_login)
                 request_kwargs = dict(kwargs)
                 if action:
-                    from .security import turnstile_token
                     token = turnstile_token(self, action, allow_browser_login)
                     body = dict(kwargs.get("json") or {})
                     if token:
@@ -566,7 +598,7 @@ class Dian115Client:
             allow_browser_login=False,
         )
 
-    def signin(self, mode: str = "normal") -> Dict[str, Any]:
+    def _signin(self, mode: str) -> Dict[str, Any]:
         """通过门户签到接口执行普通或运气签到。"""
         normalized_mode = str(mode or "normal").strip().lower()
         if normalized_mode not in {"normal", "lucky"}:
@@ -681,4 +713,68 @@ class Dian115Client:
             "cost_points": wheel_cost,
             "award_points": wheel_award,
             "vip_days": wheel_vip_days,
+        }
+
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        """签到并按配置补齐当日幸运转盘；积分差额由服务层统一结算。"""
+        before = self.get_account_info()
+        signin = self._signin(mode)
+        lottery = (
+            self.run_lottery(self._lottery_count)
+            if self._lottery_enabled else {}
+        )
+        try:
+            after = self.get_account_info()
+        except Dian115Error:
+            # 签到链路禁止触发浏览器登录，账户接口失败时退回签到/转盘返回余额。
+            after = dict(before)
+            balance = lottery.get("new_balance", signin.get("new_balance"))
+            if balance is not None:
+                after["points"] = balance
+
+        points_before = int(before.get("points") or 0)
+        points_after = int(after.get("points") or 0)
+        awarded = signin.get("award_points")
+        if signin.get("already_checked_in"):
+            label = "今日已签到"
+        elif isinstance(awarded, (int, float)):
+            label = f"签到 {int(awarded):+d}"
+        else:
+            label = "签到完成"
+        parts = [label]
+        if lottery:
+            parts.append(
+                f"转盘 {lottery.get('used_after') or 0}/"
+                f"{lottery.get('target_count') or self._lottery_count}"
+            )
+            if not lottery.get("success"):
+                parts.append(
+                    f"转盘未完成：{lottery.get('message') or '接口返回失败'}"
+                )
+        success = bool(signin.get("success") and lottery.get("success", True))
+        return {
+            "success": success,
+            "status": (
+                "今日已签到"
+                if signin.get("already_checked_in") and not lottery
+                else "签到完成" if success else "签到未完成"
+            ),
+            "message": "；".join(parts),
+            "mode": mode,
+            # 收益明细由服务层按余额差额结算，渠道只回传原始字段。
+            "signin_points": awarded,
+            "points_before": points_before,
+            "points_after": points_after,
+            "signin_days": int(
+                after.get("consecutive_signin")
+                or signin.get("signin_days")
+                or 0
+            ),
+            "status_code": int(
+                lottery.get("status_code") or signin.get("status_code") or 0
+            ),
+            "error_code": str(
+                lottery.get("error_code") or signin.get("error_code") or ""
+            ),
+            "lottery": lottery or None,
         }

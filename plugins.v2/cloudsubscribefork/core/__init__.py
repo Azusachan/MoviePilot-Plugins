@@ -13,9 +13,11 @@ from .cloud import (
 from .delegation import OwnerDelegator, get_component, resolve_component
 from .scraper import MediaScraper
 from .search import (
+    SEARCH_CIRCUIT_BREAKER,
     SearchCandidate,
     SearchCapability,
     SearchCapabilityError,
+    SearchCircuitBreaker,
     SearchPolicy,
     SearchProvider,
     SearchQuery,
@@ -24,9 +26,16 @@ from .search import (
     format_search_log_prefix,
     normalize_search_candidate,
 )
+from .drive_manager import CloudDriveManager
+from .definitions import DriverDefinition, FieldSpec, GroupSpec, SearchSourceDefinition
 from .transfer import CrossDriveTransfer, CrossTransferTaskManager, LocalRapidUploadAdapter
 
 __all__ = [
+    "DriverDefinition",
+    "FieldSpec",
+    "GroupSpec",
+    "SearchSourceDefinition",
+    "CloudDriveManager",
     "OwnerDelegator",
     "CloudDriveCapability",
     "CloudDriveCapabilityError",
@@ -40,6 +49,8 @@ __all__ = [
     "SearchCandidate",
     "SearchCapability",
     "SearchCapabilityError",
+    "SearchCircuitBreaker",
+    "SEARCH_CIRCUIT_BREAKER",
     "SearchPolicy",
     "SearchProvider",
     "SearchQuery",

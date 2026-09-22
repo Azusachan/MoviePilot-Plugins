@@ -248,13 +248,17 @@ class GuangyaShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs: Any,
+            target_name: str = "", **kwargs: Any,
     ) -> bool:
         if self._offline.is_offline_url(share_url):
             return self._offline.add_offline_download(
                 share_url, save_path, target_name=target_name
             )
-        return self._restore_share(share_url, [file_id], save_path)
+        success = self._restore_share(share_url, [file_id], save_path)
+        if not success and target_name:
+            if self._files.find_file(save_path, target_name):
+                return True
+        return success
 
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
@@ -267,10 +271,17 @@ class GuangyaShareService:
                 else []
             )
             return succeeded, [value for value in normalized if value not in succeeded]
+        if not normalized:
+            return [], []
+
+        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 50,
         ):
-            (succeeded if self._restore_share(share_url, batch, save_path) else failed).extend(batch)
+            if self._restore_share(share_url, batch, save_path):
+                succeeded.extend(batch)
+            else:
+                failed.extend(batch)
         return succeeded, failed

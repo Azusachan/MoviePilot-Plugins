@@ -2,118 +2,37 @@
 
 from typing import Any
 
-from .dian115 import create_dian115_provider
-from .hdhive import create_hdhive_provider
-from .juying import JuyingSearchService, create_juying_provider
-from .online_docs import create_online_docs_provider
-from .pansou import create_pansou_provider
-from .pinglian import PinglianSearchService, create_pinglian_provider
-from .piratebay import PirateBaySearchService, create_piratebay_provider
-from .seedhub import SeedHubSearchService, create_seedhub_provider
-from .uindex import UIndexSearchService, create_uindex_provider
 from ..core.search import SearchRegistry
+from .scanner import SearchSourceRegistry
 
 
 def create_search_registry(
         owner: Any,
-        pansou_service: Any,
-        hdhive_service: Any,
-        dian115_service: Any,
+        **extra_context: Any,
 ) -> SearchRegistry:
-    """根据当前配置组装可用渠道，调用端无需理解来源差异。"""
+    """根据当前配置自动扫描并组装可用搜索渠道。"""
     registry = SearchRegistry()
-    resource_types = tuple(owner._resource_type_order_config)
+    resource_types = tuple(getattr(owner, "_resource_type_order_config", ()))
+    context = {
+        "owner": owner,
+        "storage_owner": getattr(owner, "_plugin", None) or owner,
+        "resource_types": resource_types,
+        "proxy": getattr(owner, "_search_proxy", None),
+        **extra_context,
+    }
 
-    if hdhive_service and getattr(hdhive_service, "available", False):
-        registry.register(create_hdhive_provider(hdhive_service))
-    if dian115_service and getattr(dian115_service, "available", False):
-        registry.register(create_dian115_provider(dian115_service))
+    for def_cls in SearchSourceRegistry.get_definitions():
+        try:
+            client = def_cls.create_client(owner.__dict__, context)
+            service = def_cls.create_service(client, owner.__dict__, context)
+            provider = def_cls.create_provider(service, client, owner.__dict__, context)
+            if provider:
+                registry.register(provider, replace=True)
+            else:
+                from app.log import logger as _logger
+                _logger.debug(f"搜索渠道 [{def_cls.id}] create_provider 返回 None，已跳过注册")
+        except Exception as _err:
+            from app.log import logger as _logger
+            _logger.debug(f"搜索渠道 [{def_cls.id}] 注册失败：{_err}")
 
-    if owner._pansou_client:
-        pansou_service = pansou_service or PanSouSearchService(
-            owner._pansou_client,
-            owner._pansou_resource_types,
-            owner._pansou_refresh,
-            owner._pansou_timeout,
-        )
-        registry.register(create_pansou_provider(
-            pansou_service,
-            resource_types,
-            {
-                "channels": list(owner._pansou_channels),
-                "plugins": list(owner._pansou_plugins),
-                "cloud_types": list(owner._pansou_cloud_types),
-                "filter": dict(owner._pansou_filter),
-                "concurrency": owner._pansou_concurrency,
-                "result_limit": owner._pansou_result_limit,
-                "refresh": owner._pansou_refresh,
-                "timeout": owner._pansou_timeout,
-            },
-        ))
-    if (
-            owner._juying_resources
-            and owner._juying_client
-            and getattr(owner._juying_client, "is_configured", False)
-            and owner._juying_resource_types
-    ):
-        registry.register(create_juying_provider(
-            JuyingSearchService(
-                owner._juying_client,
-                owner._juying_resources,
-                owner._juying_resource_types,
-                owner._juying_result_limit,
-            ),
-            owner._juying_client,
-            owner._juying_resource_types,
-            {
-                "result_limit": owner._juying_result_limit,
-                "resource_types": list(owner._juying_resource_types),
-            },
-        ))
-    if owner._seedhub_client:
-        registry.register(create_seedhub_provider(
-            SeedHubSearchService(
-                owner._seedhub_client, owner._seedhub_result_limit
-            ),
-            {"result_limit": owner._seedhub_result_limit},
-        ))
-    if getattr(owner, "_piratebay_client", None):
-        registry.register(create_piratebay_provider(
-            PirateBaySearchService(
-                owner._piratebay_client,
-                getattr(owner, "_piratebay_result_limit", 20),
-            ),
-            {"result_limit": getattr(owner, "_piratebay_result_limit", 20)},
-        ))
-    if getattr(owner, "_uindex_client", None):
-        registry.register(create_uindex_provider(
-            UIndexSearchService(
-                owner._uindex_client,
-                getattr(owner, "_uindex_result_limit", 20),
-            ),
-            {"result_limit": getattr(owner, "_uindex_result_limit", 20)},
-        ))
-    if (
-            owner._pinglian_client
-            and getattr(owner._pinglian_client, "is_configured", False)
-            and resource_types
-    ):
-        registry.register(create_pinglian_provider(
-            PinglianSearchService(
-                owner._pinglian_client,
-                resource_types,
-                owner._pinglian_result_limit,
-            ),
-            owner._pinglian_client,
-            resource_types,
-            {"result_limit": owner._pinglian_result_limit},
-        ))
-    if getattr(owner, "_online_docs_client", None):
-        registry.register(create_online_docs_provider(
-            owner._online_docs_client,
-            resource_types,
-        ))
-    if "mikan" in owner._search_source_order and "magnet" in resource_types:
-        from .mikan import create_mikan_provider
-        registry.register(create_mikan_provider(owner._mikan_config, owner._search_proxy))
     return registry

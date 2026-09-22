@@ -1,11 +1,10 @@
 import {computed, ref, watch} from "vue";
 import {
-  DEFAULT_CHANNELS,
   getChannelDefaultIcon,
-  getExtractedTags,
   getNormalizedResourceType,
   getResourceTabIcon,
   getResourceTypeName,
+  getResourceTypeRank,
   getSourceName,
   isPointUnlockResource,
   responseItems,
@@ -25,22 +24,29 @@ function getMediaCacheKey(media) {
   return `${type}:${id}:${title}:${year}`;
 }
 
+
 /** 管理详情弹窗的数据补全、并发取消和生命周期。 */
 export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const detailVisible = ref(false);
   const detailLoading = ref(false);
   const activeMedia = ref(null);
   const activeDetailSeason = ref(1);
-  const configuredChannels = ref([...DEFAULT_CHANNELS]);
-  const availableChannels = computed(() => configuredChannels.value.filter((channel) => isChannelConfigured(channel.key)));
-  const availableDrives = ref([
-    {key: "115", name: "115网盘"},
-    {key: "quark", name: "夸克网盘"},
-    {key: "alipan", name: "阿里云盘"},
-    {key: "123", name: "123云盘"},
-    {key: "tianyi", name: "天翼云盘"},
-    {key: "guangya", name: "光鸭网盘"},
-  ]);
+
+  function normalizeChannels(sources) {
+    if (!Array.isArray(sources)) return [];
+    return sources
+      .map((source) => {
+        const key = (typeof source === "object" && source?.key ? source.key : String(source)).toLowerCase();
+        const name = typeof source === "object" && source?.name ? source.name : getSourceName(key);
+        const icon = (typeof source === "object" && source?.icon) ? source.icon : getChannelDefaultIcon(key);
+        return { key, name, icon };
+      })
+      .filter((channel) => Boolean(channel.key));
+  }
+
+  // 渠道与网盘列表均由后端下发（available_sources / available_drives）
+  const availableChannels = ref([]);
+  const availableDrives = ref([]);
   const activeChannelTab = ref("pansou");
   const activeResourceTab = ref("");
   const resourceSearchQuery = ref("");
@@ -51,55 +57,53 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   const channelElapsed = ref({});
   let requestToken = 0;
 
-  function isChannelConfigured(channelKey) {
-    const config = pluginConfig?.value || {};
-    if (channelKey === "pansou") return Boolean(config.pansou_enabled ?? true);
-    if (channelKey === "seedhub") return Boolean(config.seedhub_enabled ?? true);
-    if (channelKey === "juying") return Boolean(config.juying_enabled ?? true);
-    if (channelKey === "pinglian") return Boolean(config.pinglian_enabled ?? true);
-    if (channelKey === "hdhive") {
-      if (!(config.hdhive_enabled ?? true)) return false;
-      return Boolean(config.hdhive_token || config.search_accounts?.hdhive?.connected);
-    }
-    if (channelKey === "dian115") {
-      if (!(config.dian115_enabled ?? true)) return false;
-      return Boolean((config.dian115_email && config.dian115_password) || config.search_accounts?.dian115?.connected);
-    }
-    if (channelKey === "piratebay") return Boolean(config.piratebay_enabled ?? true);
-    if (channelKey === "uindex") return Boolean(config.uindex_enabled ?? true);
-    if (channelKey === "online_docs") return Boolean(config.online_docs_enabled ?? true);
-    return false;
+
+  function getItemFansub(item) {
+    if (item?.fansub) return String(item.fansub).trim();
+    const title = String(item?.title || "").trim();
+    const match = title.match(/^[\[【]([^\]】]+)[\]】]/);
+    return match ? match[1].trim() : "其他";
   }
 
   const currentChannelResources = computed(() => channelResults.value[activeChannelTab.value] || []);
   const currentChannelResourceTabs = computed(() => {
+    const list = currentChannelResources.value;
+    const channel = String(activeChannelTab.value || "").toLowerCase();
+    const isAnimeBtChannel = channel === "mikan" || channel === "animegarden";
+
+    if (isAnimeBtChannel) {
+      if (!list.length) return [];
+      const counts = {};
+      for (const item of list) {
+        const fs = getItemFansub(item);
+        counts[fs] = (counts[fs] || 0) + 1;
+      }
+      const sorted = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+      return [
+        {
+          value: "all",
+          title: "全部",
+          count: list.length,
+          icon: "mdi-account-group-outline",
+        },
+        ...sorted.map((fs) => ({
+          value: fs,
+          title: fs,
+          count: counts[fs],
+          icon: "mdi-subtitles-outline",
+        })),
+      ];
+    }
+
     const counts = {};
-    for (const item of currentChannelResources.value) {
+    for (const item of list) {
       const type = getNormalizedResourceType(item);
       counts[type] = (counts[type] || 0) + 1;
     }
-    const order = [
-      "115",
-      "quark",
-      "alipan",
-      "uc",
-      "guangya",
-      "tianyi",
-      "123",
-      "xunlei",
-      "baidu",
-      "magnet",
-      "ed2k",
-      "other",
-    ];
     return Object.keys(counts)
       .sort((a, b) => {
-        const aIndex = order.indexOf(a);
-        const bIndex = order.indexOf(b);
-        if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
-        if (aIndex >= 0) return -1;
-        if (bIndex >= 0) return 1;
-        return counts[b] - counts[a];
+        const rankDiff = getResourceTypeRank(a) - getResourceTypeRank(b);
+        return rankDiff !== 0 ? rankDiff : counts[b] - counts[a];
       })
       .map((type) => ({
         value: type,
@@ -129,9 +133,20 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     const effectiveSelected = availableTabs.some((tab) => tab.value === selected)
       ? selected
       : (availableTabs[0]?.value || "");
-    const tabFiltered = !effectiveSelected
-      ? list
-      : list.filter((item) => getNormalizedResourceType(item) === effectiveSelected);
+
+    const channel = String(activeChannelTab.value || "").toLowerCase();
+    const isAnimeBtChannel = channel === "mikan" || channel === "animegarden";
+
+    let tabFiltered = list;
+    if (isAnimeBtChannel) {
+      if (effectiveSelected && effectiveSelected !== "all") {
+        tabFiltered = list.filter((item) => getItemFansub(item) === effectiveSelected);
+      }
+    } else {
+      tabFiltered = !effectiveSelected
+        ? list
+        : list.filter((item) => getNormalizedResourceType(item) === effectiveSelected);
+    }
 
     // 2. 搜索当前子 tab 列表的文本
     const query = String(resourceSearchQuery.value || "").trim().toLowerCase();
@@ -142,8 +157,8 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
         const desc = String(item?.description || "").toLowerCase();
         const fileName = String(item?.file_name || "").toLowerCase();
         const tags = (item?.tags || []).map((t) => String(t || "").toLowerCase()).join(" ");
-        const extracted = (getExtractedTags(item) || []).map((t) => String(t || "").toLowerCase()).join(" ");
-        return title.includes(query) || desc.includes(query) || fileName.includes(query) || tags.includes(query) || extracted.includes(query);
+        const fansub = String(item?.fansub || "").toLowerCase();
+        return title.includes(query) || desc.includes(query) || fileName.includes(query) || tags.includes(query) || fansub.includes(query);
       });
     }
 
@@ -151,10 +166,7 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     const specs = selectedResourceSpecs.value || [];
     if (specs.length > 0) {
       searched = searched.filter((item) => {
-        const itemTags = [
-          ...(item?.tags || []),
-          ...(getExtractedTags(item) || []),
-        ].map((t) => String(t).toUpperCase());
+        const itemTags = (item?.tags || []).map((t) => String(t).toUpperCase());
         const titleUpper = String(item?.title || "").toUpperCase();
 
         return specs.every((spec) => {
@@ -191,9 +203,7 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   });
 
   function resourceTagCount(resource) {
-    const extracted = getExtractedTags(resource) || [];
-    const raw = Array.isArray(resource?.tags) ? resource.tags : [];
-    return new Set([...extracted, ...raw.map((tag) => String(tag || "").trim()).filter(Boolean)]).size;
+    return Array.isArray(resource?.tags) ? resource.tags.length : 0;
   }
 
   async function loadMediaDetail(item, token = requestToken) {
@@ -232,18 +242,13 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
   }
 
   function syncAvailableChannels(sources) {
-    if (!Array.isArray(sources)) return;
-    for (const source of sources) {
-      const key = (typeof source === "object" && source?.key ? source.key : String(source)).toLowerCase();
-      const name = typeof source === "object" && source?.name ? source.name : getSourceName(key);
-      const existing = configuredChannels.value.find((channel) => channel.key === key);
-      if (!existing) configuredChannels.value.push({key, name, icon: getChannelDefaultIcon(key)});
-      else if (name) existing.name = name;
-    }
+    const list = normalizeChannels(sources);
+    if (!list.length) return;
+    availableChannels.value = list;
   }
 
   async function searchChannel(channelKey, force = false) {
-    if (!channelKey || !isChannelConfigured(channelKey) || !activeMedia.value || (!force && channelSearched.value[channelKey])) return;
+    if (!channelKey || !activeMedia.value || (!force && channelSearched.value[channelKey])) return;
     if (force) {
       const mKey = getMediaCacheKey(activeMedia.value);
       if (mKey && mediaSearchMemoryCache.has(mKey)) {
@@ -419,5 +424,6 @@ export function useMediaDetail({api, pluginId, pluginConfig, showMessage}) {
     onChannelTabChange,
     getChannelCount,
     closeMediaDetail,
+    syncAvailableChannels,
   };
 }

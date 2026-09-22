@@ -336,14 +336,15 @@ class UpgradeService(OwnerDelegator):
                         )
                         continue
 
-                    if self._is_offline_url(share_url) or self._is_magnet_url(share_url):
+                    is_offline_resource = self._is_offline_url(share_url) or self._is_magnet_url(share_url)
+                    if is_offline_resource:
                         if self._is_offline_blacklisted(resource, share_url):
-                            logger.info(
-                                f"🚫 洗版离线任务命中黑名单（1天内失败或超时），跳过该资源：{resource_title}"
+                            logger.debug(
+                                f"洗版离线资源命中黑名单跳过：{resource_title}"
                             )
                             continue
 
-                    if self._is_magnet_url(share_url):
+                    if is_offline_resource:
                         provider_name = self._prepare_magnet_resource(
                             resource, share_url
                         )

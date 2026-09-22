@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.schemas.types import MediaType
 
 from .client import SeedHubClient, SeedHubError
-from ..magnet import clear_cache, media_titles, normalize_magnets
+from ..magnet import clear_cache, media_titles, normalize_magnets, parse_size_str
 from ..matching import (
     extract_season,
     extract_year,
@@ -137,7 +137,7 @@ class SeedHubSearchService:
             results.append({
                 "url": "",
                 "title": item.get("title") or f"SeedHub 资源 {resource_id}",
-                "size": item.get("size") or 0,
+                "size": parse_size_str(item.get("size")),
                 "update_time": item.get("updated_at") or "",
                 "resource_type": resource_type,
                 "source_url": f"{self._client.base_url}/movies/{movie_id}/",
@@ -181,7 +181,7 @@ class SeedHubSearchService:
                     results.append({
                         "url": url,
                         "title": item.get("title") or f"SeedHub 资源 {identity}",
-                        "size": item.get("size") or 0,
+                        "size": parse_size_str(item.get("size")),
                         "update_time": item.get("updated_at") or "",
                         "resource_type": resource_type,
                         "source_url": f"{self._client.base_url}/movies/{movie_id}/",

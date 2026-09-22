@@ -13,7 +13,7 @@ from app.log import logger
 from fastapi import Request
 
 from .page import clear_ui_options_cache
-from .. import CloudDriveCapability, OwnerDelegator
+from .. import CloudDriveCapability, OwnerDelegator, SearchCapability
 from ...utils.cache import create_platform_ttl_cache
 
 _ACCOUNT_INFO_CACHE = create_platform_ttl_cache(
@@ -30,9 +30,14 @@ _HDHIVE_OAUTH_LOCK = RLock()
 
 
 class AccountApi(OwnerDelegator):
-    @staticmethod
+
+    def _search_runtime_value(self, name: str, default: Any = None) -> Any:
+        """从搜索处理器读取已归一化的渠道运行参数。"""
+        handler = self._search_handler
+        return getattr(handler, name, default) if handler else default
+    
     def _search_account_card(
-            source: str, info: Dict[str, Any]
+            self, source: str, info: Dict[str, Any]
     ) -> Dict[str, Any]:
         """将搜索渠道账户数据转换为通用信息卡片。"""
         badge = str(info.get("level") or info.get("role") or "").strip()
@@ -43,44 +48,98 @@ class AccountApi(OwnerDelegator):
 
         details = []
 
+        def _format_detail_val(val: Any) -> str:
+            if not val:
+                return ""
+            val_str = str(val).strip()
+            if not val_str:
+                return ""
+            if "T" in val_str:
+                val_str = val_str.replace("T", " ")
+            if val_str.endswith("Z"):
+                val_str = val_str[:-1].strip()
+            if "." in val_str:
+                val_str = val_str.split(".")[0].strip()
+            return val_str
+
         def add_detail(label: str, value: Any) -> None:
-            text = str(value or "").strip()
+            text = _format_detail_val(value)
             if text:
                 details.append({"label": label, "value": text})
+
+        channel_name = source.upper()
+        search_handler = getattr(self, "_search_handler", None)
+        if search_handler and getattr(search_handler, "_search_registry", None):
+            prov = search_handler._search_registry.get(source)
+            if prov and prov.name:
+                channel_name = prov.name
 
         name = str(info.get("name") or "").strip()
         email = str(info.get("email") or "").strip().lower()
         if not name or "@" in name or (email and name.lower() == email):
-            name = {
-                "hdhive": "HDHive 用户",
-                "dian115": "Dian115 用户",
-                "juying": "聚影用户",
-                "pinglian": "盘链用户",
-            }.get(source, "渠道用户")
-        if source == "hdhive":
-            add_detail("会员状态", "VIP" if info.get("is_vip") else "普通用户")
+            name = f"{channel_name}用户"
+
+        if "is_vip" in info:
+            add_detail("会员状态", "VIP会员" if info.get("is_vip") else "普通用户")
+        if info.get("level_name") or info.get("level"):
+            add_detail("用户等级", info.get("level_name") or info.get("level"))
+        if info.get("retention_deadline"):
+            add_detail("保号截止", info.get("retention_deadline"))
+        if info.get("registered_at"):
+            add_detail("注册日期", info.get("registered_at"))
+        if info.get("expires_at"):
+            add_detail("会员到期", info.get("expires_at"))
+
+        if info.get("consecutive_signin") is not None:
+            add_detail("连续签到", f"{int(info.get('consecutive_signin') or 0)} 天")
+        elif info.get("signin_days") is not None:
             add_detail("累计签到", f"{int(info.get('signin_days') or 0)} 天")
+        elif info.get("checkin_days") is not None:
+            add_detail("累计签到", f"{int(info.get('checkin_days') or 0)} 天")
+
+        if info.get("share_count") is not None:
             add_detail("分享数量", f"{int(info.get('share_count') or 0)} 个")
-            status = {
+        if info.get("upload_count") is not None:
+            add_detail("上传资源", f"{int(info.get('upload_count') or 0)} 个")
+        if info.get("favorite_count") is not None:
+            add_detail("收藏资源", f"{int(info.get('favorite_count') or 0)} 个")
+        if info.get("unlock_count") is not None:
+            add_detail("已解锁", f"{int(info.get('unlock_count') or 0)} 次")
+        if info.get("invite_count") is not None:
+            add_detail("邀请用户", info.get("invite_count"))
+
+        if info.get("status"):
+            status_map = {
                 "active": "正常",
                 "inactive": "未激活",
                 "suspended": "已停用",
-            }.get(str(info.get("status") or "").lower())
-            add_detail("账户状态", status)
-        elif source == "dian115":
-            add_detail("会员状态", "VIP" if info.get("is_vip") else "普通用户")
-            add_detail(
-                "连续签到", f"{int(info.get('consecutive_signin') or 0)} 天"
-            )
-            add_detail("已解锁", f"{int(info.get('unlock_count') or 0)} 次")
-        elif source == "pinglian":
-            add_detail("会员到期", info.get("expires_at"))
-            add_detail("注册日期", info.get("registered_at"))
-            add_detail("邀请用户", info.get("invite_count"))
+            }
+            raw_status = str(info.get("status") or "").lower()
+            add_detail("账户状态", status_map.get(raw_status, raw_status))
+
+        extra_details = info.get("details")
+        if isinstance(extra_details, dict):
+            for k, v in extra_details.items():
+                if k not in ("会员到期", "VIP 到期", "注册日期", "今日解锁配额"):
+                    add_detail(k, v)
+        elif isinstance(extra_details, list):
+            for item in extra_details:
+                if isinstance(item, dict) and item.get("label") and item.get("value"):
+                    add_detail(item["label"], item["value"])
+
+        points_info = info.get("points")
+        points_label = str(
+            info.get("points_label")
+            or ("今日解锁配额" if info.get("quota_text") else "可用积分")
+        )
+        if info.get("quota_text"):
+            points_avail = info.get("quota_text")
         else:
-            add_detail("累计签到", f"{int(info.get('checkin_days') or 0)} 天")
-            add_detail("上传资源", f"{int(info.get('upload_count') or 0)} 个")
-            add_detail("收藏资源", f"{int(info.get('favorite_count') or 0)} 个")
+            try:
+                points_avail = max(0, int(points_info or 0))
+            except (TypeError, ValueError):
+                points_avail = points_info or 0
+
         return {
             "connected": True,
             "user": {
@@ -90,105 +149,47 @@ class AccountApi(OwnerDelegator):
                 "badge": badge,
             },
             "points": {
-                "label": "金币余额" if source == "pinglian" else "可用积分",
-                "available": max(0, int(info.get("points") or 0)),
+                "label": points_label,
+                "available": points_avail,
             },
             "details": details,
         }
 
     def _load_search_account(self, source: str) -> Dict[str, Any]:
         """读取单个搜索渠道的账户信息。"""
-        from ...search.dian115 import Dian115Client
-        from ...search.hdhive import HDHiveClient
-        from ...search.juying import JuyingClient
         source = str(source or "").strip().lower()
-        client = None
-        close_client = False
+        registry = getattr(getattr(self, "_search_handler", None), "_search_registry", None)
+        if not registry or source not in registry:
+            return {
+                "connected": False,
+                "error": "请先填写对应渠道账号和密码并保存配置",
+            }
+        provider = registry.get(source)
+        if not provider.supports(SearchCapability.ACCOUNT):
+            return {
+                "connected": False,
+                "error": f"搜索渠道 [{source}] 不支持账户信息",
+            }
         try:
-            if source == "hdhive":
-                if self._hdhive_query_mode == "api":
-                    if not self._hdhive_client or not self._hdhive_client.is_ready:
-                        return {
-                            "connected": False,
-                            "error": "请先完成 HDHive OpenAPI 用户授权并保存配置",
-                        }
-                    data = self._hdhive_client.get_me().get("data") or {}
-                    level = str(data.get("level") or "").strip().lower()
-                    return self._search_account_card(source, {
-                        "name": data.get("nickname") or data.get("username"),
-                        "avatar": data.get("avatar_url"),
-                        "points": data.get("points"),
-                        "level": level,
-                        "is_vip": level in {"vip", "forever_vip"},
-                        "signin_days": data.get("signin_days_total"),
-                        "share_count": data.get("share_num"),
-                        "status": "suspended" if data.get("is_blocked") else "active",
-                    })
-                if not self._hdhive_username or not self._hdhive_password:
+            client = provider.require(SearchCapability.ACCOUNT)
+            if source == "hdhive" and getattr(self, "_hdhive_query_mode", "web") == "api":
+                if not client or not client.is_ready:
                     return {
                         "connected": False,
-                        "error": "请填写 HDHive 用户名和密码并保存配置",
+                        "error": "请先完成 HDHive OpenAPI 用户授权并保存配置",
                     }
-                client = HDHiveClient(
-                    username=self._hdhive_username,
-                    password=self._hdhive_password,
-                    proxy=self._search_proxy,
-                    request_interval=self._hdhive_request_interval,
-                    timeout=10,
-                )
-                close_client = True
-            elif source == "dian115":
-                if not self._dian115_email or not self._dian115_password:
-                    return {
-                        "connected": False,
-                        "error": "请填写 Dian115 邮箱和密码并保存配置",
-                    }
-                client = Dian115Client(
-                    email=self._dian115_email,
-                    password=self._dian115_password,
-                    base_url=self._dian115_base_url,
-                    proxy=self._search_proxy,
-                    request_interval=self._dian115_request_interval,
-                    unlocks_per_minute=self._dian115_unlocks_per_minute,
-                    timeout=10,
-                    get_data_func=self.get_data,
-                    save_data_func=self.save_data,
-                )
-                close_client = True
-            elif source == "juying":
-                if not self._juying_username or not self._juying_password:
-                    return {
-                        "connected": False,
-                        "error": "请填写聚影账号和密码并保存配置",
-                    }
-                client = JuyingClient(
-                    username=self._juying_username,
-                    password=self._juying_password,
-                    proxy=self._search_proxy,
-                    request_timeout=10,
-                    request_interval=self._juying_request_interval,
-                    get_data_func=self.get_data,
-                    save_data_func=self.save_data,
-                )
-                close_client = True
-            elif source == "pinglian":
-                if not self._pinglian_username or not self._pinglian_password:
-                    return {
-                        "connected": False,
-                        "error": "请填写盘链账号和密码并保存配置",
-                    }
-                client = PinglianClient(
-                    username=self._pinglian_username,
-                    password=self._pinglian_password,
-                    proxy=self._search_proxy,
-                    request_timeout=min(self._pinglian_timeout, 30),
-                    request_interval=self._pinglian_request_interval,
-                    get_data_func=self.get_data,
-                    save_data_func=self.save_data,
-                )
-                close_client = True
-            else:
-                raise ValueError("不支持的搜索账户")
+                data = client.get_me().get("data") or {}
+                level = str(data.get("level") or "").strip().lower()
+                return self._search_account_card(source, {
+                    "name": data.get("nickname") or data.get("username"),
+                    "avatar": data.get("avatar_url"),
+                    "points": data.get("points"),
+                    "level": level,
+                    "is_vip": level in {"vip", "forever_vip"},
+                    "signin_days": data.get("signin_days_total"),
+                    "share_count": data.get("share_num"),
+                    "status": "suspended" if data.get("is_blocked") else "active",
+                })
             return self._search_account_card(source, client.get_account_info())
         except Exception as error:
             logger.debug(f"读取{source}搜索账户信息失败：{error}")
@@ -196,9 +197,6 @@ class AccountApi(OwnerDelegator):
                 "connected": False,
                 "error": "账户信息读取失败，请检查登录凭据或稍后重试",
             }
-        finally:
-            if client and close_client:
-                client.close()
 
     def _load_drive_account(
             self, provider_key: str, force: bool = False
@@ -306,16 +304,14 @@ class AccountApi(OwnerDelegator):
             point_info = dict(account.get("points") or {})
             point_info["available"] = normalized_points
             account["points"] = point_info
-            if normalized_days is not None:
-                details = list(account.get("details") or [])
-                for item in details:
-                    if (
-                            isinstance(item, dict)
-                            and item.get("label") in {"累计签到", "连续签到"}
-                    ):
+            details = list(account.get("details") or [])
+            for item in details:
+                if isinstance(item, dict):
+                    if item.get("label") == "今日签到":
+                        item["value"] = "已签到"
+                    elif normalized_days is not None and item.get("label") in {"累计签到", "连续签到"}:
                         item["value"] = f"{normalized_days} 天"
-                        break
-                account["details"] = details
+            account["details"] = details
             account["refreshed_at"] = int(time.time())
             _ACCOUNT_INFO_CACHE.set(account_key, account)
             _ACCOUNT_REFRESH_GUARD.set(account_key, True)
@@ -389,7 +385,9 @@ class AccountApi(OwnerDelegator):
                 app_secret="",
                 client_id=client_id,
                 proxy=self._search_proxy,
-                request_interval=self._hdhive_request_interval,
+                request_interval=self._search_runtime_value(
+                    "_hdhive_request_interval", 5.0
+                ),
             )
             try:
                 authorize_url = client.build_authorize_url(
@@ -459,7 +457,9 @@ class AccountApi(OwnerDelegator):
                 app_secret=app_secret,
                 client_id=client_id,
                 proxy=self._search_proxy,
-                request_interval=self._hdhive_request_interval,
+                request_interval=self._search_runtime_value(
+                    "_hdhive_request_interval", 5.0
+                ),
             )
             token_data = client.exchange_code(code, redirect_uri)
             warning = ""

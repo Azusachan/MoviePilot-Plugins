@@ -3,9 +3,8 @@
 import copy
 import hashlib
 import re
-import shutil
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -18,20 +17,21 @@ from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory
 from app.db.models.mediaserver import MediaServerItem
 from app.db.subscribe_oper import SubscribeOper
-from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.schemas.types import MediaType
 from sqlalchemy import func, or_
-
-from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
+from ...core import CloudFile, OwnerDelegator
 from ...core.history import history_group_key
+from ...drive.common import format_size, positive_int
 from ...core.media import (
     download_history_identity_payload,
-    get_download_history_last_by,
-    list_subscribes_by_tmdb_id,
     media_identity,
     media_server_tmdb_filters,
-    recognize_media,
     tmdb_id_of,
 )
 from ...search.types import normalize_resource_type, resource_type_from_url
@@ -241,8 +241,8 @@ class HistoryService(OwnerDelegator):
             return None
         if media_type == MediaType.MOVIE.value:
             return media_type, media_key
-        season = cls._positive_int(record.get("season"))
-        episode = cls._positive_int(record.get("episode"))
+        season = positive_int(record.get("season"))
+        episode = positive_int(record.get("episode"))
         if not season or not episode:
             return None
         return media_type, media_key, str(season), str(episode)
@@ -258,14 +258,6 @@ class HistoryService(OwnerDelegator):
         record_id = hashlib.sha1("\0".join(identity).encode("utf-8")).hexdigest()
         record["record_id"] = record_id
         return record_id
-
-    @staticmethod
-    def _positive_int(value: Any) -> Optional[int]:
-        try:
-            number = int(value or 0)
-        except (TypeError, ValueError):
-            return None
-        return number if number > 0 else None
 
     @staticmethod
     def _is_upgrade_history(record: Dict[str, Any]) -> bool:
@@ -294,353 +286,7 @@ class HistoryService(OwnerDelegator):
     def _is_workflow_history(cls, record: Dict[str, Any]) -> bool:
         return bool(cls._history_task_types(record))
 
-    @staticmethod
-    def _platform_episode_numbers(record: Dict[str, Any]) -> List[int]:
-        values = (
-            record.get("success_episodes")
-            or record.get("episode")
-            or record.get("episodes")
-            or record.get("target_episodes")
-        )
-        candidates = values if isinstance(values, (list, tuple, set)) else [values]
-        episodes = {
-            int(number)
-            for value in candidates
-            for number in re.findall(r"\d+", str(value or ""))
-            if int(number) > 0
-        }
-        if (
-                not isinstance(values, (list, tuple, set))
-                and "-" in str(values or "")
-                and len(episodes) >= 2
-        ):
-            episodes.update(range(min(episodes), max(episodes) + 1))
-        return sorted(episodes)
 
-    @staticmethod
-    def _platform_source_label(record: Dict[str, Any]) -> str:
-        source = str(record.get("source") or "").strip().lower()
-        labels = {
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "pansou": "PanSou",
-            "manual": "手动添加",
-        }
-        if source in labels:
-            return labels[source]
-        resource_type = str(record.get("resource_type") or "").strip().lower()
-        return {
-            "115": "115资源",
-            "cloud": "网盘路径",
-            "ed2k": "ED2K",
-            "magnet": "Magnet",
-        }.get(resource_type, "网盘订阅助手")
-
-    @classmethod
-    def _platform_source_path(
-            cls,
-            record: Dict[str, Any],
-            season: Optional[int] = None,
-            episode: Optional[int] = None,
-    ) -> str:
-        """生成可读且稳定的整理来源标识，避免界面显示内部协议路径。"""
-        title = re.sub(r"[\\/]+", "-", str(record.get("title") or "").strip())
-        scope = ""
-        if season:
-            scope = f" S{season:02d}"
-            if episode:
-                scope += f"E{episode:02d}"
-        record_id = cls._ensure_history_record_id(record)
-        suffix = f" #{record_id[:10]}" if record_id else ""
-        return f"{cls._platform_source_label(record)} · {title}{scope}{suffix}"
-
-    def _platform_history_entries(
-            self, record: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        if (
-                str(record.get("status") or "") != "成功"
-                or self._is_upgrade_history(record)
-        ):
-            return []
-        media_type = str(record.get("type") or "")
-        if media_type not in {MediaType.MOVIE.value, MediaType.TV.value}:
-            return []
-        title = str(record.get("title") or "").strip()
-        if not title:
-            return []
-
-        tmdb_id = self._positive_int(record.get("tmdb_id"))
-
-        file_name = str(record.get("file_name") or "").strip()
-        source_name = str(record.get("source_file_name") or file_name).strip()
-        cloud_dir = str(record.get("cloud_dir") or "/").strip() or "/"
-        destination = (
-            str(PurePosixPath(cloud_dir) / file_name) if file_name else cloud_dir
-        )
-        try:
-            file_size = max(0, int(record.get("file_size") or 0))
-        except (TypeError, ValueError):
-            file_size = 0
-        source_storage = self._platform_source_label(record)
-        dest_storage = str(
-            record.get("cloud_drive_name")
-            or getattr(self._cloud_drive, "name", "网盘")
-            or "网盘"
-        ).strip()
-        common = {
-            "src_storage": source_storage,
-            "src_fileitem": {
-                "name": source_name,
-                "path": source_name,
-                "size": file_size,
-                "storage": source_storage,
-            },
-            "dest": destination,
-            "dest_storage": dest_storage,
-            "dest_fileitem": {
-                "name": file_name,
-                "path": destination,
-                "size": file_size,
-                "storage": dest_storage,
-            },
-            "mode": "copy",
-            "type": media_type,
-            "title": title,
-            "year": str(record.get("year") or "") or None,
-            "tmdbid": tmdb_id,
-            "imdbid": str(record.get("imdb_id") or "").strip() or None,
-            "tvdbid": self._positive_int(record.get("tvdb_id")),
-            "doubanid": str(record.get("douban_id") or "").strip() or None,
-            "bangumiid": self._positive_int(record.get("bangumi_id")),
-            "anilistid": self._positive_int(record.get("anilist_id")),
-            "media_source": str(record.get("media_source") or "").strip() or None,
-            "media_id": str(record.get("media_id") or "").strip() or None,
-            "category": str(record.get("category") or "").strip() or None,
-            "episode_group": str(record.get("episode_group") or "").strip() or None,
-            "image": str(record.get("image") or "").strip() or None,
-            "status": True,
-            "files": [destination] if destination else [],
-            "downloader": "网盘订阅助手",
-            "date": str(record.get("time") or "").strip() or None,
-        }
-        if media_type == MediaType.MOVIE.value:
-            return [{
-                **common,
-                "src": self._platform_source_path(record),
-            }]
-
-        season = self._positive_int(record.get("season")) or 1
-        episodes = self._platform_episode_numbers(record)
-        if not episodes:
-            if not self._ensure_history_record_id(record):
-                return []
-            return [{
-                **common,
-                "src": self._platform_source_path(record, season=season),
-                "seasons": f"S{season:02d}",
-            }]
-        return [
-            {
-                **common,
-                "src": self._platform_source_path(
-                    record, season=season, episode=episode
-                ),
-                "seasons": f"S{season:02d}",
-                "episodes": f"E{episode:02d}",
-            }
-            for episode in episodes
-        ]
-
-    def _record_platform_transfer_histories(
-            self,
-            records: List[Dict[str, Any]],
-            reconcile: bool = False,
-    ) -> int:
-        if not self._platform_transfer_history_enabled and not reconcile:
-            return 0
-        entries_by_src = {
-            entry["src"]: entry
-            for record in (records if self._platform_transfer_history_enabled else [])
-            if isinstance(record, dict)
-            for entry in self._platform_history_entries(record)
-        }
-        entries = list(entries_by_src.values())
-        if not entries and not reconcile:
-            return 0
-        try:
-            from app.db import SessionFactory
-            from app.db.models.transferhistory import TransferHistory
-            from sqlalchemy import or_
-
-            if not self._platform_history_lock.acquire(timeout=1.0):
-                logger.debug("MoviePilot 整理历史写入仍在执行，本批次已跳过")
-                return 0
-            added = 0
-            updated = 0
-            removed = 0
-            try:
-                with SessionFactory() as db:
-                    columns = set(TransferHistory.__table__.columns.keys())
-                    desired_sources = {entry["src"] for entry in entries}
-                    if reconcile:
-                        managed = db.query(TransferHistory).filter(or_(
-                            TransferHistory.src.like("cloudsubscribefork://%"),
-                            TransferHistory.downloader == "网盘订阅助手",
-                        )).all()
-                        existing_by_src = {item.src: item for item in managed}
-                        for item in managed:
-                            if item.src not in desired_sources:
-                                db.delete(item)
-                                existing_by_src.pop(item.src, None)
-                                removed += 1
-                    else:
-                        existing = (
-                            db.query(TransferHistory).filter(
-                                TransferHistory.src.in_(sorted(desired_sources))
-                            ).all()
-                            if desired_sources else []
-                        )
-                        existing_by_src = {item.src: item for item in existing}
-                    for entry in entries:
-                        existing = existing_by_src.get(entry["src"])
-                        if existing:
-                            changed_fields = {
-                                key: value
-                                for key, value in entry.items()
-                                if key in columns and key != "src"
-                                   and getattr(existing, key, None) != value
-                            }
-                            if changed_fields:
-                                for key, value in changed_fields.items():
-                                    setattr(existing, key, value)
-                                updated += 1
-                            continue
-                        db.add(TransferHistory(**{
-                            key: value for key, value in entry.items()
-                            if key in columns
-                        }))
-                        added += 1
-                    if added or updated or removed:
-                        db.commit()
-            finally:
-                self._platform_history_lock.release()
-            if added or updated or removed:
-                logger.debug(
-                    f"MoviePilot 成功整理历史已同步：新增 {added} 条，"
-                    f"更新 {updated} 条，清理 {removed} 条"
-                )
-            return added + updated + removed
-        except Exception as error:
-            logger.error(f"登记成功整理历史失败：{error}")
-            return 0
-
-    @staticmethod
-    def _history_image_from_download(record: Dict[str, Any]) -> Optional[str]:
-        """从下载历史恢复旧版插件记录缺失的海报。"""
-        media_type = str(record.get("type") or "").strip()
-        tmdb_id = HistoryService._positive_int(record.get("tmdb_id"))
-        title = str(record.get("title") or "").strip()
-        year = str(record.get("year") or "").strip() or None
-        if media_type not in {MediaType.MOVIE.value, MediaType.TV.value}:
-            return None
-        if not tmdb_id and not title:
-            return None
-        try:
-            histories = get_download_history_last_by(
-                DownloadHistoryOper(),
-                mtype=media_type,
-                title=title or None,
-                year=year,
-                tmdb_id=tmdb_id,
-            )
-        except Exception as error:
-            logger.debug(f"从下载历史恢复整理海报失败：{title}，{error}")
-            return None
-        return next(
-            (
-                str(getattr(item, "image", "") or "").strip()
-                for item in (histories or [])
-                if str(getattr(item, "image", "") or "").strip()
-            ),
-            None,
-        )
-
-    def _delete_platform_transfer_histories(
-            self,
-            records: Optional[List[Dict[str, Any]]] = None,
-            all_managed: bool = False,
-    ) -> int:
-        """增量删除插件托管的整理历史，不触碰关联媒体文件。"""
-        sources = {
-            entry["src"]
-            for record in (records or [])
-            if isinstance(record, dict)
-            for entry in self._platform_history_entries(record)
-        }
-        if not all_managed and not sources:
-            return 0
-        try:
-            from app.db import SessionFactory
-            from app.db.models.transferhistory import TransferHistory
-            from sqlalchemy import or_
-
-            if not self._platform_history_lock.acquire(timeout=1.0):
-                logger.debug("MoviePilot 整理历史删除仍在执行，本批次已跳过")
-                return 0
-            try:
-                with SessionFactory() as db:
-                    query = db.query(TransferHistory).filter(or_(
-                        TransferHistory.src.like("cloudsubscribefork://%"),
-                        TransferHistory.downloader == "网盘订阅助手",
-                    ))
-                    if not all_managed:
-                        query = query.filter(TransferHistory.src.in_(sources))
-                    deleted = query.delete(synchronize_session=False)
-                    if deleted:
-                        db.commit()
-                    return int(deleted or 0)
-            finally:
-                self._platform_history_lock.release()
-        except Exception as error:
-            logger.error(f"清理整理历史失败：{error}")
-            return 0
-
-    def sync_platform_transfer_history(self) -> int:
-        """让整理历史完整镜像插件历史；关闭开关时清理镜像。"""
-        if not self._get_data:
-            return 0
-        with self._offline_pending_lock:
-            history = self._get_data("history") or []
-            image_cache: Dict[Tuple[Any, ...], Optional[str]] = {}
-            restored = 0
-            for record in history:
-                if (
-                        not isinstance(record, dict)
-                        or str(record.get("status") or "") != "成功"
-                        or str(record.get("image") or "").strip()
-                ):
-                    continue
-                cache_key = (
-                    record.get("type"),
-                    record.get("tmdb_id"),
-                    record.get("title"),
-                    record.get("year"),
-                )
-                if cache_key not in image_cache:
-                    image_cache[cache_key] = self._history_image_from_download(record)
-                image = image_cache[cache_key]
-                if image:
-                    record["image"] = image
-                    restored += 1
-            if restored and self._save_data:
-                self._save_data("history", history)
-                logger.info(f"已从下载历史恢复 {restored} 条插件整理记录海报")
-            records = [
-                copy.deepcopy(record)
-                for record in history
-                if isinstance(record, dict)
-            ]
-        return self._record_platform_transfer_histories(records, reconcile=True)
 
     def append_history_records(
             self,
@@ -846,21 +492,6 @@ class HistoryService(OwnerDelegator):
                 )
             return compacted
 
-    @staticmethod
-    def _format_history_size(value: Any) -> str:
-        try:
-            size = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            return "-"
-        if not size:
-            return "-"
-        amount = float(size)
-        for unit in ("B", "KB", "MB", "GB", "TB"):
-            if amount < 1024 or unit == "TB":
-                digits = 0 if amount >= 100 else 1
-                return f"{amount:.{digits}f} {unit}"
-            amount /= 1024
-        return "-"
 
     def _history_page_fields(self, record: Dict[str, Any]) -> Dict[str, str]:
         """生成历史页面所需的稳定标识、名称和可点击链接。"""
@@ -1018,8 +649,8 @@ class HistoryService(OwnerDelegator):
                 previous_name = str(record.get("previous_file_name") or "").strip()
                 if previous_name:
                     parts.append(previous_name)
-                previous_size = self._format_history_size(record.get("previous_file_size"))
-                current_size = self._format_history_size(record.get("file_size"))
+                previous_size = format_size(record.get("previous_file_size"), default="-")
+                current_size = format_size(record.get("file_size"), default="-")
                 if previous_size != "-":
                     parts.append(
                         f"{previous_size} → {current_size}"
@@ -1215,23 +846,25 @@ class HistoryService(OwnerDelegator):
             media_data = media_data or restored_data
         else:
             media_data = media_data or self._serialize_mediainfo(mediainfo)
+        subscribe = None
+        subscribe_id = int(item.get("subscribe_id") or 0)
+        if subscribe_id:
+            if subscribe_cache is not None:
+                subscribe = subscribe_cache.get(subscribe_id)
+            else:
+                try:
+                    subscribe = SubscribeOper().get(subscribe_id)
+                except Exception as error:
+                    logger.debug(f"读取后处理订阅失败：{subscribe_id}，{error}")
+        sub_title = getattr(subscribe, "name", None) or item.get("name") or item.get("title")
+        target_subscribe = subscribe or SimpleNamespace(
+            name=sub_title or (mediainfo.title if mediainfo else ""),
+            year=item.get("year") or (mediainfo.year if mediainfo else ""),
+            media_category=None,
+        )
+
         notify_path = strm_path
         if not notify_path and mediainfo and self._local_resource_path:
-            subscribe = None
-            subscribe_id = int(item.get("subscribe_id") or 0)
-            if subscribe_id:
-                if subscribe_cache is not None and subscribe_id in subscribe_cache:
-                    subscribe = subscribe_cache[subscribe_id]
-                else:
-                    try:
-                        subscribe = SubscribeOper().get(subscribe_id)
-                    except Exception as error:
-                        logger.debug(f"读取后处理订阅失败：{subscribe_id}，{error}")
-            target_subscribe = subscribe or SimpleNamespace(
-                name=mediainfo.title,
-                year=mediainfo.year,
-                media_category=None,
-            )
             notify_path = self._resolve_resource_season_dir(
                 self._local_resource_path,
                 target_subscribe,
@@ -1261,10 +894,17 @@ class HistoryService(OwnerDelegator):
             logger.warning("文件已完成，但缺少媒体信息，无法发送完成通知和Webhook")
             return None
         history_record = self._pending_history_record(pending_key) or {}
+        display_title = str(
+            getattr(subscribe, "name", None)
+            or (target_subscribe and getattr(target_subscribe, "name", None))
+            or item.get("name")
+            or item.get("title")
+            or mediainfo.title
+        ).strip()
         detail = {
             "type": "电视剧" if mediainfo.type == MediaType.TV else "电影",
-            "title": mediainfo.title,
-            "year": mediainfo.year,
+            "title": display_title,
+            "year": getattr(target_subscribe, "year", None) or mediainfo.year,
             "image": getattr(mediainfo, "get_poster_image", lambda: None)(),
             "file_name": item.get("file_name"),
             "notification_kind": (
@@ -1381,12 +1021,15 @@ class HistoryService(OwnerDelegator):
         )
 
     def _mark_offline_history_status(
-            self, pending_key: str, status: str, reason: str = ""
+            self, pending_key: str, status: str, reason: str = "",
+            updates: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._mark_offline_history_status_batch({pending_key}, status, reason)
+        batch_updates = {pending_key: updates} if updates else None
+        self._mark_offline_history_status_batch({pending_key}, status, reason, updates=batch_updates)
 
     def _mark_offline_history_status_batch(
-            self, pending_keys: Set[str], status: str, reason: str = ""
+            self, pending_keys: Set[str], status: str, reason: str = "",
+            updates: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """一次扫描并持久化多个离线任务对应的历史记录。"""
         if not self._get_data or not self._save_data:
@@ -1405,10 +1048,14 @@ class HistoryService(OwnerDelegator):
             for item in history:
                 link = str(item.get("share_url") or "").upper()
                 item_key = str(item.get("finalize_key") or "")
-                if (
-                        item_key not in normalized_keys
-                        and not any(value in link for value in uppercase_keys)
-                ):
+                matched_key = None
+                if item_key in normalized_keys:
+                    matched_key = item_key
+                elif any(value in link for value in uppercase_keys):
+                    matched_key = next((k for k in normalized_keys if k.upper() in link), None)
+                if not matched_key:
+                    continue
+                if status == "失败" and item.get("status") == "成功":
                     continue
                 item["status"] = status
                 item.pop("finalize_key", None)
@@ -1416,6 +1063,10 @@ class HistoryService(OwnerDelegator):
                     item["failure_reason"] = reason
                 else:
                     item.pop("failure_reason", None)
+                if updates and matched_key in updates and updates[matched_key]:
+                    for up_key, up_val in updates[matched_key].items():
+                        if up_val is not None:
+                            item[up_key] = copy.deepcopy(up_val)
                 if status == "成功":
                     platform_records.append(copy.deepcopy(item))
                 changed = True
@@ -1556,7 +1207,7 @@ class HistoryService(OwnerDelegator):
             else MediaType.MOVIE
         )
         title = str(media.get("title") or media.get("name") or "").strip()
-        tmdb_id = self._positive_int(media.get("tmdb_id") or media.get("tmdbid"))
+        tmdb_id = positive_int(media.get("tmdb_id") or media.get("tmdbid"))
         if not title or not tmdb_id:
             raise ValueError("媒体目标缺少标题或 TMDB ID")
 
@@ -1710,7 +1361,7 @@ class HistoryService(OwnerDelegator):
         ]
         selected_server = str(server or "").strip()
         query_text = str(keyword or "").strip()
-        target_tmdb_id = self._positive_int(tmdb_id)
+        target_tmdb_id = positive_int(tmdb_id)
         target_media_type = str(media_type or "").strip().lower()
         if not selected_server:
             return {"servers": server_options, "items": []}
@@ -1778,7 +1429,7 @@ class HistoryService(OwnerDelegator):
                         continue
                     episodes = sorted({
                         episode for value in (episode_values or [])
-                        if (episode := self._positive_int(value))
+                        if (episode := positive_int(value))
                     })
                     if not episodes:
                         continue
@@ -2090,503 +1741,6 @@ class HistoryService(OwnerDelegator):
             **linked_stats,
         }
 
-    def _refresh_deleted_media(self, records: List[Dict[str, Any]]) -> None:
-        """删除关联文件后，按受影响 STRM 路径刷新媒体库。"""
-        for record in records:
-            cloud_dir = str(record.get("cloud_dir") or "").strip()
-            file_name = str(record.get("file_name") or "").strip()
-            if not cloud_dir or not file_name or not self._local_resource_path:
-                continue
-            try:
-                local_path = self._path_mapper.local_path(
-                    local_root=self._local_resource_path,
-                    cloud_root=self._CLOUD_MEDIA_ROOT,
-                    cloud_dir=cloud_dir,
-                    file_name=file_name,
-                )
-                if local_path.exists():
-                    logger.warning(
-                        f"关联 STRM 仍然存在，跳过媒体库删除通知：{local_path}"
-                    )
-                    continue
-                self._media_server_notifier.notify_deleted_path(local_path, record)
-            except Exception as error:
-                logger.warning(
-                    f"删除历史后刷新媒体库失败：{file_name} - {error}"
-                )
-
-    @staticmethod
-    def _history_episodes(record: Dict[str, Any]) -> Set[int]:
-        values = record.get("episodes") or record.get("notification_episodes")
-        if values is None:
-            values = [record.get("episode")]
-        return {
-            int(value) for value in values
-            if str(value or "").isdigit() and int(value) > 0
-        }
-
-    def _refresh_deleted_subscribe_notes(
-            self,
-            deleted_records: List[Dict[str, Any]],
-            remaining_history: List[Dict[str, Any]],
-    ) -> None:
-        """按删除后的剩余历史修正电视剧订阅 note 和缺集数。"""
-        targets: Dict[Tuple[str, int], Set[int]] = {}
-        for record in deleted_records:
-            tmdb_id = str(record.get("tmdb_id") or "").strip()
-            season = int(record.get("season") or 0)
-            episodes = self._history_episodes(record)
-            if tmdb_id and season > 0 and episodes:
-                targets.setdefault((tmdb_id, season), set()).update(episodes)
-        if not targets:
-            return
-        for (tmdb_id, season), deleted_episodes in targets.items():
-            remaining_episodes = {
-                episode
-                for record in remaining_history
-                if str(record.get("tmdb_id") or "").strip() == tmdb_id
-                   and int(record.get("season") or 0) == season
-                   and str(record.get("status") or "") == "成功"
-                for episode in self._history_episodes(record)
-            }
-            for subscribe in list_subscribes_by_tmdb_id(
-                    SubscribeOper(), int(tmdb_id), season):
-                if str(getattr(subscribe, "type", "")) != MediaType.TV.value:
-                    continue
-                current_note = {
-                    int(value) for value in (getattr(subscribe, "note", None) or [])
-                    if str(value).isdigit()
-                }
-                new_note = sorted(
-                    (current_note - deleted_episodes) | remaining_episodes
-                )
-                if new_note == sorted(current_note):
-                    continue
-                start = int(getattr(subscribe, "start_episode", 1) or 1)
-                total = int(getattr(subscribe, "total_episode", 0) or 0)
-                expected = max(0, total - start + 1)
-                lack = len(set(range(start, total + 1)) - set(new_note)) if expected else 0
-                SubscribeOper().update(
-                    subscribe.id,
-                    {"note": new_note, "lack_episode": lack},
-                )
-                logger.info(
-                    f"历史删除后更新订阅 note：{subscribe.name}，"
-                    f"{sorted(current_note)} -> {new_note}"
-                )
-
-    def delete_by_media_server_paths(self, paths: List[str]) -> Dict[str, int]:
-        """按媒体服务器 STRM 路径精确匹配并联动删除终态历史。"""
-        normalized_paths = set()
-        for path in paths:
-            normalized = self._normalize_media_server_path(path)
-            if normalized:
-                normalized_paths.add(normalized)
-        if not normalized_paths or not self._get_data:
-            return {"matched": 0, "deleted": 0, "linked_deleted": 0,
-                    "cache_deleted": 0, "skipped": 0}
-        matched = []
-        for record in self._get_data("history") or []:
-            cloud_dir = str(record.get("cloud_dir") or "").strip()
-            file_name = str(record.get("file_name") or "").strip()
-            if not cloud_dir or not file_name or not self._local_resource_path:
-                continue
-            try:
-                local_path = self._path_mapper.local_path(
-                    local_root=self._local_resource_path,
-                    cloud_root=self._CLOUD_MEDIA_ROOT,
-                    cloud_dir=cloud_dir,
-                    file_name=file_name,
-                )
-                media_server_path = self._media_server_notifier.media_server_path(
-                    local_path
-                )
-            except Exception as error:
-                logger.debug(f"计算深度删除匹配路径失败：{file_name} - {error}")
-                continue
-            if self._normalize_media_server_path(media_server_path) in normalized_paths:
-                matched.append(record)
-        if not matched:
-            return {"matched": 0, "deleted": 0, "linked_deleted": 0,
-                    "cache_deleted": 0, "skipped": 0}
-        result = self.delete_history_records(matched, delete_linked_files=True)
-        return {"matched": len(matched), **result}
-
-    @staticmethod
-    def _normalize_media_server_path(path: Any) -> str:
-        """标准化用于精确比较的媒体服务器路径。"""
-        value = str(path or "").strip().replace("\\", "/")
-        while "//" in value:
-            value = value.replace("//", "/")
-        return value.rstrip("/")
-
-    def _delete_history_cache(self, record: Dict[str, Any]) -> int:
-        if not self._cross_transfer_manager:
-            return 0
-        cache_key = str(record.get("cache_key") or "").strip()
-        if not cache_key:
-            return 0
-        return self._cross_transfer_manager.delete_cache(cache_key)
-
-    def _delete_history_linked_files_batch(
-            self, records: List[Dict[str, Any]]
-    ) -> Dict[str, int]:
-        """按网盘目录聚合删除；目录内容全部命中时直接删除目录。"""
-        preflight = self._preflight_linked_media_directories(records)
-        local_handled = preflight["local_handled"]
-        cloud_handled = preflight["cloud_handled"]
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
-        strm_deleted = preflight["strm_deleted"]
-        local_directories_deleted = preflight["local_directories_deleted"]
-        local_cleanup_targets: Dict[Path, Path] = {}
-        for record in records:
-            cloud_dir = str(record.get("cloud_dir") or "").strip()
-            file_name = str(record.get("file_name") or "").strip()
-            record_key = id(record)
-            if cloud_dir and file_name and record_key not in cloud_handled:
-                grouped.setdefault(cloud_dir, []).append(record)
-            if (
-                    record_key in local_handled
-                    or not self._local_resource_path
-                    or not cloud_dir
-                    or not file_name
-            ):
-                continue
-            try:
-                strm_path = self._path_mapper.local_path(
-                    local_root=self._local_resource_path,
-                    cloud_root=self._CLOUD_MEDIA_ROOT,
-                    cloud_dir=cloud_dir,
-                    file_name=file_name,
-                )
-                if strm_path.is_file():
-                    strm_path.unlink()
-                    strm_deleted += 1
-                self._delete_local_metadata_for_stem(strm_path)
-                local_directory = strm_path.parent
-                media_directory = (
-                    local_directory.parent
-                    if self._is_season_directory(cloud_dir, record)
-                    else local_directory
-                )
-                local_cleanup_targets[local_directory] = media_directory
-            except Exception as error:
-                logger.warning(f"批量删除关联 STRM 失败：{file_name} - {error}")
-
-        for local_directory, media_directory in sorted(
-                local_cleanup_targets.items(),
-                key=lambda item: len(item[0].parts),
-                reverse=True,
-        ):
-            local_directories_deleted += self._cleanup_local_metadata_directory(
-                local_directory
-            )
-            if media_directory != local_directory:
-                local_directories_deleted += self._cleanup_local_metadata_directory(
-                    media_directory
-                )
-
-        cloud_deleted = preflight["cloud_files_deleted"]
-        directories_deleted = preflight["cloud_directories_deleted"]
-        for cloud_dir, directory_records in grouped.items():
-            try:
-                lookup = self._cloud_directories.resolve_directory(cloud_dir)
-                if not lookup.checked:
-                    raise RuntimeError("无法确认目录状态")
-                if not lookup.directory_id:
-                    continue
-                listing = self._cloud_directories.list_directory(lookup.directory_id)
-                if not listing.checked:
-                    raise RuntimeError("无法读取目录内容")
-                target_names = {
-                    str(record.get("file_name") or "").strip()
-                    for record in directory_records
-                }
-                target_stems = {Path(name).stem.lower() for name in target_names}
-                target_files = [
-                    item for item in listing.files if item.name in target_names
-                ]
-                remaining_files = [
-                    item for item in listing.files if item.name not in target_names
-                ]
-                if self._cloud_items_are_generated_metadata(
-                        remaining_files, target_stems
-                ):
-                    if self._cloud_mutations.delete_file(lookup.directory_id):
-                        cloud_deleted += len(target_files)
-                        directories_deleted += 1
-                        if self._is_season_directory(
-                                cloud_dir, directory_records[0]
-                        ):
-                            directories_deleted += self._cleanup_cloud_media_parent(
-                                cloud_dir
-                            )
-                    continue
-                file_ids = [item.id for item in target_files]
-                if not file_ids:
-                    continue
-                deleted_ids = self._cloud_batch_mutations.delete_files(file_ids)
-                cloud_deleted += len(deleted_ids)
-            except Exception as error:
-                logger.warning(f"批量删除关联网盘内容失败：{cloud_dir} - {error}")
-
-        logger.info(
-            f"历史联动批量删除完成：历史记录={len(records)} 条，"
-            f"网盘文件={cloud_deleted} 个，网盘目录={directories_deleted} 个，"
-            f"STRM={strm_deleted} 个，本地目录={local_directories_deleted} 个"
-        )
-        return {
-            "cloud_files_deleted": cloud_deleted,
-            "cloud_directories_deleted": directories_deleted,
-            "strm_deleted": strm_deleted,
-            "local_directories_deleted": local_directories_deleted,
-        }
-
-    def _preflight_linked_media_directories(
-            self, records: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """删除前扫描一次STRM；整季或整部命中时直接回收目录。"""
-        result = {
-            "local_handled": set(),
-            "cloud_handled": set(),
-            "cloud_files_deleted": 0,
-            "cloud_directories_deleted": 0,
-            "strm_deleted": 0,
-            "local_directories_deleted": 0,
-        }
-        if not self._local_resource_path:
-            return result
-        media_groups: Dict[Path, List[Dict[str, Any]]] = {}
-        for record in records:
-            cloud_dir = str(record.get("cloud_dir") or "").strip()
-            file_name = str(record.get("file_name") or "").strip()
-            if not cloud_dir or not file_name:
-                continue
-            try:
-                strm_path = self._path_mapper.local_path(
-                    local_root=self._local_resource_path,
-                    cloud_root=self._CLOUD_MEDIA_ROOT,
-                    cloud_dir=cloud_dir,
-                    file_name=file_name,
-                )
-            except Exception:
-                continue
-            is_season = self._is_season_directory(cloud_dir, record)
-            media_directory = strm_path.parent.parent if is_season else strm_path.parent
-            cloud_media_dir = str(PurePosixPath(cloud_dir).parent) if is_season else cloud_dir
-            media_groups.setdefault(media_directory, []).append({
-                "record": record,
-                "strm_path": strm_path,
-                "season_directory": strm_path.parent if is_season else None,
-                "cloud_directory": cloud_dir,
-                "cloud_media_directory": cloud_media_dir or "/",
-            })
-
-        for media_directory, entries in media_groups.items():
-            if not self._is_safe_local_media_directory(media_directory):
-                continue
-            target_paths = {
-                entry["strm_path"].resolve(strict=False) for entry in entries
-            }
-            current_strms = {
-                path.resolve(strict=False) for path in media_directory.rglob("*.strm")
-            } if media_directory.is_dir() else set()
-            if media_directory.is_dir() and current_strms.issubset(target_paths):
-                result["strm_deleted"] += len(current_strms & target_paths)
-                cloud_path = entries[0]["cloud_media_directory"]
-                if self._delete_cloud_directory_direct(cloud_path):
-                    result["cloud_handled"].update(id(entry["record"]) for entry in entries)
-                    result["cloud_files_deleted"] += len(entries)
-                    result["cloud_directories_deleted"] += 1
-                shutil.rmtree(media_directory)
-                result["local_handled"].update(id(entry["record"]) for entry in entries)
-                result["local_directories_deleted"] += 1
-                continue
-
-            season_groups: Dict[Path, List[Dict[str, Any]]] = {}
-            for entry in entries:
-                season_directory = entry["season_directory"]
-                if season_directory:
-                    season_groups.setdefault(season_directory, []).append(entry)
-            for season_directory, season_entries in season_groups.items():
-                if not self._is_safe_local_media_directory(season_directory):
-                    continue
-                season_targets = {
-                    entry["strm_path"].resolve(strict=False) for entry in season_entries
-                }
-                season_strms = {
-                    path.resolve(strict=False) for path in season_directory.glob("*.strm")
-                } if season_directory.is_dir() else set()
-                if not season_directory.is_dir() or not season_strms.issubset(season_targets):
-                    continue
-                result["strm_deleted"] += len(season_strms & season_targets)
-                cloud_path = season_entries[0]["cloud_directory"]
-                if self._delete_cloud_directory_direct(cloud_path):
-                    result["cloud_handled"].update(
-                        id(entry["record"]) for entry in season_entries
-                    )
-                    result["cloud_files_deleted"] += len(season_entries)
-                    result["cloud_directories_deleted"] += 1
-                shutil.rmtree(season_directory)
-                result["local_handled"].update(
-                    id(entry["record"]) for entry in season_entries
-                )
-                result["local_directories_deleted"] += 1
-        return result
-
-    def _is_safe_local_media_directory(self, directory: Path) -> bool:
-        local_root = Path(self._local_resource_path).expanduser().resolve(strict=False)
-        resolved = directory.resolve(strict=False)
-        if local_root not in resolved.parents:
-            return False
-        try:
-            relative = resolved.relative_to(local_root)
-        except ValueError:
-            return False
-        return len(relative.parts) >= 2
-
-    def _delete_cloud_directory_direct(self, cloud_dir: str) -> bool:
-        if len(self._cloud_media_relative_parts(cloud_dir)) < 2:
-            return False
-        try:
-            lookup = self._cloud_directories.resolve_directory(cloud_dir)
-            return bool(
-                lookup.checked
-                and lookup.directory_id
-                and self._cloud_mutations.delete_file(lookup.directory_id)
-            )
-        except Exception as error:
-            logger.warning(f"直接删除关联115目录失败，将回退逐文件删除：{cloud_dir} - {error}")
-            return False
-
-    @classmethod
-    def _is_generated_metadata_name(
-            cls, name: str, target_stems: Optional[Set[str]] = None
-    ) -> bool:
-        path = Path(str(name or ""))
-        stem = path.stem.lower()
-        suffix = path.suffix.lower()
-        target_stems = target_stems or set()
-        if suffix == ".nfo":
-            return stem in {"tvshow", "season"} or stem in target_stems
-        if suffix not in cls._METADATA_IMAGE_SUFFIXES:
-            return False
-        return bool(
-            stem in {"poster", "fanart"}
-            or re.fullmatch(r"season\d{2}-poster", stem)
-            or stem == "season-specials-poster"
-            or any(stem == f"{target_stem}-thumb" for target_stem in target_stems)
-        )
-
-    @classmethod
-    def _cloud_items_are_generated_metadata(
-            cls, items: List[Any], target_stems: Optional[Set[str]] = None
-    ) -> bool:
-        return all(
-            not item.is_directory
-            and cls._is_generated_metadata_name(item.name, target_stems)
-            for item in items
-        )
-
-    @classmethod
-    def _is_season_directory(
-            cls, cloud_dir: str, record: Dict[str, Any]
-    ) -> bool:
-        directory_name = PurePosixPath(str(cloud_dir or "/")).name
-        return bool(
-            cls._SEASON_DIRECTORY_PATTERN.fullmatch(directory_name)
-            or record.get("season") not in (None, "")
-        )
-
-    @classmethod
-    def _delete_local_metadata_for_stem(cls, strm_path: Path) -> int:
-        deleted = 0
-        candidates = [strm_path.with_suffix(".nfo")]
-        candidates.extend(
-            item
-            for item in strm_path.parent.glob(f"{strm_path.stem}-thumb.*")
-            if item.suffix.lower() in cls._METADATA_IMAGE_SUFFIXES
-        )
-        for candidate in candidates:
-            if candidate.is_file():
-                candidate.unlink()
-                deleted += 1
-        return deleted
-
-    def _cleanup_local_metadata_directory(self, directory: Path) -> int:
-        if not directory.is_dir():
-            return 0
-        local_root = Path(self._local_resource_path).expanduser().resolve(strict=False)
-        resolved = directory.resolve(strict=False)
-        if local_root not in resolved.parents:
-            return 0
-        try:
-            relative = resolved.relative_to(local_root)
-        except ValueError:
-            return 0
-        # 至少保留“分类/媒体”两级边界，绝不清理本地资源根或分类目录。
-        if len(relative.parts) < 2:
-            return 0
-        entries = list(directory.iterdir())
-        if any(
-                item.is_dir() or not self._is_generated_metadata_name(item.name)
-                for item in entries
-        ):
-            return 0
-        for item in entries:
-            item.unlink()
-        directory.rmdir()
-        return 1
-
-    def _cleanup_cloud_media_parent(self, cloud_dir: str) -> int:
-        child_path = PurePosixPath(cloud_dir)
-        parent_path = str(child_path.parent) or "/"
-        if len(self._cloud_media_relative_parts(parent_path)) < 2:
-            return 0
-        lookup = self._cloud_directories.resolve_directory(parent_path)
-        if not lookup.checked or not lookup.directory_id:
-            return 0
-        listing = self._cloud_directories.list_directory(lookup.directory_id)
-        if not listing.checked:
-            return 0
-        remaining = [
-            item for item in listing.files
-            if not (item.is_directory and item.name == child_path.name)
-        ]
-        if not self._cloud_items_are_generated_metadata(remaining):
-            return 0
-        return int(bool(self._cloud_mutations.delete_file(lookup.directory_id)))
-
-    def _cloud_media_relative_parts(self, path: str) -> Tuple[str, ...]:
-        root = PurePosixPath(self._CLOUD_MEDIA_ROOT)
-        candidate = PurePosixPath(str(path or "/"))
-        try:
-            relative = candidate.relative_to(root)
-        except ValueError:
-            return ()
-        return tuple(part for part in relative.parts if part not in {"", ".", "/"})
-
-    def _delete_history_linked_files(
-            self, record: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """尽力删除115目标文件及本地STRM，任何失败均不阻止历史删除。"""
-        file_name = str(record.get("file_name") or "").strip()
-        result = self._delete_history_linked_files_batch([record])
-        cloud_deleted = (
-                result["cloud_files_deleted"] > 0
-                or result["cloud_directories_deleted"] > 0
-        )
-        strm_deleted = result["strm_deleted"] > 0
-        return {
-            "cloud_file_deleted": cloud_deleted,
-            "cloud_file_error": "",
-            "strm_deleted": strm_deleted,
-            "strm_error": "",
-            "strm_path": "",
-            "cloud_directories_deleted": result["cloud_directories_deleted"],
-            "local_directories_deleted": result["local_directories_deleted"],
-        }
-
     def notify_history_record(self, identity: Dict[str, Any]) -> Dict[str, Any]:
         """按成功历史补发入库和 Webhook 通知，不重复发送转存完成消息。"""
         if not self._get_data:
@@ -2667,14 +1821,14 @@ class HistoryService(OwnerDelegator):
             raise RuntimeError("历史记录存储未初始化")
         with self._offline_pending_lock:
             history = self._get_data("history") or []
-            retained = [] if force else [
-                record for record in history
-                if not self._history_record_deletable(record)
-            ]
-            deleted_records = [
-                record for record in history if record not in retained
-            ]
-            deleted_count = len(history) - len(retained)
+            retained = []
+            deleted_records = []
+            for record in history:
+                if not force and not self._history_record_deletable(record):
+                    retained.append(record)
+                else:
+                    deleted_records.append(record)
+            deleted_count = len(deleted_records)
             if deleted_count:
                 self._save_data("history", retained)
         if deleted_count:
@@ -2682,374 +1836,3 @@ class HistoryService(OwnerDelegator):
                 self._delete_history_cache(record)
             self._delete_platform_transfer_histories(deleted_records)
         return {"deleted": deleted_count, "retained": len(retained)}
-
-    @staticmethod
-    def _find_share_file_for_history(files: List[dict], source_sha1: str, source_name: str) -> Optional[dict]:
-        source_hash = re.sub(r"[^0-9A-Fa-f]", "", str(source_sha1 or "")).upper()
-        source_name = str(source_name or "").strip()
-        leaf_files = []
-
-        def collect(items: List[dict]) -> None:
-            for item in items or []:
-                if item.get("is_dir"):
-                    collect(item.get("children") or [])
-                else:
-                    leaf_files.append(item)
-
-        collect(files)
-        for item in leaf_files:
-            item_hash = re.sub(
-                r"[^0-9A-Fa-f]", "", str(item.get("sha1") or "")
-            ).upper()
-            if source_hash and item_hash == source_hash:
-                return item
-        if source_name:
-            matched = next(
-                (
-                    item
-                    for item in leaf_files
-                    if str(item.get("name") or "").strip() == source_name
-                ),
-                None,
-            )
-            if matched:
-                return matched
-        return leaf_files[0] if len(leaf_files) == 1 else None
-
-    def retry_history_record(self, record_time: str, share_url: str, file_name: str) -> Dict[str, Any]:
-        """按持久化历史中的精确记录重新执行平台命名和完整后处理。"""
-        history = (self._get_data("history") or []) if self._get_data else []
-        record = next(
-            (
-                item for item in history
-                if str(item.get("time") or "") == str(record_time or "")
-                   and str(item.get("share_url") or "") == str(share_url or "")
-                   and str(item.get("file_name") or "") == str(file_name or "")
-            ),
-            None,
-        )
-        if not record:
-            raise ValueError("未找到对应的转存历史记录")
-        can_retry, retry_title = self._history_retry_state(record)
-        if not can_retry:
-            raise ValueError(retry_title)
-
-        source_sha1 = str(record.get("source_sha1") or "").strip()
-        source_name = str(
-            record.get("source_file_name") or record.get("file_name") or ""
-        ).strip()
-        canonical_url = str(record.get("share_url") or "").strip()
-        if not source_name or not canonical_url:
-            raise ValueError("历史记录缺少文件名或资源链接，无法重试")
-
-        retry_context = self._resolve_history_retry_context(record, source_name)
-        subscribe = retry_context["subscribe"]
-        mediainfo = retry_context["mediainfo"]
-        season = retry_context["season"]
-        episode = retry_context["episode"]
-        cloud_dir = retry_context["cloud_dir"]
-        target_name = retry_context["target_name"]
-
-        final_file_exists = bool(
-            self._cloud_query.find_file(cloud_dir, target_name, attempts=1)
-        )
-        success = final_file_exists
-        retry_staging_name = source_name
-        if not success:
-            expected_size = int(record.get("file_size") or 0)
-            expected_sha1 = source_sha1.upper()
-            for candidate_name in dict.fromkeys((source_name, target_name)):
-                staging_file = self._cloud_query.find_file(
-                    self._cloud_transfer_path, candidate_name, attempts=1
-                )
-                if not staging_file:
-                    continue
-                actual_size = int(getattr(staging_file, "size", 0) or 0)
-                actual_sha1 = str(
-                    getattr(staging_file, "sha1", "") or ""
-                ).upper()
-                if expected_sha1 and actual_sha1 != expected_sha1:
-                    continue
-                if expected_size > 0 and actual_size != expected_size:
-                    continue
-                retry_staging_name = str(
-                    getattr(staging_file, "name", "") or candidate_name
-                )
-                if not source_sha1 and actual_sha1:
-                    source_sha1 = actual_sha1
-                    record["source_sha1"] = actual_sha1
-                success = True
-                logger.info(
-                    f"历史恢复复用目标盘暂存文件："
-                    f"{self._cloud_transfer_path.rstrip('/')}/{retry_staging_name}"
-                )
-                break
-        cross_source = None
-        cached_source = None
-        if record.get("transfer_mode") == "cross":
-            source_key = str(record.get("source_drive_key") or "").strip()
-            target_key = str(record.get("target_drive_key") or "").strip()
-            if not source_key or not target_key:
-                raise ValueError("跨盘历史缺少源网盘或目标网盘信息")
-            if not self._cloud_drive or target_key != self._cloud_drive.key:
-                raise ValueError("跨盘历史的目标网盘与当前转存网盘不一致")
-            cached_source = CloudFile(
-                id="",
-                name=source_name,
-                is_directory=False,
-                size=int(record.get("file_size") or 0),
-                sha1=source_sha1,
-                md5=str(record.get("source_md5") or ""),
-            )
-            cache_info = self._cross_transfer_manager.cache_info(
-                source_key, cached_source, verify_checksum=True
-            ) if self._cross_transfer_manager else {}
-            record.update(cache_info)
-            if self._save_data:
-                self._save_data("history", history)
-            if not success and cache_info.get("cache_status") == "complete":
-                task = self._cross_transfer_manager.create_from_cloud_file(
-                    source_key,
-                    cached_source,
-                    target_key,
-                    self._cloud_transfer_path,
-                    source_name,
-                )
-                success = self._cross_transfer_manager.wait(task["id"])
-                if not success:
-                    record.update(self._cross_transfer_manager.cache_info(
-                        source_key, cached_source, verify_checksum=False,
-                    ))
-                    record["failure_reason"] = "缓存恢复上传失败"
-                    self._save_data("history", history)
-                    raise RuntimeError("缓存完整，但恢复上传到目标网盘失败")
-            if not success:
-                try:
-                    cross_source = self._cloud_drive_registry.get(source_key)
-                except KeyError as error:
-                    raise ValueError(
-                        f"跨盘历史源网盘未就绪：{source_key}"
-                    ) from error
-
-        if not success:
-            file_id = ""
-            if not self._is_ed2k_url(canonical_url):
-                share_transfer = (
-                    cross_source.require(CloudDriveCapability.SHARE_TRANSFER)
-                    if cross_source else self._share_transfer
-                )
-                status = share_transfer.check_share_status(canonical_url)
-                if not status.is_valid:
-                    provider_name = cross_source.name if cross_source else "网盘"
-                    raise ValueError(f"{provider_name}分享链接无效：{status.status_text}")
-                share_files = share_transfer.list_share_files(canonical_url)
-                source_file = self._find_share_file_for_history(
-                    share_files, source_sha1, source_name
-                )
-                if not source_file:
-                    raise ValueError("原分享中未找到历史记录对应的源文件")
-                file_id = str(source_file.get("id") or "")
-                if not file_id:
-                    raise ValueError("原分享文件缺少文件ID")
-                if not source_sha1:
-                    source_sha1 = str(source_file.get("sha1") or "")
-                source_md5 = str(
-                    source_file.get("md5") or record.get("source_md5") or ""
-                )
-                source_name = str(source_file.get("name") or source_name)
-                record["source_file_name"] = source_name
-                record["source_sha1"] = source_sha1
-                record["source_md5"] = source_md5
-                record["file_size"] = int(source_file.get("size") or 0)
-                if cached_source:
-                    cached_source = CloudFile(
-                        id=file_id,
-                        name=source_name,
-                        is_directory=False,
-                        size=int(record.get("file_size") or 0),
-                        sha1=source_sha1,
-                        md5=source_md5,
-                    )
-            success = self._transfer_file(
-                canonical_url,
-                {"id": file_id, "name": source_name,
-                 "size": record.get("file_size") or 0,
-                 "sha1": source_sha1,
-                 "md5": record.get("source_md5") or ""},
-                self._cloud_transfer_path, None, source_sha1,
-            )
-
-        if not success:
-            if cached_source and self._cross_transfer_manager:
-                record.update(self._cross_transfer_manager.cache_info(
-                    str(record.get("source_drive_key") or ""),
-                    cached_source,
-                    verify_checksum=False,
-                ))
-            record["failure_reason"] = "重试转存失败"
-            self._save_data("history", history)
-            raise RuntimeError("重试转存失败")
-
-        strm_path, pending_key = self._generate_or_queue_strm(
-            canonical_url,
-            cloud_dir,
-            target_name,
-            mediainfo,
-            source_sha1=source_sha1,
-            file_size=int(record.get("file_size") or 0),
-            subscribe_id=getattr(subscribe, "id", None),
-            success_episodes=(
-                [episode] if mediainfo.type == MediaType.TV and episode else [1]
-            ),
-            season=season if mediainfo.type == MediaType.TV else None,
-            notification_episodes=(
-                [episode] if mediainfo.type == MediaType.TV and episode else None
-            ),
-            staging_dir="" if final_file_exists else self._cloud_transfer_path,
-            staging_name=retry_staging_name,
-        )
-        if not strm_path and not pending_key:
-            record["status"] = "失败"
-            record["failure_reason"] = "文件已转存但后处理任务登记失败"
-            self._save_data("history", history)
-            raise RuntimeError("文件已转存，但无法登记后处理任务")
-        record["file_name"] = target_name
-        record["cloud_dir"] = cloud_dir
-        record["source_file_name"] = source_name
-        record["source_sha1"] = source_sha1
-        record["tmdb_id"] = mediainfo.tmdb_id
-        record.pop("failure_reason", None)
-        if cached_source and self._cross_transfer_manager:
-            record.update(self._cross_transfer_manager.cache_info(
-                str(record.get("source_drive_key") or ""),
-                cached_source,
-                verify_checksum=False,
-            ))
-        if pending_key:
-            record["finalize_key"] = pending_key
-            record["status"] = (
-                "下载中" if self._is_ed2k_url(canonical_url) else "处理中"
-            )
-        else:
-            record.pop("finalize_key", None)
-            record["status"] = "成功"
-            self._media_server_notifier.notify(
-                path=strm_path,
-                mediainfo=mediainfo,
-                file_name=target_name,
-            )
-
-        if subscribe and not pending_key:
-            success_episodes = [1]
-            if mediainfo.type == MediaType.TV:
-                success_episodes = [episode] if episode else []
-            if success_episodes:
-                self._subscribe_handler.check_and_finish_subscribe(
-                    subscribe=subscribe,
-                    mediainfo=mediainfo,
-                    success_episodes=success_episodes,
-                )
-        if pending_key:
-            self.append_history_records([record], reopen_terminal=True)
-        else:
-            self._save_data("history", history)
-        if record["status"] == "成功":
-            self._record_platform_transfer_histories([record])
-        logger.info(
-            f"历史记录后处理完成：{cloud_dir.rstrip('/')}/{target_name}，"
-            f"状态：{record['status']}"
-        )
-        return {
-            "status": record["status"],
-            "pending_key": pending_key,
-            "strm_path": str(strm_path or ""),
-            "cloud_dir": cloud_dir,
-            "file_name": target_name,
-        }
-
-    def _resolve_history_retry_context(
-            self, record: Dict[str, Any], source_name: str
-    ) -> Dict[str, Any]:
-        """按当前订阅和规则还原历史记录的最终处理上下文。"""
-        title = str(record.get("title") or "").strip()
-        if not title or not source_name:
-            raise ValueError("历史记录缺少媒体名称或源文件名")
-
-        media_type = (
-            MediaType.TV
-            if str(record.get("type") or "") == "电视剧"
-            else MediaType.MOVIE
-        )
-        season = int(record.get("season") or 1) if media_type == MediaType.TV else None
-        episode = (
-            int(record.get("episode") or 0) or None
-            if media_type == MediaType.TV
-            else None
-        )
-        meta = MetaInfo(title)
-        meta.type = media_type
-        meta.year = record.get("year")
-        if season is not None:
-            meta.begin_season = season
-        if episode is not None:
-            meta.begin_episode = episode
-        mediainfo = recognize_media(
-            self._chain,
-            meta=meta,
-            mtype=media_type,
-            tmdb_id=record.get("tmdb_id"),
-            cache=True,
-        )
-        if not mediainfo:
-            raise ValueError(f"无法识别历史记录媒体：{title}")
-
-        subscribe = None
-        tmdb_id = mediainfo.tmdb_id or record.get("tmdb_id")
-        if tmdb_id:
-            try:
-                candidates = list_subscribes_by_tmdb_id(
-                    SubscribeOper(), tmdb_id, season
-                )
-                if not candidates and media_type == MediaType.MOVIE:
-                    candidates = [
-                        item
-                        for item in (SubscribeOper().list() or [])
-                        if tmdb_id_of(item) == int(tmdb_id)
-                    ]
-                subscribe = next(
-                    (
-                        item
-                        for item in candidates
-                        if str(getattr(item, "type", "")) == media_type.value
-                           and (
-                                   media_type != MediaType.TV
-                                   or int(getattr(item, "season", 1) or 1) == season
-                           )
-                    ),
-                    None,
-                )
-            except Exception as error:
-                logger.warning(f"查询历史记录对应订阅失败：{title}，{error}")
-
-        target_subscribe = subscribe or SimpleNamespace(
-            name=title,
-            year=record.get("year"),
-            media_category=None,
-        )
-        cloud_dir, target_name = self._platform_target(
-            root_path=self._CLOUD_MEDIA_ROOT,
-            subscribe=target_subscribe,
-            mediainfo=mediainfo,
-            source_name=source_name,
-            season=season,
-            episode=episode,
-        )
-        return {
-            "subscribe": subscribe,
-            "target_subscribe": target_subscribe,
-            "mediainfo": mediainfo,
-            "season": season,
-            "episode": episode,
-            "cloud_dir": cloud_dir,
-            "target_name": target_name,
-        }

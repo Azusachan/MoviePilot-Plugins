@@ -11,6 +11,21 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from app.log import logger
+from app.modules.filemanager.transhandler import TransHandler
+from app.schemas.file import FileItem
+
+try:
+    import chardet
+except ImportError:
+    chardet = None
+
+try:
+    from app.foundation.text import convert as zhconv_convert
+except ImportError:
+    try:
+        from app.utils.zhconv import convert as zhconv_convert
+    except ImportError:
+        zhconv_convert = None
 
 from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
 from ...utils import MediaFileParser
@@ -21,7 +36,7 @@ class SubtitleService(OwnerDelegator):
 
     _TEXT_SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt", ".smi", ".sub"}
     _SIMPLIFIED_HINTS = set("这为国发后里们个来时过还对从会与体门开见说车书画风云龙")
-    _TRADITIONAL_HINTS = set("這為國發後裡們個來時過還對從會與體門開見說車書畫風雲龍")
+    _TRADITIONAL_HINTS = set("這為國發後裡們个来时过还对从会与体门开见说车书画风云龙")
 
     @classmethod
     def _platform_subtitle_name(cls, subtitle_name: str, target_video_name: str) -> str:
@@ -29,10 +44,6 @@ class SubtitleService(OwnerDelegator):
         subtitle_path = Path(subtitle_name)
         target_path = Path(target_video_name)
         try:
-            # 该方法是平台整理链路实际使用的规则入口；懒加载可保持插件源码检查环境可用。
-            from app.modules.filemanager.transhandler import TransHandler
-            from app.schemas.file import FileItem
-
             source_name = subtitle_path.name
             subtitle_item = FileItem(
                 storage="local",
@@ -44,7 +55,6 @@ class SubtitleService(OwnerDelegator):
             rename = getattr(TransHandler, "_TransHandler__rename_subtitles")
             return str(rename(subtitle_item, target_path).name)
         except Exception as error:
-            # 运行时平台包缺失时仍保留稳定的兼容命名，不影响字幕后处理重试。
             logger.debug(f"调用 MoviePilot 字幕命名逻辑失败，使用兼容规则：{error}")
             return cls._fallback_subtitle_name(subtitle_path, target_path)
 
@@ -108,14 +118,13 @@ class SubtitleService(OwnerDelegator):
         elif raw.startswith((b"\xff\xfe", b"\xfe\xff")):
             encodings.append("utf-16")
         encodings.append("utf-8-sig")
-        try:
-            import chardet
-
-            detected = chardet.detect(raw).get("encoding")
-            if detected:
-                encodings.append(str(detected))
-        except Exception:
-            pass
+        if chardet is not None:
+            try:
+                detected = chardet.detect(raw).get("encoding")
+                if detected:
+                    encodings.append(str(detected))
+            except Exception:
+                pass
         encodings.extend(("gb18030", "big5", "utf-16"))
         seen = set()
         for encoding in encodings:
@@ -131,6 +140,26 @@ class SubtitleService(OwnerDelegator):
             if control_count <= max(4, len(text) // 100):
                 return text
         return ""
+
+    @classmethod
+    def _convert_subtitle_file_to_simplified(cls, path: Path) -> bool:
+        """若字幕为文本格式且包含繁体，自动转换为简体中文。"""
+        if path.suffix.lower() not in cls._TEXT_SUBTITLE_EXTENSIONS:
+            return False
+        if zhconv_convert is None:
+            logger.debug("zhconv 未就绪，跳过字幕繁转简")
+            return False
+        text = cls._decode_subtitle_text(path)
+        if not text:
+            return False
+        try:
+            converted = zhconv_convert(text, "zh-hans")
+            if converted and converted != text:
+                path.write_text(converted, encoding="utf-8")
+                return True
+        except Exception as error:
+            logger.debug(f"字幕繁转简转换异常：{path.name}，{error}")
+        return False
 
     @staticmethod
     def _extract_subtitle_dialogue(text: str, suffix: str) -> str:
@@ -168,18 +197,24 @@ class SubtitleService(OwnerDelegator):
         if kana_count >= 5 and kana_count >= han_count // 10:
             return "ja"
         if han_count >= 5:
-            try:
-                from app.utils.zhconv import convert as zhconv_convert
-
-                simplified = zhconv_convert(dialogue, "zh-hans")
-                traditional = zhconv_convert(dialogue, "zh-hant")
-                simplified_changes = sum(
-                    left != right for left, right in zip_longest(dialogue, simplified)
-                )
-                traditional_changes = sum(
-                    left != right for left, right in zip_longest(dialogue, traditional)
-                )
-            except Exception:
+            if zhconv_convert is not None:
+                try:
+                    simplified = zhconv_convert(dialogue, "zh-hans")
+                    traditional = zhconv_convert(dialogue, "zh-hant")
+                    simplified_changes = sum(
+                        left != right for left, right in zip_longest(dialogue, simplified)
+                    )
+                    traditional_changes = sum(
+                        left != right for left, right in zip_longest(dialogue, traditional)
+                    )
+                except Exception:
+                    simplified_changes = sum(
+                        char in cls._TRADITIONAL_HINTS for char in dialogue
+                    )
+                    traditional_changes = sum(
+                        char in cls._SIMPLIFIED_HINTS for char in dialogue
+                    )
+            else:
                 simplified_changes = sum(
                     char in cls._TRADITIONAL_HINTS for char in dialogue
                 )
@@ -270,6 +305,8 @@ class SubtitleService(OwnerDelegator):
             episode: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """关联同名字幕；单电影资源允许其唯一视频接收全部字幕。"""
+        if not getattr(self, "_organize_subtitles", True):
+            return []
         flattened = list(MediaFileParser.iter_files(files))
         video_count = sum(
             MediaFileParser.is_video(str(item.get("name") or ""))
@@ -369,7 +406,7 @@ class SubtitleService(OwnerDelegator):
                     if subtitle.get("staging_name"):
                         record["staging_name"] = str(subtitle["staging_name"])
                 except Exception as error:
-                    logger.warning(f"字幕转存暂未完成，将由后处理重试：{source_name}，{error}")
+                    logger.debug(f"字幕转存暂未完成，将由后处理重试：{source_name}，{error}")
             if record["transferred"]:
                 logger.debug(
                     f"字幕已登记网盘内整理，待最终命名：{source_name} -> {target_name}"
@@ -389,12 +426,16 @@ class SubtitleService(OwnerDelegator):
     ) -> bool:
         """先读取字幕内容识别语言，再完成远程和本地的统一命名。"""
         subtitles = item.get("subtitles") or []
-        if not subtitles:
+        if not subtitles or not getattr(self, "_organize_subtitles", True):
             return True
         final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
         staging_dir = str(
             item.get("staging_dir") or final_dir
         ).rstrip("/") or "/"
+        if not getattr(self, "_organize_after_transfer", True):
+            # "转存后整理"关闭：字幕与视频一并留在转存目录。
+            final_dir = staging_dir
+            item["cloud_dir"] = final_dir
         final_valid, final_index = directory_snapshot(final_dir)
         if not final_valid:
             return False
@@ -440,13 +481,14 @@ class SubtitleService(OwnerDelegator):
                     if retry_item.get("staging_name"):
                         subtitle["staging_name"] = retry_item["staging_name"]
                 except Exception as error:
-                    logger.warning(f"字幕后处理重试转存失败：{source_name}，{error}")
+                    logger.debug(f"字幕后处理重试转存失败：{source_name}，{error}")
                 if not subtitle.get("transferred"):
                     return False
                 _, staging_index = directory_snapshot(staging_dir)
 
             if not target_file:
                 candidates = []
+                seen_candidates = set()
                 for candidate_name in (
                         provisional_name,
                         str(subtitle.get("staging_name") or ""),
@@ -455,15 +497,15 @@ class SubtitleService(OwnerDelegator):
                     if not candidate_name:
                         continue
                     candidate = staging_index.get(candidate_name) or final_index.get(candidate_name)
-                    if candidate and candidate not in candidates:
+                    if candidate and id(candidate) not in seen_candidates:
+                        seen_candidates.add(id(candidate))
                         candidates.append(candidate)
                 source_sha1 = str(subtitle.get("source_sha1") or "").upper()
                 if source_sha1:
-                    candidates.extend(
-                        candidate for candidate in list(staging_index.values()) + list(final_index.values())
-                        if candidate not in candidates
-                        and str(candidate.sha1 or "").upper() == source_sha1
-                    )
+                    for candidate in (*staging_index.values(), *final_index.values()):
+                        if id(candidate) not in seen_candidates and str(candidate.sha1 or "").upper() == source_sha1:
+                            seen_candidates.add(id(candidate))
+                            candidates.append(candidate)
                 target_file = next(
                     (candidate for candidate in candidates
                      if self._subtitle_file_matches(candidate, subtitle)),
@@ -483,17 +525,27 @@ class SubtitleService(OwnerDelegator):
                         CloudDriveCapability.FILE_DOWNLOAD
                     ).download_file(target_file, str(temp_path))
                 except Exception as error:
-                    logger.warning(f"字幕下载到临时目录失败：{source_name}，{error}")
+                    logger.debug(f"字幕下载到临时目录失败：{source_name}，{error}")
                     return False
                 if not temp_path.is_file() or temp_path.stat().st_size <= 0:
                     return False
                 expected_size = int(target_file.size or subtitle.get("file_size") or 0)
                 if expected_size > 0 and temp_path.stat().st_size != expected_size:
-                    logger.warning(f"字幕下载大小校验失败：{source_name}")
+                    logger.debug(f"字幕下载大小校验失败：{source_name}")
                     return False
-                content_sha1 = str(
-                    target_file.sha1 or subtitle.get("source_sha1") or ""
-                ).strip().upper() or self._sha1_file(temp_path)
+                if getattr(self, "_subtitle_traditional_to_simplified", False):
+                    if self._convert_subtitle_file_to_simplified(temp_path):
+                        expected_size = temp_path.stat().st_size
+                        content_sha1 = self._sha1_file(temp_path)
+                        logger.debug(f"字幕内容已转为简体中文：{source_name}")
+                    else:
+                        content_sha1 = str(
+                            target_file.sha1 or subtitle.get("source_sha1") or ""
+                        ).strip().upper() or self._sha1_file(temp_path)
+                else:
+                    content_sha1 = str(
+                        target_file.sha1 or subtitle.get("source_sha1") or ""
+                    ).strip().upper() or self._sha1_file(temp_path)
 
                 detected_language = self._detect_subtitle_language(temp_path)
                 target_name = self._subtitle_name_for_language(
@@ -541,7 +593,7 @@ class SubtitleService(OwnerDelegator):
                     )
                     if not target_file:
                         return False
-                if current_dir != final_dir:
+                if current_dir != final_dir and getattr(self, "_organize_after_transfer", True):
                     target_file = self._cloud_mutations.move_file(
                         target_file, final_dir, target_name
                     )
@@ -576,7 +628,7 @@ class SubtitleService(OwnerDelegator):
                     shutil.copyfile(temp_path, local_temp)
                     local_temp.replace(local_path)
                 except Exception as error:
-                    logger.warning(f"字幕写入 STRM 目录失败：{target_name}，{error}")
+                    logger.debug(f"字幕写入 STRM 目录失败：{target_name}，{error}")
                     return False
                 finally:
                     if local_temp and local_temp.exists():

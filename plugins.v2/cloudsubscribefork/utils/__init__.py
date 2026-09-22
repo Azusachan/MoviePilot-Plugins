@@ -13,6 +13,7 @@ from .magnet import (
     parse_magnet_metadata,
 )
 from .strm import StrmGenerator, StrmTemplateError
+from ..core.media import media_identity
 
 __all__ = [
     "FileMatcher",
@@ -26,4 +27,5 @@ __all__ = [
     "cached_resource_call",
     "create_platform_ttl_cache",
     "normalize_platform_cache_key",
+    "media_identity",
 ]

@@ -12,7 +12,12 @@ from typing import Any, Callable, Dict, Optional
 
 from app.log import logger
 
-from ...http_client import RequestGate, gated_request, normalize_proxies, requests
+from ...http_client import (
+    RequestGate,
+    gated_request,
+    normalize_proxies,
+    requests,
+)
 from ....utils.cache import (
     cached_resource_call,
     create_platform_ttl_cache,
@@ -283,8 +288,9 @@ class HDHiveOpenAPIClient:
             return False
         return True
 
-    def checkin(self, is_gambler: bool = False) -> Dict[str, Any]:
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
         """通过 HDHive OpenAPI 完成每日签到，并返回统一签到结果。"""
+        is_gambler = str(mode or "normal").strip().lower() == "gambler"
         before = self.get_account_info()
         try:
             payload = self._request(
@@ -350,7 +356,7 @@ class HDHiveOpenAPIClient:
                 else "签到成功" if success else "签到失败"
             ),
             "message": message,
-            "is_gambler": bool(is_gambler),
+            "mode": "gambler" if is_gambler else "normal",
             "signin_points": signin_points,
             "points_change": points_after - points_before,
             "points_before": points_before,
