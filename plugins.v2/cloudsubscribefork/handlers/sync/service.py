@@ -53,6 +53,7 @@ from ...core.media import (
     list_subscribes_by_tmdb_id,
     media_identity,
     recognize_media,
+    search_medias,
     tmdb_id_of,
     tmdb_identity_update,
 )
@@ -1015,7 +1016,8 @@ class SyncHandler:
                 for search_meta in search_metas:
                     rows = self._timed_sync_call(
                         "subscribe_tmdb_repair",
-                        self._chain.search_medias,
+                        search_medias,
+                        self._chain,
                         meta=search_meta,
                         source="themoviedb",
                     ) or []

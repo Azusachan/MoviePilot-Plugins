@@ -1,18 +1,16 @@
 <template>
   <div class="tabs-container">
-    <v-tabs
-      :model-value="searchMode ? undefined : activeTab"
-      color="primary"
-      density="compact"
-      align-tabs="start"
-      show-arrows
-      class="platform-native-tabs"
-      @update:model-value="$emit('change', $event)">
-      <v-tab v-for="tab in tabs" :key="tab.value" :value="tab.value" class="platform-native-tab" :disabled="searchMode">
-        <v-icon v-if="tab.icon" :icon="tab.icon" size="18" class="mr-1.5 tab-icon" />
-        <span class="tab-title">{{ tab.title }}</span>
-      </v-tab>
-    </v-tabs>
+    <div class="header-tabs">
+      <div
+        v-for="tab in tabs"
+        :key="tab.value"
+        class="header-tab"
+        :class="{ active: !searchMode && activeTab === tab.value, disabled: searchMode }"
+        @click="!searchMode && $emit('change', tab.value)">
+        <v-icon v-if="tab.icon" :icon="tab.icon" size="small" class="header-tab-icon" />
+        <span>{{ tab.title }}</span>
+      </div>
+    </div>
 
     <v-badge
       :content="filterCount"
@@ -44,46 +42,95 @@ defineEmits(["change", "toggle-filter"]);
 
 <style scoped>
 .tabs-container {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 0 0 12px 0;
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
 }
 
-.platform-native-tabs {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 44px !important;
-  background: transparent !important;
-}
-
-.platform-native-tabs :deep(.v-slide-group__content) {
+.header-tabs {
+  position: relative;
+  display: flex;
+  flex-grow: 1;
   align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: -14px;
+  scrollbar-width: none;
 }
 
-.platform-native-tab {
-  font-size: 0.94rem !important;
-  font-weight: 500 !important;
-  letter-spacing: 0.2px !important;
-  text-transform: none !important;
-  padding: 0 16px !important;
-  min-width: unset !important;
-  height: 42px !important;
-  transition: color 0.2s ease,
-  font-weight 0.2s ease !important;
-  color: rgba(var(--v-theme-on-surface), 0.72) !important;
+.header-tabs::-webkit-scrollbar {
+  display: none;
 }
 
-.platform-native-tab.v-tab--selected {
-  color: rgb(var(--v-theme-primary)) !important;
-  font-weight: 700 !important;
+.header-tab-icon {
+  color: rgba(var(--v-theme-on-background), 0.6);
+  margin-right: 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: color 0.2s ease;
 }
 
-.tab-icon {
-  opacity: 0.85;
+.header-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 20px;
+  background-color: transparent;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.header-tab::after {
+  position: absolute;
+  border-radius: 3px;
+  background-color: rgb(var(--v-theme-primary));
+  height: 3px;
+  content: "";
+  width: 70%;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%) scaleX(0);
+  transition: transform 0.2s ease;
+}
+
+.header-tab.active {
+  color: rgb(var(--v-theme-primary));
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.header-tab.active::after {
+  transform: translateX(-50%) scaleX(1);
+}
+
+.header-tab.active .header-tab-icon {
+  color: rgb(var(--v-theme-primary));
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.header-tab:hover:not(.active):not(.disabled) {
+  background-color: rgba(var(--v-theme-primary), 0.05);
+  color: rgba(var(--v-theme-on-background), 1);
+}
+
+.header-tab.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .filter-badge-btn {
@@ -93,23 +140,21 @@ defineEmits(["change", "toggle-filter"]);
 @media (max-width: 600px) {
   .tabs-container {
     margin: 0 0 8px 0;
-    min-height: 38px;
     gap: 4px;
   }
 
-  .platform-native-tabs {
-    height: 38px !important;
+  .header-tabs {
+    margin-left: -10px;
   }
 
-  .platform-native-tab {
-    padding: 0 10px !important;
-    font-size: 0.84rem !important;
-    height: 36px !important;
+  .header-tab {
+    padding: 4px 10px;
+    font-size: 0.82rem;
   }
 
-  .tab-icon {
-    font-size: 16px !important;
-    margin-right: 4px !important;
+  .header-tab-icon {
+    font-size: 15px !important;
+    margin-right: 4px;
   }
 }
 </style>

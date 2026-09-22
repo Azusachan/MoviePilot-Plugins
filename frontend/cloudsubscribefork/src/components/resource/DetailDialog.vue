@@ -89,7 +89,10 @@
               <div class="hero-meta-badges d-flex align-center ga-1.5 flex-wrap">
                 <div
                   v-if="getMediaRatingInfo(activeMedia, 'tmdb')"
-                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1">
+                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1"
+                  :class="{ 'meta-tag-pill--clickable': Boolean(activeMedia.tmdb_id) }"
+                  :title="activeMedia.tmdb_id ? `点击前往 TMDB 查看条目 (ID: ${activeMedia.tmdb_id})` : ''"
+                  @click="openExternalRating('tmdb')">
                   <span class="pill-brand-svg tmdb-svg-wrap" v-html="RAW_ICONS.tmdb" />
                   <span class="rating-val font-weight-bold color-tmdb">
                     {{ getMediaRatingInfo(activeMedia, "tmdb").score }}
@@ -97,10 +100,14 @@
                   <span v-if="getMediaRatingInfo(activeMedia, 'tmdb').votes" class="rating-votes text-caption">
                     {{ getMediaRatingInfo(activeMedia, "tmdb").votes }}
                   </span>
+                  <v-icon v-if="activeMedia.tmdb_id" icon="mdi-open-in-new" size="10" class="rating-ext-icon ml-0.5" />
                 </div>
                 <div
                   v-if="getMediaRatingInfo(activeMedia, 'imdb')"
-                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1">
+                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1"
+                  :class="{ 'meta-tag-pill--clickable': Boolean(activeMedia.imdb_id) }"
+                  :title="activeMedia.imdb_id ? `点击前往 IMDb 查看条目 (ID: ${activeMedia.imdb_id})` : ''"
+                  @click="openExternalRating('imdb')">
                   <span class="pill-brand-svg imdb-svg-wrap" v-html="RAW_ICONS.imdb" />
                   <span class="rating-val font-weight-bold color-imdb">
                     {{ getMediaRatingInfo(activeMedia, "imdb").score }}
@@ -108,10 +115,14 @@
                   <span v-if="getMediaRatingInfo(activeMedia, 'imdb').votes" class="rating-votes text-caption">
                     {{ getMediaRatingInfo(activeMedia, "imdb").votes }}
                   </span>
+                  <v-icon v-if="activeMedia.imdb_id" icon="mdi-open-in-new" size="10" class="rating-ext-icon ml-0.5" />
                 </div>
                 <div
                   v-if="getMediaRatingInfo(activeMedia, 'douban')"
-                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1">
+                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1"
+                  :class="{ 'meta-tag-pill--clickable': Boolean(activeMedia.douban_id) }"
+                  :title="activeMedia.douban_id ? `点击前往豆瓣查看条目 (ID: ${activeMedia.douban_id})` : ''"
+                  @click="openExternalRating('douban')">
                   <span class="pill-brand-svg douban-svg-wrap" v-html="RAW_ICONS.douban" />
                   <span class="rating-val font-weight-bold color-douban">
                     {{ getMediaRatingInfo(activeMedia, "douban").score }}
@@ -119,6 +130,7 @@
                   <span v-if="getMediaRatingInfo(activeMedia, 'douban').votes" class="rating-votes text-caption">
                     {{ getMediaRatingInfo(activeMedia, "douban").votes }}
                   </span>
+                  <v-icon v-if="activeMedia.douban_id" icon="mdi-open-in-new" size="10" class="rating-ext-icon ml-0.5" />
                 </div>
                 <div
                   v-if="
@@ -127,9 +139,13 @@
                     !getMediaRatingInfo(activeMedia, 'douban') &&
                     getRatingValue(activeMedia) > 0
                   "
-                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1">
+                  class="meta-tag-pill meta-tag-pill--rating d-flex align-center ga-1"
+                  :class="{ 'meta-tag-pill--clickable': Boolean(activeMedia.tmdb_id || activeMedia.imdb_id) }"
+                  :title="activeMedia.tmdb_id ? `点击前往 TMDB 查看条目 (ID: ${activeMedia.tmdb_id})` : ''"
+                  @click="openExternalRating(activeMedia.tmdb_id ? 'tmdb' : 'imdb')">
                   <span class="pill-brand-svg tmdb-svg-wrap" v-html="RAW_ICONS.tmdb" />
                   <span class="rating-val font-weight-bold color-tmdb">{{ getRatingText(activeMedia) }}/10</span>
+                  <v-icon v-if="activeMedia.tmdb_id || activeMedia.imdb_id" icon="mdi-open-in-new" size="10" class="rating-ext-icon ml-0.5" />
                 </div>
                 <span
                   v-for="genre in getMediaGenresList(activeMedia)"
@@ -138,77 +154,15 @@
                   {{ genre }}
                 </span>
               </div>
-
-              <!-- ID 徽章 -->
-              <div
-                v-if="
-                  !fullscreen &&
-                  (activeMedia.tmdb_id ||
-                    activeMedia.imdb_id ||
-                    activeMedia.douban_id ||
-                    activeMedia.tvdb_id ||
-                    activeMedia.bangumi_id)
-                "
-                class="hero-top-ids d-none d-sm-flex align-center ga-1.5 flex-wrap">
-                <span
-                  v-if="activeMedia.tmdb_id"
-                  class="media-id-pill media-id-pill--tmdb"
-                  title="点击复制 TMDB ID"
-                  @click="copyIdText('TMDB', activeMedia.tmdb_id)">
-                  <span class="id-brand-logo tmdb-logo-icon" v-html="RAW_ICONS.tmdb" />
-                  <span class="id-label">{{ activeMedia.tmdb_id }}</span>
-                </span>
-                <span
-                  v-if="activeMedia.imdb_id"
-                  class="media-id-pill media-id-pill--imdb"
-                  title="点击复制 IMDb ID"
-                  @click="copyIdText('IMDb', activeMedia.imdb_id)">
-                  <span class="id-brand-logo imdb-logo-icon" v-html="RAW_ICONS.imdb" />
-                  <span class="id-label">{{ activeMedia.imdb_id }}</span>
-                </span>
-                <span
-                  v-if="activeMedia.douban_id"
-                  class="media-id-pill media-id-pill--douban"
-                  title="点击复制豆瓣 ID"
-                  @click="copyIdText('豆瓣', activeMedia.douban_id)">
-                  <span class="id-brand-logo douban-logo-icon" v-html="RAW_ICONS.douban" />
-                  <span class="id-label">{{ activeMedia.douban_id }}</span>
-                </span>
-                <span
-                  v-if="activeMedia.bangumi_id"
-                  class="media-id-pill"
-                  title="点击复制 Bangumi ID"
-                  @click="copyIdText('Bangumi', activeMedia.bangumi_id)">
-                  <v-icon icon="mdi-television-classic" size="13" class="mr-1 text-pink-lighten-2" />
-                  BGM: {{ activeMedia.bangumi_id }}
-                </span>
-                <span
-                  v-if="activeMedia.tvdb_id"
-                  class="media-id-pill"
-                  title="点击复制 TVDB ID"
-                  @click="copyIdText('TVDB', activeMedia.tvdb_id)">
-                  <v-icon icon="mdi-database" size="13" class="mr-1 text-blue-lighten-2" />
-                  TVDB: {{ activeMedia.tvdb_id }}
-                </span>
-                <span
-                  v-if="activeMedia.anilist_id"
-                  class="media-id-pill"
-                  title="点击复制 AniList ID"
-                  @click="copyIdText('AniList', activeMedia.anilist_id)">
-                  <v-icon icon="mdi-format-list-bulleted" size="13" class="mr-1 text-purple-lighten-2" />
-                  AniList: {{ activeMedia.anilist_id }}
-                </span>
-                <span
-                  v-if="activeMedia.anidb_id"
-                  class="media-id-pill"
-                  title="点击复制 AniDB ID"
-                  @click="copyIdText('AniDB', activeMedia.anidb_id)">
-                  <v-icon icon="mdi-database-outline" size="13" class="mr-1 text-orange-lighten-2" />
-                  AniDB: {{ activeMedia.anidb_id }}
-                </span>
-              </div>
             </div>
-            <p class="hero-overview" :title="activeMedia.overview">
+            <p
+              class="hero-overview"
+              :class="{
+                'hero-overview--with-console': activeMedia.media_type === 'tv' && activeMediaSeasons.length,
+                'hero-overview--expanded': isOverviewExpanded,
+              }"
+              :title="isOverviewExpanded ? '点击收起简介' : (activeMedia.overview || '暂无作品简介。')"
+              @click="isOverviewExpanded = !isOverviewExpanded">
               {{ activeMedia.overview || "暂无作品简介。" }}
             </p>
 
@@ -420,9 +374,13 @@
         <div v-else class="resource-list d-flex flex-column ga-1.5">
           <div v-for="(res, idx) in currentChannelFilteredResources" :key="resKey(res, idx)" class="resource-row-item">
             <div class="resource-row-header d-flex align-center justify-space-between ga-2">
-              <div class="resource-title-box min-w-0 flex-grow-1">
-                <span class="resource-title-text" :title="res.title">
+              <div class="resource-title-box min-w-0 flex-grow-1 d-flex align-center ga-1.5">
+                <span class="resource-title-text min-w-0 flex-grow-1" :title="res.title">
                   {{ res.title }}
+                </span>
+                <span v-if="res.seeders" class="resource-seeders-badge flex-shrink-0" title="做种数">
+                  <v-icon icon="mdi-arrow-up" size="11" />
+                  {{ res.seeders }}
                 </span>
               </div>
 
@@ -505,13 +463,8 @@
               </div>
             </div>
             <div class="resource-row-meta d-flex align-center flex-wrap ga-1.5 mt-1">
-              <span v-if="getResourceSize(res)" class="resource-size-badge font-weight-bold">
+              <span v-if="getResourceSize(res)" class="quality-tag-pill tag-size" title="文件体积">
                 {{ getResourceSize(res) }}
-              </span>
-
-              <span v-if="res.seeders" class="resource-seeders-badge text-success font-weight-bold" title="做种数">
-                <v-icon icon="mdi-arrow-up" size="11" />
-                {{ res.seeders }}
               </span>
 
               <span
@@ -543,7 +496,7 @@
 </template>
 
 <script setup>
-import {computed} from "vue";
+import {computed, ref, watch} from "vue";
 import {
   canPreviewResource as defaultCanPreviewResource,
   copyToClipboard as defaultCopyToClipboard,
@@ -630,6 +583,14 @@ const emit = defineEmits([
 ]);
 
 const model = computed({get: () => props.modelValue, set: (value) => emit("update:modelValue", value)});
+
+const isOverviewExpanded = ref(false);
+watch(
+  () => props.activeMedia,
+  () => {
+    isOverviewExpanded.value = false;
+  }
+);
 
 const channelModel = computed({
   get: () => props.activeChannelTab,
@@ -806,6 +767,23 @@ function copyIdText(type, id) {
     props.copyIdText(type, id);
   } else {
     copyToClipboard(String(id));
+  }
+}
+
+function openExternalRating(source) {
+  const m = props.activeMedia;
+  if (!m) return;
+  let url = "";
+  if (source === "tmdb" && m.tmdb_id) {
+    const type = m.media_type === "tv" ? "tv" : "movie";
+    url = `https://www.themoviedb.org/${type}/${m.tmdb_id}`;
+  } else if (source === "imdb" && m.imdb_id) {
+    url = `https://www.imdb.com/title/${m.imdb_id}/`;
+  } else if (source === "douban" && m.douban_id) {
+    url = `https://movie.douban.com/subject/${m.douban_id}/`;
+  }
+  if (url) {
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 }
 
@@ -1216,6 +1194,31 @@ const closeMediaDetail = () => {
   gap: 5px !important;
 }
 
+.meta-tag-pill--clickable {
+  cursor: pointer !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.meta-tag-pill--clickable:hover {
+  transform: translateY(-2px) !important;
+  background: rgba(255, 255, 255, 0.22) !important;
+  border-color: rgba(255, 255, 255, 0.38) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+}
+
+.meta-tag-pill--clickable:active {
+  transform: translateY(0) !important;
+}
+
+.rating-ext-icon {
+  opacity: 0.65;
+  transition: opacity 0.15s ease;
+}
+
+.meta-tag-pill--clickable:hover .rating-ext-icon {
+  opacity: 1;
+}
+
 .pill-brand-svg {
   display: inline-flex !important;
   align-items: center !important;
@@ -1265,21 +1268,44 @@ const closeMediaDetail = () => {
 }
 
 .hero-overview {
-  font-size: 0.84rem;
-  line-height: 1.65;
-  color: rgba(255, 255, 255, 0.85) !important;
-  letter-spacing: 0.3px;
+  font-family: Georgia, "Songti SC", "Source Han Serif SC", "Noto Serif SC", "STSong", "SimSun", serif;
+  font-size: 0.88rem;
+  line-height: 1.72;
+  letter-spacing: 0.03em;
+  text-indent: 2em;
+  color: rgba(255, 255, 255, 0.82) !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
   text-align: justify;
-  text-justify: inter-ideograph;
   word-break: break-word;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-top: 6px;
+  margin-top: 8px;
   margin-bottom: 0;
   max-width: 860px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  user-select: text;
+  cursor: pointer;
+  transition: color 0.15s ease;
+
+  &:hover {
+    color: rgba(255, 255, 255, 0.96) !important;
+  }
+
+  &.hero-overview--with-console {
+    -webkit-line-clamp: 2;
+  }
+
+  &.hero-overview--expanded {
+    display: block !important;
+    -webkit-line-clamp: unset !important;
+    max-height: 240px;
+    overflow-y: auto;
+  }
 }
 
 .hero-library-merged {
@@ -1312,10 +1338,7 @@ const closeMediaDetail = () => {
 }
 
 .hero-top-ids {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  flex-wrap: wrap !important;
+  display: none !important;
 }
 
 .media-id-pill {
@@ -1776,11 +1799,26 @@ const closeMediaDetail = () => {
 }
 
 .resource-seeders-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+  padding: 1px 6px !important;
+  border-radius: 4px !important;
   font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  color: #10b981 !important;
+  background: rgba(16, 185, 129, 0.12) !important;
+  border: 1px solid rgba(16, 185, 129, 0.3) !important;
   white-space: nowrap !important;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+  user-select: none !important;
+  line-height: 1.2 !important;
+}
+
+.tag-size {
+  color: rgb(var(--v-theme-primary)) !important;
+  border-color: rgba(var(--v-theme-primary), 0.38) !important;
+  background: rgba(var(--v-theme-primary), 0.1) !important;
+  font-weight: 700 !important;
 }
 
 /* ================= 资源规格与分类微标签 ================= */
@@ -2336,16 +2374,35 @@ const closeMediaDetail = () => {
   }
 
   .hero-overview {
+    font-family: Georgia, "Songti SC", "Source Han Serif SC", "Noto Serif SC", "STSong", "SimSun", serif !important;
+    text-indent: 2em !important;
+    text-align: justify !important;
     display: -webkit-box !important;
-    -webkit-line-clamp: 2 !important;
+    -webkit-line-clamp: 3 !important;
     -webkit-box-orient: vertical !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    font-size: 0.7rem !important;
-    line-height: 1.35 !important;
-    color: rgba(255, 255, 255, 0.72) !important;
-    margin-top: 2px !important;
+    font-size: 0.74rem !important;
+    line-height: 1.45 !important;
+    letter-spacing: 0.02em !important;
+    color: rgba(255, 255, 255, 0.78) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin-top: 4px !important;
     margin-bottom: 0 !important;
+
+    &.hero-overview--with-console {
+      -webkit-line-clamp: 2 !important;
+    }
+
+    &.hero-overview--expanded {
+      display: block !important;
+      -webkit-line-clamp: unset !important;
+      max-height: 180px !important;
+      overflow-y: auto !important;
+    }
   }
 
   /* 移动端选集栏精简化 */

@@ -462,7 +462,7 @@ class PluginEventHandler(OwnerDelegator):
             logger.info(
                 f"Telegram 分享链接识别：进度={index}/{len(items)}，"
                 f"类型={resource_type_name(resource_type, '未知')}，"
-                f"标题={item['title'] or '从分享内容识别'}"
+                f"标题={item['title'] or '从分享内容识别'}（优先按链接内容识别）"
             )
             self._submit_remote_links(
                 event_data=item_event,
