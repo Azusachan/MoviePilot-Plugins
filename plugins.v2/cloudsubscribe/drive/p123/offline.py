@@ -158,11 +158,7 @@ class P123OfflineService:
             if not force and self._updated_at and time.time() - self._updated_at < self.CACHE_TTL:
                 return [dict(task) for task in self._tasks]
         try:
-            response = self.client.offline_task_list({
-                "current_page": 1,
-                "page_size": 100,
-                "status_arr": [0, 1, 2, 3, 4],
-            })
+            response = self.client.list_offline(page=1, page_size=100)
             if not is_success(response):
                 raise RuntimeError(response.get("message") or "读取123离线任务失败")
             self._native_task_ids = {}
@@ -220,11 +216,7 @@ class P123OfflineService:
 
     def restart_offline_task(self, task_id: str) -> bool:
         native_id = self._native_id(task_id)
-        response = self.client.offline_task_abort({
-            "task_ids": [int(native_id) if native_id.isdigit() else native_id],
-            "is_abort": False,
-            "all": False,
-        })
+        response = self.client.abort_offline([native_id], is_abort=False)
         if not is_success(response):
             raise RuntimeError(response.get("message") or "重试123离线任务失败")
         with self._lock:
@@ -235,9 +227,7 @@ class P123OfflineService:
             self, task_id: str, delete_source_file: bool = False
     ) -> bool:
         native_id = self._native_id(task_id)
-        response = self.client.offline_task_delete(
-            int(native_id) if native_id.isdigit() else native_id
-        )
+        response = self.client.delete_offline([native_id])
         if not is_success(response):
             raise RuntimeError(response.get("message") or "删除123离线任务失败")
         with self._lock:
@@ -260,9 +250,7 @@ class P123OfflineService:
         if not normalized:
             raise ValueError("请选择需要删除的离线任务")
         native_ids = [self._native_id(value) for value in normalized]
-        response = self.client.offline_task_delete([
-            int(value) if value.isdigit() else value for value in native_ids
-        ])
+        response = self.client.delete_offline(native_ids)
         if not is_success(response):
             raise RuntimeError(response.get("message") or "批量删除123离线任务失败")
         removed = {value.upper() for value in normalized}
@@ -284,9 +272,7 @@ class P123OfflineService:
             logger.error(f"添加123离线下载失败：无法获取或创建目标目录 {save_path}")
             return False
         try:
-            response = self.client.offline_add(
-                str(url).strip(), upload_dir=int(lookup.directory_id or 0)
-            )
+            response = self.client.add_offline(str(url).strip(), upload_dir=lookup.directory_id)
             if not is_success(response):
                 logger.error(
                     f"添加123离线下载失败：{response.get('message') or '任务创建失败'}"

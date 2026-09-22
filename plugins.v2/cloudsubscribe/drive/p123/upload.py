@@ -16,7 +16,7 @@ from .files import P123FileService
 
 @dataclass
 class P123UploadService:
-    """复用 p123client 的秒传、预签名分片和完成接口。"""
+    """123 网盘秒传、预签名分片和完成接口封装。"""
 
     client: Any
     files: P123FileService
@@ -38,14 +38,12 @@ class P123UploadService:
         lookup = self.files.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             raise RuntimeError(f"123 本地上传目录不可用：{save_path}")
-        response = self.client.upload_request({
-            "etag": checksum.lower(),
-            "fileName": target_name,
-            "size": int(size),
-            "parentFileId": int(lookup.directory_id or 0),
-            "type": 0,
-            "duplicate": 2,
-        })
+        response = self.client.init_upload(
+            filename=target_name,
+            size=int(size),
+            etag=checksum.lower(),
+            parent_id=lookup.directory_id,
+        )
         check_response(response)
         if not (response.get("data") or {}).get("Reuse"):
             return False
@@ -60,7 +58,7 @@ class P123UploadService:
             progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> bool:
         if not P123_AVAILABLE:
-            logger.error("123 本地上传不可用：p123client 未安装")
+            logger.error("123 本地上传不可用")
             return False
         source = Path(str(local_path or ""))
         if not source.is_file():
@@ -74,10 +72,14 @@ class P123UploadService:
         upload_name = str(target_name or source.name).strip()
         file_size = source.stat().st_size
         try:
-            upload_data = self._initialize_upload(
-                lookup.directory_id, upload_name, file_size,
-                self._file_md5(source),
+            response = self.client.init_upload(
+                filename=upload_name,
+                size=file_size,
+                etag=self._file_md5(source),
+                parent_id=lookup.directory_id,
             )
+            check_response(response)
+            upload_data = response.get("data") or {}
             if upload_data.get("Reuse"):
                 if progress_callback:
                     progress_callback(file_size, file_size)
@@ -86,48 +88,61 @@ class P123UploadService:
             slice_size = int(upload_data.get("SliceSize") or 0)
             if slice_size <= 0:
                 raise RuntimeError("上传初始化未返回有效分片大小")
-            request_kwargs = {
-                "method": "PUT",
-                "headers": {"authorization": ""},
-                "parse": ...,
-            }
+
+            bucket = upload_data.get("Bucket") or upload_data.get("bucket")
+            key = upload_data.get("Key") or upload_data.get("key")
+            upload_id = upload_data.get("UploadId") or upload_data.get("uploadId")
+            storage_node = upload_data.get("StorageNode") or upload_data.get("storageNode") or ""
+
             if file_size > slice_size:
                 with source.open("rb") as file:
                     part_number = 1
                     transferred = 0
                     while chunk := file.read(slice_size):
-                        upload_data["partNumberStart"] = part_number
-                        upload_data["partNumberEnd"] = part_number + 1
-                        prepared = self.client.upload_prepare(upload_data)
+                        prepared = self.client.get_upload_urls(
+                            bucket=bucket,
+                            key=key,
+                            upload_id=upload_id,
+                            start_part=part_number,
+                            end_part=part_number + 1,
+                            storage_node=storage_node,
+                        )
                         check_response(prepared)
                         upload_url = str(
-                            (prepared.get("data") or {}).get("presignedUrls", {}).get(
-                                str(part_number)
-                            )
-                            or ""
+                            (prepared.get("data") or {}).get("presignedUrls", {}).get(str(part_number)) or ""
                         )
                         if not upload_url:
                             raise RuntimeError(f"第 {part_number} 个分片未返回上传地址")
-                        self.client.request(upload_url, data=chunk, **request_kwargs)
+                        self.client.request(upload_url, method="PUT", data=chunk, headers={"authorization": ""})
                         transferred += len(chunk)
                         if progress_callback:
                             progress_callback(transferred, file_size)
                         part_number += 1
             else:
-                authorized = self.client.upload_auth(upload_data)
+                authorized = self.client.get_upload_url(
+                    bucket=bucket,
+                    key=key,
+                    upload_id=upload_id,
+                    storage_node=storage_node,
+                )
                 check_response(authorized)
                 upload_url = str(
-                    (authorized.get("data") or {}).get("presignedUrls", {}).get("1")
-                    or ""
+                    (authorized.get("data") or {}).get("presignedUrls", {}).get("1") or ""
                 )
                 if not upload_url:
                     raise RuntimeError("上传授权未返回上传地址")
-                self.client.request(upload_url, data=source.read_bytes(), **request_kwargs)
+                self.client.request(upload_url, method="PUT", data=source.read_bytes(), headers={"authorization": ""})
                 if progress_callback:
                     progress_callback(file_size, file_size)
 
-            upload_data["isMultipart"] = file_size > slice_size
-            completed = self.client.upload_complete(upload_data)
+            completed = self.client.complete_upload(
+                file_id=upload_data.get("FileId") or upload_data.get("fileId"),
+                upload_id=upload_id,
+                bucket=bucket,
+                key=key,
+                is_multipart=file_size > slice_size,
+                storage_node=storage_node,
+            )
             check_response(completed)
             return self._confirm_upload(save_path, upload_name, source)
         except Exception as error:
@@ -160,9 +175,14 @@ class P123UploadService:
             raise RuntimeError(f"123 流水线上传目录不可用：{save_path}")
         upload_name = str(target_name or source.name).strip()
         try:
-            upload_data = self._initialize_upload(
-                lookup.directory_id, upload_name, file_size, checksum.lower()
+            response = self.client.init_upload(
+                filename=upload_name,
+                size=file_size,
+                etag=checksum.lower(),
+                parent_id=lookup.directory_id,
             )
+            check_response(response)
+            upload_data = response.get("data") or {}
             if upload_data.get("Reuse"):
                 if progress_callback:
                     progress_callback(file_size, file_size)
@@ -171,11 +191,12 @@ class P123UploadService:
             slice_size = int(upload_data.get("SliceSize") or 0)
             if slice_size <= 0:
                 raise RuntimeError("上传初始化未返回有效分片大小")
-            request_kwargs = {
-                "method": "PUT",
-                "headers": {"authorization": ""},
-                "parse": ...,
-            }
+
+            bucket = upload_data.get("Bucket") or upload_data.get("bucket")
+            key = upload_data.get("Key") or upload_data.get("key")
+            upload_id = upload_data.get("UploadId") or upload_data.get("uploadId")
+            storage_node = upload_data.get("StorageNode") or upload_data.get("storageNode") or ""
+
             part_number = 1
             transferred = 0
             while transferred < file_size:
@@ -191,34 +212,45 @@ class P123UploadService:
                         f"流水线上传分片尚未完整落盘：{transferred}-{end}"
                     )
                 if file_size > slice_size:
-                    upload_data["partNumberStart"] = part_number
-                    upload_data["partNumberEnd"] = part_number + 1
-                    prepared = self.client.upload_prepare(upload_data)
+                    prepared = self.client.get_upload_urls(
+                        bucket=bucket,
+                        key=key,
+                        upload_id=upload_id,
+                        start_part=part_number,
+                        end_part=part_number + 1,
+                        storage_node=storage_node,
+                    )
                     check_response(prepared)
                     upload_url = str(
-                        (prepared.get("data") or {}).get("presignedUrls", {}).get(
-                            str(part_number)
-                        )
-                        or ""
+                        (prepared.get("data") or {}).get("presignedUrls", {}).get(str(part_number)) or ""
                     )
                 else:
-                    authorized = self.client.upload_auth(upload_data)
+                    authorized = self.client.get_upload_url(
+                        bucket=bucket,
+                        key=key,
+                        upload_id=upload_id,
+                        storage_node=storage_node,
+                    )
                     check_response(authorized)
                     upload_url = str(
-                        (authorized.get("data") or {}).get(
-                            "presignedUrls", {}
-                        ).get("1") or ""
+                        (authorized.get("data") or {}).get("presignedUrls", {}).get("1") or ""
                     )
                 if not upload_url:
                     raise RuntimeError(f"第 {part_number} 个分片未返回上传地址")
-                self.client.request(upload_url, data=chunk, **request_kwargs)
+                self.client.request(upload_url, method="PUT", data=chunk, headers={"authorization": ""})
                 transferred += len(chunk)
                 if progress_callback:
                     progress_callback(transferred, file_size)
                 part_number += 1
 
-            upload_data["isMultipart"] = file_size > slice_size
-            completed = self.client.upload_complete(upload_data)
+            completed = self.client.complete_upload(
+                file_id=upload_data.get("FileId") or upload_data.get("fileId"),
+                upload_id=upload_id,
+                bucket=bucket,
+                key=key,
+                is_multipart=file_size > slice_size,
+                storage_node=storage_node,
+            )
             check_response(completed)
             return self._confirm_upload(save_path, upload_name, source)
         except InterruptedError:
@@ -226,21 +258,6 @@ class P123UploadService:
         except Exception as error:
             logger.error(f"123 流水线上传失败：{upload_name}，{error}")
             return False
-
-    def _initialize_upload(
-            self, directory_id: str, upload_name: str,
-            file_size: int, file_md5: str,
-    ) -> dict:
-        response = self.client.upload_request({
-            "etag": file_md5,
-            "fileName": upload_name,
-            "size": int(file_size),
-            "parentFileId": int(directory_id or 0),
-            "type": 0,
-            "duplicate": 2,
-        })
-        check_response(response)
-        return response.get("data") or {}
 
     def _confirm_upload(self, save_path: str, upload_name: str, source: Path) -> bool:
         for index in range(10):

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 from .client import TianyiClient
 from .provider import TianyiDrive, create_tianyi_provider
+from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 
 
 class TianyiDriverDefinition(DriverDefinition):
@@ -18,6 +18,7 @@ class TianyiDriverDefinition(DriverDefinition):
     order = 50
     qrcode_service_type = TianyiClient
     qrcode_credentials = {
+        "cookie": "tianyi_cookie",
         "access_token": "tianyi_access_token",
         "refresh_token": "tianyi_refresh_token",
         "session_key": "tianyi_session_key",
