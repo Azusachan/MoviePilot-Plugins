@@ -36,6 +36,10 @@ IOS_USER_AGENT = (
 )
 
 
+class P115CheckinError(RuntimeError):
+    """115 签到接口错误。"""
+
+
 def _accepts_extra_kwargs(func: Callable) -> bool:
     try:
         return any(
@@ -575,3 +579,37 @@ class P115ClientManager:
             "offline_quota": int(offline_quota_count),
         })
         return counts
+
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        """每日签到并领取枫叶。"""
+        if not PAVAILABLE:
+            raise P115CheckinError("p115client 未安装，无法执行 115 签到")
+        if not self.client:
+            raise P115CheckinError("115 客户端未初始化")
+        status = check_response(self.client.user_points_sign())
+        data = status.get("data") or {}
+        if int(data.get("is_sign_today") or 0) == 1:
+            return {
+                "success": True,
+                "already_checked_in": True,
+                "status": "今日已签到",
+                "message": "今日已签到，无需重复签到",
+                "signin_points": 0,
+                "points_change": 0,
+                "signin_days": data.get("continuous_day"),
+                "status_code": 200,
+            }
+        result = check_response(self.client.user_points_sign_post())
+        result_data = result.get("data") or {}
+        points = int(result_data.get("points_num") or 0)
+        days = result_data.get("continuous_day")
+        return {
+            "success": True,
+            "status": "签到成功",
+            "message": f"签到成功，连续签到 {days or 0} 天，获得 {points} 枫叶",
+            "signin_points": points,
+            "points_change": points,
+            "points_after": result_data.get("points") or result_data.get("balance"),
+            "signin_days": days,
+            "status_code": 200,
+        }

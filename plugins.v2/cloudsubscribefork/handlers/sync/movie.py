@@ -87,7 +87,7 @@ class MovieSyncProcessor(OwnerDelegator):
             existing_movie = None
             upgrade_target_exists = False
             if is_best_version:
-                emby_has_size = False
+                media_server_has_size = False
                 manual_movie = (
                         (getattr(subscribe, "_manual_media_baseline", {}) or {}).get("movie")
                         or {}
@@ -105,7 +105,7 @@ class MovieSyncProcessor(OwnerDelegator):
                         f"电影 {subscribe.name} 洗版基线采用所选媒体库内容："
                         f"{manual_name}，评分 {manual_score}，{format_size(manual_size)}"
                     )
-                for media_item in self._emby_media_resolver.movie_media(
+                for media_item in self._media_server_resolver.movie_media(
                         chain=self._chain, mediainfo=mediainfo
                 ):
                     media_file = Path(str(media_item.get("path") or ""))
@@ -113,19 +113,19 @@ class MovieSyncProcessor(OwnerDelegator):
                     rule_title = str(
                         media_item.get("rule_title") or media_file.name
                     ).strip()
-                    emby_has_size = emby_has_size or media_size > 0
-                    emby_score = self._get_mp_rule_score(
+                    media_server_has_size = media_server_has_size or media_size > 0
+                    media_server_score = self._get_mp_rule_score(
                         rule_title, media_size, subscribe, 0, mediainfo
                     )
                     if media_size:
                         movie_history_size = media_size
-                    if emby_score > movie_history_score:
-                        movie_history_score = emby_score
-                    if media_size or emby_score > 0:
+                    if media_server_score > movie_history_score:
+                        movie_history_score = media_server_score
+                    if media_size or media_server_score > 0:
                         logger.info(
-                            f"电影 {subscribe.name} 洗版基线采用 Emby 媒体："
+                            f"电影 {subscribe.name} 洗版基线采用媒体服务器内容："
                             f"{media_file.name}，媒体详情 {rule_title}，"
-                            f"评分 {emby_score}，{format_size(media_size)}"
+                            f"评分 {media_server_score}，{format_size(media_size)}"
                         )
                 existing_movie = self._timed_sync_call(
                     "cloud_scan",
@@ -143,11 +143,11 @@ class MovieSyncProcessor(OwnerDelegator):
                             target_file=existing_file,
                         )
                         if not existing_strm:
-                            logger.warning(
+                            logger.debug(
                                 f"电影 {subscribe.name} 真实网盘文件已存在，"
                                 "但 STRM 修复尚未完成"
                             )
-                    if not emby_has_size:
+                    if not media_server_has_size:
                         file_name, target_file = existing_name, existing_file
                         existing_size = int(getattr(target_file, "size", 0) or 0)
                         existing_score = self._get_mp_rule_score(
@@ -157,7 +157,7 @@ class MovieSyncProcessor(OwnerDelegator):
                             movie_history_score = existing_score
                             movie_history_size = existing_size
                         logger.info(
-                            f"电影 {subscribe.name} Emby 未提供有效大小，"
+                            f"电影 {subscribe.name} 媒体服务器未提供有效大小，"
                             f"网盘回退基线：{movie_history_score} "
                             f"（{file_name}，{format_size(existing_size)}）"
                         )
@@ -230,7 +230,9 @@ class MovieSyncProcessor(OwnerDelegator):
                     f"收到 {len(source_results['manual'])} 个资源链接"
                 )
             else:
-                source_order = self._search_handler.get_enabled_sources()
+                source_order = self._search_handler.get_enabled_sources(
+                    media_type=MediaType.MOVIE
+                )
                 source_results = self._search_handler.search_sources(
                     sources=source_order,
                     mediainfo=mediainfo,
@@ -323,7 +325,7 @@ class MovieSyncProcessor(OwnerDelegator):
                     continue
 
                 if not self._is_supported_resource(resource, share_url):
-                    logger.warning(
+                    logger.debug(
                         f"跳过当前同步链不支持的资源类型 "
                         f"{self._supported_resource_type(resource, share_url)}：{resource_title}"
                     )
@@ -339,14 +341,15 @@ class MovieSyncProcessor(OwnerDelegator):
                 )
 
                 try:
-                    if self._is_offline_url(share_url) or self._is_magnet_url(share_url):
+                    is_offline_resource = self._is_offline_url(share_url) or self._is_magnet_url(share_url)
+                    if is_offline_resource:
                         if self._is_offline_blacklisted(resource, share_url):
-                            logger.info(
-                                f"🚫 离线任务命中黑名单（1天内失败或超时），跳过该资源并选择其他候选：{resource_title}"
+                            logger.debug(
+                                f"离线资源命中黑名单跳过：{resource_title}"
                             )
                             continue
 
-                    if self._is_magnet_url(share_url):
+                    if is_offline_resource:
                         provider_name = self._prepare_magnet_resource(
                             resource, share_url
                         )

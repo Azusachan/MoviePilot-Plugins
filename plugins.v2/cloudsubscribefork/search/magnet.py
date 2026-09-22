@@ -1,9 +1,75 @@
-"""Magnet 搜索渠道共用的候选规范化。"""
-
-from typing import Any, Dict, Iterable, List
+import re
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 from .matching import unique_texts
 from ..utils.magnet import parse_magnet_metadata
+
+_SIZE_REGEX = re.compile(r"(\d+(?:\.\d+)?)\s*(PB|TB|GB|MB|KB|B)?", re.IGNORECASE)
+_MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>]*", re.IGNORECASE)
+_HASH_REGEX = re.compile(r"urn:btih:([a-zA-Z0-9]{32,40})", re.IGNORECASE)
+
+SIZE_UNITS = {
+    "B": 1,
+    "KB": 1024,
+    "MB": 1024 ** 2,
+    "GB": 1024 ** 3,
+    "TB": 1024 ** 4,
+    "PB": 1024 ** 5,
+}
+
+
+def parse_size_str(size_text: Any) -> int:
+    """解析字符串大小或数值为整数字节数。
+
+    支持例如 '1.5 GB'、'500MB'、'12,345 KB'、'1024'，或者已经是整型/浮点型的输入。
+    """
+    if size_text is None:
+        return 0
+    if isinstance(size_text, (int, float)):
+        return max(0, int(size_text))
+    text = str(size_text).strip().replace(",", "")
+    if not text:
+        return 0
+    match = _SIZE_REGEX.search(text)
+    if not match:
+        return 0
+    val = float(match.group(1))
+    unit = (match.group(2) or "B").upper()
+    return int(val * SIZE_UNITS.get(unit, 1))
+
+
+def extract_magnet_hash(text: str) -> Optional[str]:
+    """从文本或磁力链接中提取 32 或 40 位 hex/base32 的 info_hash（统一返回大写）。"""
+    if not text:
+        return None
+    match = _HASH_REGEX.search(text)
+    if match:
+        return match.group(1).upper()
+    bare = re.search(r"\b([a-fA-F0-9]{40}|[A-Z2-7a-z]{32})\b", text)
+    if bare:
+        return bare.group(1).upper()
+    return None
+
+
+def extract_magnet_links(text: str) -> List[str]:
+    """从文本中提取所有完整的磁力链接。"""
+    if not text:
+        return []
+    return [match.group(0) for match in _MAGNET_REGEX.finditer(text)]
+
+
+def build_magnet_url(info_hash: str, display_name: Optional[str] = None) -> str:
+    """标准构建磁力链接。"""
+    clean_hash = str(info_hash or "").strip().lower()
+    if not clean_hash:
+        return ""
+    base = f"magnet:?xt=urn:btih:{clean_hash}"
+    if display_name:
+        clean_name = str(display_name).strip()
+        if clean_name:
+            return f"{base}&dn={quote(clean_name)}"
+    return base
 
 
 def clear_cache(target: Any) -> int:

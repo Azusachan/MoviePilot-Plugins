@@ -230,17 +230,28 @@ class TianyiShareService:
 
     def transfer_file(
             self, share_url: str, file_id: str, save_path: str,
-            target_name: str, **kwargs,
+            target_name: str = "", **kwargs,
     ) -> bool:
-        return self._save(share_url, [str(file_id)], save_path)
+        success = self._save(share_url, [str(file_id)], save_path)
+        if not success and target_name:
+            if self.files.find_file(save_path, target_name):
+                return True
+        return success
 
     def transfer_files_batch(
             self, share_url: str, file_ids: list, save_path: str, **kwargs,
     ) -> tuple:
+        normalized = [str(value) for value in file_ids]
+        if not normalized:
+            return [], []
+        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
-                file_ids, kwargs.get("batch_size", 20),
+                normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 100,
         ):
-            (succeeded if self._save(share_url, batch, save_path) else failed).extend(batch)
+            if self._save(share_url, batch, save_path):
+                succeeded.extend(batch)
+            else:
+                failed.extend(batch)
         return succeeded, failed

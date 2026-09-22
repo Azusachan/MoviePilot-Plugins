@@ -129,7 +129,16 @@ class GuangyaClient:
                 headers=headers, json=json_data, timeout=self._timeout,
                 retry_exceptions=(requests.Timeout, requests.ConnectionError),
             )
-            if response.status_code == 401 and authenticated and retry_auth and self.refresh_token_value:
+            try:
+                payload = response.json() if response.text else {}
+            except ValueError:
+                payload = {"error": response.text[:300]}
+            auth_error = str(payload.get("error") or "").strip().lower()
+            auth_failed = (
+                    response.status_code in (401, 403)
+                    or auth_error in {"unauthenticated", "invalid_token", "token_expired"}
+            )
+            if auth_failed and authenticated and retry_auth and self.refresh_token_value:
                 if self.refresh_access_token():
                     return self.request(
                         method,
@@ -141,10 +150,6 @@ class GuangyaClient:
                         accept_error=accept_error,
                     )
             if response.status_code >= 400:
-                try:
-                    payload = response.json()
-                except ValueError:
-                    payload = {"error": response.text[:300]}
                 if accept_error:
                     return payload
                 return {
@@ -152,7 +157,7 @@ class GuangyaClient:
                     "msg": payload.get("message") or payload.get("error") or "请求失败",
                     "error": payload.get("error") or response.reason,
                 }
-            return response.json() if response.text else {"code": 0, "msg": "success"}
+            return payload or {"code": 0, "msg": "success"}
         except (requests.RequestException, ValueError) as error:
             logger.error(f"光鸭网盘请求失败：{url} - {error}")
             return {"code": -1, "msg": "error", "error": str(error)}

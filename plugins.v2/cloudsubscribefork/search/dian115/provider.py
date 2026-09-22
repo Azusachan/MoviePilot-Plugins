@@ -14,6 +14,7 @@ def create_dian115_provider(service: Dian115SearchService) -> SearchProvider:
             SearchCapability.RESOURCE_SEARCH: service,
             SearchCapability.RESOURCE_UNLOCK: service,
             SearchCapability.ACCOUNT: client,
+            SearchCapability.CHECKIN: client,
             SearchCapability.POINT_BUDGET: service.budget,
             SearchCapability.CACHE_MAINTENANCE: service,
             SearchCapability.LIFECYCLE: service,

@@ -287,7 +287,7 @@
       </v-card-actions>
     </v-card>
   </v-dialog>
-  <CloudDirectoryDialog
+  <DirectoryDialog
     v-model="cloudDirectoryVisible"
     :api="api"
     :plugin-id="pluginId"
@@ -303,7 +303,7 @@
 <script setup>
 import {computed, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
-import CloudDirectoryDialog from "./CloudDirectoryDialog.vue";
+import DirectoryDialog from "./DirectoryDialog.vue";
 
 const props = defineProps({
   modelValue: Boolean,

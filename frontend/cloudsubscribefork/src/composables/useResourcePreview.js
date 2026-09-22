@@ -70,6 +70,8 @@ export function useResourcePreview({
       target_season: item?.target_season ?? null,
       target_episodes: Array.isArray(item?.target_episodes) ? [...item.target_episodes] : [],
       provider_data: {...(item?.provider_data || {})},
+      episode_range: String(item?.episode_range || item?.remark || ""),
+      unlock_points: Number(item?.unlock_points || 0),
     };
     previewTargetSeason.value = item?.target_season ?? null;
     previewTargetEpisodes.value = Array.isArray(item?.target_episodes) ? [...item.target_episodes] : [];
@@ -87,13 +89,12 @@ export function useResourcePreview({
   }
 
   async function loadPreviewDirectory(parentId, breadcrumbs, token = nextPreviewRequest()) {
-    const pendingJuying = previewSource.value === "juying" && previewProviderData.value?.resource_id;
-    const pendingHdhive = previewSource.value === "hdhive" && Boolean(previewPendingResource.value.resource_ref);
-    const pendingSource =
-      ["seedhub", "pinglian"].includes(previewSource.value) &&
-      previewPendingResource.value.pending_resolution &&
-      !previewShareUrl.value;
-    if (!previewShareUrl.value && !pendingJuying && !pendingHdhive && !pendingSource) return;
+    const isPending =
+      !previewShareUrl.value &&
+      (Boolean(previewProviderData.value?.resource_id) ||
+        Boolean(previewPendingResource.value?.resource_ref) ||
+        Boolean(previewPendingResource.value?.pending_resolution));
+    if (!previewShareUrl.value && !isPending) return;
 
     const shareUrl = previewShareUrl.value;
     previewLoading.value = true;
@@ -112,6 +113,8 @@ export function useResourcePreview({
         provider_data: previewProviderData.value,
         target_season: previewTargetSeason.value,
         target_episodes: previewTargetEpisodes.value,
+        episode_range: previewPendingResource.value.episode_range || "",
+        unlock_points: previewPendingResource.value.unlock_points || 0,
       });
       if (!isPreviewRequestCurrent(token) || !previewVisible.value) return;
       if (response?.success === false) throw new Error(response.message || "资源预览失败");

@@ -6,6 +6,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from app.core.cache import TTLCache
+from app.log import logger
 
 from ..common import (
     CloudDriveFileServiceBase,
@@ -231,7 +232,8 @@ class QuarkFileService(CloudDriveFileServiceBase):
             self._invalidate_path_cache()
         if target_name and target_name != item.name:
             if not self.rename_file(save_path, item, target_name):
-                return None
+                logger.warning(f"夸克网盘文件移入目录后重命名失败，保留原名：{item.name} -> {target_name}")
+                return self.find_file(save_path, item.name)
         return self.find_file(save_path, target_name or item.name)
 
     def delete_file(self, file_id: str) -> bool:

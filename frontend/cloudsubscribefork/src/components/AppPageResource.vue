@@ -78,7 +78,6 @@
       :get-source-name="getSourceName"
       :search-channel="searchChannel"
       :res-key="resKey"
-      :get-extracted-tags="getExtractedTags"
       :get-tag-color-class="getTagColorClass"
       :get-resource-size="getResourceSize"
       :open-unlock-dialog="openUnlockDialog"
@@ -152,6 +151,15 @@ import {useMediaData} from "../composables/useMediaData";
 import {useSnackbar} from "../composables/useSnackbar";
 import {useSearchIntercept} from "../composables/useSearchIntercept";
 import {useResourcePreview} from "../composables/useResourcePreview";
+import {
+  applyDisplayCatalog,
+  getNormalizedResourceType,
+  getResourceTypeIcon,
+  getResourceTypeName,
+  getSourceName,
+  isOfflineResourceType,
+  unwrapApiResponse,
+} from "../composables/resourceUtils";
 
 const props = defineProps({
   api: {type: Object, default: () => ({})},
@@ -258,7 +266,14 @@ function getMediaGenresList(item) {
     const list = item.genre_ids.map((id) => TMDB_GENRES[id] || id).filter(Boolean);
     if (list.length) return list;
   }
-  if (Array.isArray(item.tags)) return item.tags;
+  if (Array.isArray(item.tags)) {
+    return item.tags.filter((t) => {
+      const s = String(t || "").trim();
+      if (!s) return false;
+      if (/^\d{4}(\.\d+)?$/.test(s)) return false;
+      return true;
+    });
+  }
   return [];
 }
 
@@ -340,7 +355,7 @@ const {
   searchChannel,
   onChannelTabChange,
   getChannelCount,
-  closeMediaDetail,
+  syncAvailableChannels,
 } = useMediaDetail({
   api: resourceApi,
   pluginId: resourcePluginId,
@@ -391,27 +406,6 @@ const targetUnlockIndex = ref(-1);
 const unlocking = ref(false);
 const unlockError = ref("");
 const unlockingKey = ref("");
-
-function isPointUnlockResource(res) {
-  const source = String(res?.source || "").toLowerCase();
-  return ["hdhive", "dian115"].includes(source);
-}
-
-function getResourcePointStatus(res) {
-  if (res?.need_unlock && Number(res.unlock_points || 0) > 0) {
-    return {
-      label: `${Number(res.unlock_points || 0)} 积分`,
-      color: "warning",
-    };
-  }
-  if (isPointUnlockResource(res) && Number(res?.unlock_points || 0) === 0) {
-    return {label: "免费", color: "success"};
-  }
-  if (res?.need_access) {
-    return {label: "需获取", color: "info"};
-  }
-  return null;
-}
 
 function openUnlockDialog(res, idx) {
   targetUnlockItem.value = res;
@@ -464,10 +458,6 @@ function copyIdText(type, val) {
   showMessage(`已复制 ${type} ID: ${val}`);
 }
 
-function mediaItemKey(item) {
-  return `${item.media_type || "m"}_${item.media_id || item.tmdb_id || item.douban_id || item.bangumi_id || item.anilist_id || item.title}_${item.year || ""}`;
-}
-
 function resKey(res, idx) {
   return `${res.source || "s"}_${res.url || res.title || idx}_${idx}`;
 }
@@ -515,14 +505,6 @@ function handlePosterError(item) {
   item._currentPoster = item.poster_url || "";
 }
 
-function getLibraryEpisodesCount(media) {
-  if (!media) return 0;
-  if (typeof media.library_episodes_total === "number") {
-    return media.library_episodes_total;
-  }
-  return (media.seasons || []).reduce((acc, s) => acc + (s.library_episodes_count || 0), 0);
-}
-
 const activeMediaSeasons = computed(() => {
   const seasons = activeMedia.value?.seasons || [];
   return seasons.filter((season) => {
@@ -564,101 +546,11 @@ function getLibrarySummary(media) {
   return [...new Set(names)].slice(0, 3).join("、");
 }
 
-function getSourceColor(source) {
-  const map = {
-    hdhive: "amber-darken-1",
-    piratebay: "teal",
-    uindex: "blue",
-    seedhub: "deep-purple",
-    pansou: "indigo",
-    juying: "orange",
-    pinglian: "cyan",
-    dian115: "amber-darken-2",
-  };
-  return map[String(source).toLowerCase()] || "grey";
-}
-
-function getSourceName(source) {
-  const map = {
-    pansou: "PanSou",
-    hdhive: "HDHive",
-    dian115: "Dian115",
-    juying: "聚影",
-    seedhub: "SeedHub",
-    pinglian: "盘链",
-    piratebay: "海盗湾",
-    uindex: "UIndex",
-    online_docs: "在线文档",
-  };
-  return map[String(source).toLowerCase()] || source || "未知";
-}
-
-function getTypeColor(type) {
-  const map = {
-    115: "primary",
-    quark: "amber-darken-3",
-    alipan: "blue",
-    baidu: "indigo",
-    uc: "deep-orange",
-    tianyi: "teal",
-    123: "purple",
-    xunlei: "light-blue-darken-1",
-    magnet: "red-darken-1",
-    ed2k: "blue-grey-darken-1",
-    pikpak: "deep-purple",
-  };
-  return map[String(type || "").toLowerCase()] || "blue-grey";
-}
-
-function getResourceTypeName(type) {
-  const map = {
-    115: "115网盘",
-    quark: "夸克网盘",
-    alipan: "阿里云盘",
-    baidu: "百度网盘",
-    uc: "UC网盘",
-    tianyi: "天翼云盘",
-    123: "123网盘",
-    xunlei: "迅雷网盘",
-    magnet: "磁力链接",
-    ed2k: "电驴链接",
-    torrent: "BT种子",
-    pikpak: "PikPak",
-    guangya: "光鸭网盘",
-  };
-  const key = String(type || "").toLowerCase();
-  return map[key] || (type ? String(type).toUpperCase() : "未知类型");
-}
-
-function getResourceTabIcon(type) {
-  const map = {
-    all: "mdi-apps",
-    115: "mdi-cloud",
-    quark: "mdi-cloud-outline",
-    alipan: "mdi-cloud-sync-outline",
-    baidu: "mdi-cloud-circle-outline",
-    uc: "mdi-cloud-download-outline",
-    tianyi: "mdi-cloud-check-outline",
-    123: "mdi-cloud-refresh-outline",
-    guangya: "mdi-cloud-outline",
-    xunlei: "mdi-flash",
-    magnet: "mdi-magnet",
-    ed2k: "mdi-link-variant",
-    torrent: "mdi-seed",
-    pikpak: "mdi-cloud-upload-outline",
-  };
-  return map[String(type || "").toLowerCase()] || "mdi-folder-outline";
-}
-
-function getResourceTypeIcon(type) {
-  return getResourceTabIcon(type);
-}
-
 function isCrossTransferResource(res) {
-  const t = String(res?.resource_type || "").toLowerCase();
-  const currentMainDrive = String(activePluginConfig.value?.cloud_drive || "115").toLowerCase();
-  if (!t || ["magnet", "ed2k", "cloud"].includes(t)) return false;
-  return t !== currentMainDrive;
+  if (!res?.resource_type && !res?.pan_type) return false;
+  const type = getNormalizedResourceType(res);
+  if (isOfflineResourceType(type)) return false;
+  return type !== getNormalizedResourceType({resource_type: activePluginConfig.value?.cloud_drive || "115"});
 }
 
 const crossDialogVisible = ref(false);
@@ -722,39 +614,6 @@ async function confirmCrossTransfer() {
   }
 }
 
-function getExtractedTags(res) {
-  const specs = [];
-  const rawTitle = String(res.title || "");
-  const title = rawTitle.toUpperCase();
-  if (/(?:\b|\[|\.)(?:4K|2160P|UHD)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("4K");
-  } else if (/(?:\b|\[|\.)(?:1080P|1080I|FHD)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("1080P");
-  } else if (/(?:\b|\[|\.)(?:720P)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("720P");
-  }
-  if (/\.ISO\b/i.test(title) || /\[\d+(?:\.\d+)?GB\]\.ISO/i.test(title)) {
-    specs.push("原盘ISO");
-  } else if (/REMUX/i.test(title)) {
-    specs.push("REMUX");
-  } else if (/(?:\b|\[|\.)(?:BDMV|BLURAY|BLU-RAY)(?:\b|\]|\.)/i.test(title)) {
-    specs.push("BluRay");
-  } else if (/WEB-DL|WEBDL|WEB-RIP/i.test(title)) {
-    specs.push("WEB-DL");
-  }
-  if (/DV|DOLBY\s*VISION|杜比视界/i.test(title)) specs.push("杜比视界");
-  if (/HDR10\+/i.test(title)) specs.push("HDR10+");
-  else if (/(?:\b|\[|\.)HDR10?(?:\b|\]|\.)/i.test(title)) specs.push("HDR");
-  if (/60FPS|60帧/i.test(title)) specs.push("60帧");
-  else if (/120FPS|120帧/i.test(title)) specs.push("120帧");
-  const languageTag = title.match(/内封(?:简繁英|简繁中英|简繁|简中|繁中|中文|英语|英文)/i);
-  if (languageTag) specs.push(languageTag[0]);
-  else if (/中字|内嵌|简繁|双语|中英|\bCHS\b|\bCHT\b/i.test(title)) specs.push("中字");
-  if (/国语|国配|国粤/i.test(title)) specs.push("国语");
-  if (/粤语/i.test(title)) specs.push("粤语");
-  if (/ATMOS|全景声/i.test(title)) specs.push("杜比全景声");
-  return specs;
-}
 
 function metadataLabels(value) {
   if (Array.isArray(value)) {
@@ -773,11 +632,6 @@ function metadataLabels(value) {
     : [];
 }
 
-function mediaCategory(item) {
-  const value = metadataLabels(item?.category || item?.metadata_category || item?.media_category);
-  return value[0] || (item?.media_type === "tv" ? "剧集" : "电影");
-}
-
 function mediaGenres(item) {
   const parsed = metadataLabels(item?.genres || item?.genre || item?.types);
   if (parsed && parsed.length) return parsed;
@@ -787,131 +641,7 @@ function mediaGenres(item) {
   return [];
 }
 
-function mediaRegions(item) {
-  return metadataLabels(item?.regions || item?.origin_country || item?.countries || item?.production_countries);
-}
-
-function mediaDisplayLabels(item) {
-  const mediaTypeLabel = item?.media_type === "tv" ? "剧集" : "电影";
-  return [
-    ...new Set(
-      [mediaCategory(item), ...mediaRegions(item), ...mediaGenres(item)].filter(
-        (value) => value && value !== mediaTypeLabel,
-      ),
-    ),
-  ];
-}
-
-const mediaFilterTranslations = {
-  category: {
-    movie: "电影",
-    movies: "电影",
-    film: "电影",
-    tv: "剧集",
-    television: "剧集",
-    series: "剧集",
-    anime: "动漫",
-    animation: "动漫",
-    documentary: "纪录片",
-    variety: "综艺",
-  },
-  type: {
-    action: "动作",
-    adventure: "冒险",
-    animation: "动画",
-    comedy: "喜剧",
-    crime: "犯罪",
-    documentary: "纪录片",
-    drama: "剧情",
-    family: "家庭",
-    fantasy: "奇幻",
-    history: "历史",
-    horror: "恐怖",
-    music: "音乐",
-    mystery: "悬疑",
-    romance: "爱情",
-    "science fiction": "科幻",
-    "sci-fi": "科幻",
-    "tv movie": "电视电影",
-    thriller: "惊悚",
-    war: "战争",
-    western: "西部",
-    reality: "真人秀",
-    news: "新闻",
-    kids: "儿童",
-    talk: "脱口秀",
-  },
-  region: {
-    china: "中国大陆",
-    "mainland china": "中国大陆",
-    "hong kong": "中国香港",
-    taiwan: "中国台湾",
-    japan: "日本",
-    "south korea": "韩国",
-    korea: "韩国",
-    "united states": "美国",
-    usa: "美国",
-    "united kingdom": "英国",
-    uk: "英国",
-    france: "法国",
-    germany: "德国",
-    india: "印度",
-    thailand: "泰国",
-    canada: "加拿大",
-    australia: "澳大利亚",
-  },
-};
-
-function mediaFilterTitle(value, group) {
-  const text = String(value || "").trim();
-  if (!text || text === "全部" || /[\u3400-\u9fff]/.test(text)) return text;
-  const translated = mediaFilterTranslations[group]?.[text.toLowerCase()];
-  if (translated) return translated;
-  if (group === "region" && /^[A-Za-z]{2}$/.test(text)) {
-    try {
-      return new Intl.DisplayNames(["zh-CN"], {type: "region"}).of(text.toUpperCase()) || text;
-    } catch {
-      return text;
-    }
-  }
-  return text;
-}
-
 const filteredMediaItems = computed(() => filterMediaItems(isSearchMode.value));
-
-function getNormalizedResourceType(item) {
-  const raw = String(item?.resource_type || item?.pan_type || "")
-    .toLowerCase()
-    .trim();
-  const aliases = {
-    aliyun: "alipan",
-    ali: "alipan",
-    "115pan": "115",
-    "123pan": "123",
-    magnetlink: "magnet",
-  };
-  return aliases[raw] || raw || "other";
-}
-
-function unwrapApiResponse(response) {
-  if (response?.success !== undefined) return response;
-  if (response?.data?.success !== undefined) return response.data;
-  return response || {};
-}
-
-function responseItems(response) {
-  const result = unwrapApiResponse(response);
-  const candidates = [result, result?.data, result?.data?.data, response, response?.data, response?.data?.data];
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate?.items)) return candidate.items;
-    if (Array.isArray(candidate)) return candidate;
-  }
-  return [];
-}
-
-function prepareMediaItems(items) {
-  return Array.isArray(items) ? items : [];
-}
 
 function onTabChange(val) {
   const wasSearchMode = isSearchMode.value;
@@ -1086,8 +816,12 @@ async function loadPluginConfig() {
     try {
       const options = await props.api.get(`plugin/${props.pluginId}/ui_options?scope=search`);
       const optionData = options?.data?.data || options?.data || options || {};
+      applyDisplayCatalog(optionData);
       if (optionData?.search_accounts) {
         config = {...config, search_accounts: optionData.search_accounts};
+      }
+      if (Array.isArray(optionData?.available_sources) && optionData.available_sources.length > 0) {
+        syncAvailableChannels(optionData.available_sources);
       }
     } catch (_) {
     }

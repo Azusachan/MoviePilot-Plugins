@@ -198,29 +198,31 @@ class UpgradeBaselineService(OwnerDelegator):
             if isinstance(item, dict):
                 candidates.setdefault(episode_number, []).append(dict(item))
 
-        emby_key = normalize_platform_cache_key((
+        media_server_key = normalize_platform_cache_key((
             *self._baseline_key(subscribe, season),
             int(getattr(mediainfo, "tmdb_id", 0) or 0),
         ))
         with self._baseline_cache_lock:
-            cached_emby = self._baseline_emby_cache.get(emby_key)
-        if cached_emby is None:
-            _, emby_media = self._emby_media_resolver.episode_media(
+            cached_media_server = self._baseline_media_server_cache.get(
+                media_server_key
+            )
+        if cached_media_server is None:
+            _, media_server_items = self._media_server_resolver.episode_media(
                 chain=self._chain,
                 mediainfo=mediainfo,
                 season=season,
             )
             with self._baseline_cache_lock:
-                self._baseline_emby_cache.set(emby_key, {
+                self._baseline_media_server_cache.set(media_server_key, {
                     int(episode): dict(item)
-                    for episode, item in emby_media.items()
+                    for episode, item in media_server_items.items()
                 })
         else:
-            emby_media = {
+            media_server_items = {
                 int(episode): dict(item)
-                for episode, item in cached_emby.items()
+                for episode, item in cached_media_server.items()
             }
-        for episode, media_item in emby_media.items():
+        for episode, media_item in media_server_items.items():
             media_file = Path(str(media_item.get("path") or ""))
             file_size = self._int_or_zero(media_item.get("size"))
             if not file_size and media_file.suffix.lower() != ".strm":
@@ -234,7 +236,7 @@ class UpgradeBaselineService(OwnerDelegator):
                     media_item.get("rule_title") or media_file.name
                 ).strip(),
                 "file_size": file_size,
-                "source": "Emby媒体库",
+                "source": "媒体服务器",
             })
 
         baseline: Dict[int, Dict[str, Any]] = {}
@@ -269,14 +271,14 @@ class UpgradeBaselineService(OwnerDelegator):
                         ),
                     ),
                 )
-                emby_size = self._int_or_zero(
-                    (emby_media.get(int(episode)) or {}).get("size")
+                media_server_size = self._int_or_zero(
+                    (media_server_items.get(int(episode)) or {}).get("size")
                 )
-                if emby_size and not int(
+                if media_server_size and not int(
                         baseline[int(episode)].get("file_size") or 0
                 ):
-                    baseline[int(episode)]["file_size"] = emby_size
-                    baseline[int(episode)]["size_source"] = "Emby媒体信息"
+                    baseline[int(episode)]["file_size"] = media_server_size
+                    baseline[int(episode)]["size_source"] = "媒体服务器"
 
         if include_saved:
             for episode, score in self._read_ep_priority(subscribe).items():

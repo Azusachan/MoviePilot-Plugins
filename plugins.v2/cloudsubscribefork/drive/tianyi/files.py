@@ -5,6 +5,7 @@ import time
 from pathlib import PurePosixPath
 
 from app.core.cache import TTLCache
+from app.log import logger
 
 from ..common import (
     CloudDriveFileServiceBase,
@@ -229,7 +230,8 @@ class TianyiFileService(CloudDriveFileServiceBase):
                 item.sha1, item.md5, item.playback_values, item.native,
             )
             if not self.rename_file(save_path, moved, target_name):
-                return None
+                logger.warning(f"天翼云盘文件移入目录后重命名失败，保留原名：{item.name} -> {target_name}")
+                return self._find_with_retry(save_path, item.name)
         return self._find_with_retry(save_path, target_name or item.name)
 
     def delete_file(self, file_id: str) -> bool:

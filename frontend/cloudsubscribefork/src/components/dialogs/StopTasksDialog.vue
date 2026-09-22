@@ -32,7 +32,7 @@ const props = defineProps({
 })
 const emit = defineEmits(["update:modelValue", "confirm"])
 const stopHint = computed(() =>
-  props.task?.status === "postprocessing"
+  ["downloading", "transferring", "postprocessing"].includes(props.task?.status)
     ? "将停止插件文件后处理；离线任务、已下载文件和STRM均会保留。"
     : "任务将在安全节点停止，已完成的处理不会回退。",
 )

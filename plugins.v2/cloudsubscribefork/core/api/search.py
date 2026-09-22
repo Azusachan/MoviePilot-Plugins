@@ -3,7 +3,6 @@
 import ast
 import ipaddress
 import re
-import threading
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -19,10 +18,15 @@ from .. import OwnerDelegator, SearchCapability
 from ..cloud import CloudDriveCapability
 from ..config import UIConfig
 from ..media import apply_media_identity, recognize_media, search_medias
+from ...handlers.search import SearchHandler
 from ...search.hdhive import HDHIVE_DETAIL_RESOURCE_TYPES
+from ...search.magnet import parse_size_str
+from ...search.matching import extract_resource_tags
+from ...search.scanner import SearchSourceRegistry
 from ...search.types import (
     PREVIEW_PROVIDER_KEYS,
     PREVIEW_RESOURCE_TYPES,
+    RESOURCE_TYPE_ORDER,
     RESOURCE_TYPE_PRIORITY,
     SUPPORTED_RESOURCE_TYPES,
     normalize_resource_type,
@@ -42,7 +46,6 @@ from ...utils.http_client import (
 class SearchApi(OwnerDelegator):
     _PROXY_TEST_URL = "https://www.cloudflare.com/cdn-cgi/trace"
     _SEARCH_TEST_DISPLAY_LIMIT = 10
-    _TEST_HDHIVE_CLIENT_LIMIT = 4
     _TEST_MEDIA_ID_FIELDS = (
         "tmdb_id", "imdb_id", "tvdb_id", "douban_id",
         "bangumi_id", "anilist_id",
@@ -60,128 +63,42 @@ class SearchApi(OwnerDelegator):
 
     @staticmethod
     def _sort_size(value: Any) -> float:
-        """将候选资源大小转换为稳定的排序值，兼容带单位的文本。"""
+        """将候选资源大小转换为稳定的排序值，兼容数值与带单位文本。"""
         if isinstance(value, (int, float)):
-            return float(value)
-        text = str(value or "").strip().replace(",", "")
-        if not text:
-            return 0.0
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|PB)?", text, re.I)
-        if not match:
-            return 0.0
-        number = float(match.group(1))
-        unit = (match.group(2) or "B").upper()
-        multipliers = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4, "PB": 1024 ** 5}
-        return number * multipliers.get(unit, 1)
+            return max(0.0, float(value))
+        return float(parse_size_str(value))
 
-    @staticmethod
-    def _display_tags(item: Dict[str, Any]) -> List[str]:
-        values = [item.get("tags") or []]
-        values.extend(
-            item.get(key)
-            for key in (
-                "resolution", "quality", "source_type", "codec",
-                "audio_codec", "hdr_type", "subtitle",
-            )
-            if item.get(key)
-        )
+    @classmethod
+    def _display_tags(cls, item: Dict[str, Any]) -> List[str]:
+        raw_tags = item.get("tags")
+        tag_candidates: List[str] = []
+        if isinstance(raw_tags, (list, tuple, set)):
+            tag_candidates.extend(str(x).strip() for x in raw_tags if x)
+        elif isinstance(raw_tags, str) and raw_tags.strip():
+            tag_candidates.append(raw_tags.strip())
 
-        tags: List[str] = []
-        seen_tags = set()
+        for key in (
+            "resolution", "quality", "source_type", "codec",
+            "audio_codec", "hdr_type", "subtitle",
+        ):
+            val = item.get(key)
+            if isinstance(val, (list, tuple, set)):
+                tag_candidates.extend(str(x).strip() for x in val if x)
+            elif isinstance(val, str) and val.strip():
+                tag_candidates.append(val.strip())
 
-        def append_tag(value: Any) -> None:
-            if isinstance(value, dict):
-                for nested in value.values():
-                    append_tag(nested)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for nested in value:
-                    append_tag(nested)
-                return
-
-            text = str(value or "").strip()
-            if not text:
-                return
-            if text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
-                try:
-                    parsed = ast.literal_eval(text)
-                except (SyntaxError, ValueError):
-                    parsed = None
-                if isinstance(parsed, (dict, list, tuple, set)):
-                    append_tag(parsed)
-                    return
-            if text in seen_tags:
-                return
-            seen_tags.add(text)
-            tags.append(text)
-
-        for value in values:
-            append_tag(value)
-        return tags
-    _SEARCH_TEST_CONFIG_FIELDS = {
-        "pansou": frozenset({
-            "pansou_url", "pansou_username", "pansou_password",
-            "pansou_auth_enabled", "pansou_channels", "pansou_plugins",
-            "pansou_filter_include",
-            "pansou_filter_exclude", "pansou_concurrency",
-            "pansou_result_limit", "pansou_timeout",
-        }),
-        "piratebay": frozenset({
-            "piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval",
-            "piratebay_timeout",
-        }),
-        "uindex": frozenset({
-            "uindex_base_url", "uindex_result_limit", "uindex_request_interval",
-            "uindex_timeout",
-        }),
-        "hdhive": frozenset({
-            "hdhive_base_url",
-            "hdhive_query_mode", "hdhive_api_key", "hdhive_client_id",
-            "hdhive_access_token", "hdhive_refresh_token",
-            "hdhive_token_expires_at", "hdhive_username", "hdhive_password",
-            "hdhive_candidate_limit", "hdhive_request_interval",
-            "hdhive_unlocks_per_minute", "hdhive_torrentclaw_enabled",
-            "hdhive_torrentclaw_subtitle_languages",
-        }),
-        "dian115": frozenset({
-            "dian115_base_url",
-            "dian115_email", "dian115_password", "dian115_candidate_limit",
-            "dian115_request_interval", "dian115_unlocks_per_minute",
-        }),
-        "juying": frozenset({
-            "juying_base_url",
-            "juying_username", "juying_password", "juying_result_limit",
-            "juying_request_interval",
-        }),
-        "seedhub": frozenset({
-            "seedhub_base_url", "seedhub_result_limit", "seedhub_request_interval",
-            "seedhub_timeout",
-        }),
-        "mikan": frozenset({"mikan_base_url", "mikan_result_limit", "mikan_timeout", "mikan_request_interval"}),
-        "pinglian": frozenset({
-            "pinglian_username", "pinglian_password", "pinglian_result_limit",
-            "pinglian_request_interval", "pinglian_timeout",
-        }),
-        "online_docs": frozenset({
-            "online_docs", "online_docs_urls", "online_docs_resource_types"
-        }),
-    }
-
+        title = str(item.get("title") or item.get("name") or "").strip()
+        return extract_resource_tags(title, tag_candidates)
     def __init__(self, owner):
         super().__init__(owner)
-        object.__setattr__(self, "_test_hdhive_clients_lock", threading.RLock())
-        object.__setattr__(self, "_test_hdhive_clients", [])
 
     def close(self) -> None:
-        """释放测试接口复用的 HDHive 认证连接。"""
-        with self._test_hdhive_clients_lock:
-            clients = list(self._test_hdhive_clients)
-            self._test_hdhive_clients.clear()
-        for client in clients:
+        """释放各搜索 Definition 持有的测试资源。"""
+        for definition in SearchSourceRegistry.get_definitions():
             try:
-                client.close()
+                definition.close_test_resources()
             except Exception as error:
-                logger.debug(f"关闭 HDHive 测试认证连接失败：{error}")
+                logger.debug(f"关闭 {definition.id} 测试资源失败：{error}")
 
     def api_vue_test_search_proxy(self, payload: Dict[str, Any]) -> dict:
         """通过 Cloudflare Trace 测试搜索代理出口和请求延迟。"""
@@ -242,43 +159,6 @@ class SearchApi(OwnerDelegator):
             if response is not None:
                 response.close()
 
-    def _get_test_hdhive_web_client(
-            self,
-            config: Dict[str, Any],
-            proxy: Any,
-    ) -> tuple:
-        """按账号和网络配置复用测试连接及内存安全会话。"""
-        from ...search.hdhive import HDHiveClient
-
-        username = str(config.get("hdhive_username") or "")
-        password = str(config.get("hdhive_password") or "")
-        request_interval = float(
-            config.get("hdhive_request_interval", 5) or 5
-        )
-        with self._test_hdhive_clients_lock:
-            for client in self._test_hdhive_clients:
-                if client.matches_config(
-                        username,
-                        password,
-                        proxy,
-                        request_interval,
-                ):
-                    return client, False
-            client = HDHiveClient(
-                username=username,
-                password=password,
-                proxy=proxy,
-                request_interval=request_interval,
-            )
-            if len(self._test_hdhive_clients) >= self._TEST_HDHIVE_CLIENT_LIMIT:
-                logger.debug(
-                    "HDHive 测试连接配置超过缓存上限，本次使用临时认证连接"
-                )
-                return client, True
-            self._test_hdhive_clients.append(client)
-            logger.debug("HDHive 测试接口已建立可复用认证连接")
-            return client, False
-
     @staticmethod
     def _preview_error_message(error: Exception) -> str:
         """优先返回第三方异常携带的结构化错误信息。"""
@@ -329,18 +209,15 @@ class SearchApi(OwnerDelegator):
         resource_ref = str(payload.get("resource_ref") or "").strip()
         is_unlocked = bool(payload.get("is_unlocked"))
         parent_id = str(payload.get("parent_id") or "").strip()
-        pending_juying = source == "juying" and bool(juying_resource_id)
-        pending_seedhub = (
-                source == "seedhub"
-                and not url
-                and bool(payload.get("pending_resolution"))
-                and bool(provider_data.get("kind"))
-        )
-        pending_pinglian = (
-                source == "pinglian"
-                and not url
-                and bool(payload.get("pending_resolution"))
-                and bool(provider_data.get("token"))
+        pending_resolve = (
+            not url
+            and (
+                bool(juying_resource_id)
+                or (
+                    bool(payload.get("pending_resolution"))
+                    and any(provider_data.get(k) for k in ("kind", "token", "seed_id", "resource_id"))
+                )
+            )
         )
         valid_hdhive_url = bool(
             url and "\\" not in url
@@ -351,19 +228,19 @@ class SearchApi(OwnerDelegator):
                 and bool(resource_ref)
                 and (not url or (is_unlocked and not valid_hdhive_url))
         )
+        pending_hdhaven = (
+                source == "hdhaven"
+                and bool(resource_ref)
+                and not url
+        )
         if (
-                not url and not pending_juying and not pending_hdhive
-                and not pending_seedhub and not pending_pinglian
+                not url and not pending_resolve and not pending_hdhive
+                and not pending_hdhaven
         ) or len(url) > 8192:
             return {"success": False, "message": "资源链接无效"}
-        if pending_juying and (
-                len(juying_resource_id) > 32
-                or not juying_resource_id.isdigit()
-        ):
-            return {"success": False, "message": "聚影资源标识无效"}
         if len(parent_id) > 256:
             return {"success": False, "message": "目录标识无效"}
-        if (pending_seedhub or pending_pinglian) and parent_id:
+        if pending_resolve and parent_id:
             return {"success": False, "message": "待解析资源不支持目录导航"}
         if pending_hdhive and (
                 resource_type not in HDHIVE_DETAIL_RESOURCE_TYPES
@@ -371,27 +248,22 @@ class SearchApi(OwnerDelegator):
         ):
             return {"success": False, "message": "HDHive 资源标识或类型无效"}
         try:
-            if pending_seedhub or pending_pinglian:
+            if pending_resolve:
                 handler = self._build_test_search_handler(
                     source,
                     self._test_search_config(source, payload.get("config")),
                 )
                 try:
-                    resolve_args = (
-                        {
-                            "kind": str(provider_data.get("kind") or ""),
-                            "resource_type": resource_type,
-                            "seed_id": str(provider_data.get("seed_id") or ""),
-                            "path": str(provider_data.get("path") or ""),
-                            "host": str(provider_data.get("host") or ""),
-                        }
-                        if pending_seedhub
-                        else {
-                            "token": str(provider_data.get("token") or ""),
-                            "resource_type": resource_type,
-                            "password": str(provider_data.get("password") or ""),
-                        }
-                    )
+                    resolve_args = {
+                        "resource_id": juying_resource_id or str(provider_data.get("resource_id") or resource_ref).strip(),
+                        "token": str(provider_data.get("token") or resource_ref),
+                        "password": str(provider_data.get("password") or ""),
+                        "resource_type": resource_type,
+                        "kind": str(provider_data.get("kind") or ""),
+                        "seed_id": str(provider_data.get("seed_id") or ""),
+                        "path": str(provider_data.get("path") or ""),
+                        "host": str(provider_data.get("host") or ""),
+                    }
                     resolved = handler.resolve_source_resource(
                         source, **resolve_args
                     )
@@ -400,7 +272,7 @@ class SearchApi(OwnerDelegator):
                 url = str(resolved.get("url") or "").strip()
                 resource_type = normalize_resource_type(
                     resolved.get("resource_type")
-                )
+                ) or resource_type
                 if not url:
                     raise RuntimeError("资源链接解析失败")
             if pending_hdhive:
@@ -478,25 +350,79 @@ class SearchApi(OwnerDelegator):
                             ) or "",
                         },
                     }
-            if pending_juying and not url:
+            if pending_hdhaven:
+                url = ""
                 if parent_id:
-                    return {"success": False, "message": "聚影资源链接已失效，请重新预览"}
+                    return {
+                        "success": False,
+                        "message": "HDHaven 预览不支持目录导航",
+                    }
                 handler = self._build_test_search_handler(
-                    "juying",
-                    self._test_search_config("juying", payload.get("config")),
+                    "hdhaven",
+                    self._test_search_config("hdhaven", payload.get("config")),
                 )
                 try:
-                    resolved = handler.resolve_source_resource(
-                        "juying", resource_id=juying_resource_id
+                    candidate = {
+                        "resource_ref": resource_ref,
+                        "slug": resource_ref,
+                        "id": resource_ref,
+                        "resource_type": resource_type,
+                        "unlock_points": int(payload.get("unlock_points") or 0),
+                        "is_unlocked": is_unlocked,
+                        "episode_range": str(payload.get("episode_range") or ""),
+                        "raw_item": dict(payload.get("raw_item") or {}),
+                        "target_season": payload.get("target_season"),
+                        "target_episodes": payload.get("target_episodes"),
+                        "supports_file_preview": payload.get("supports_file_preview"),
+                        "provider_data": dict(payload.get("provider_data") or {}),
+                        "search_label": "测试只读预览",
+                    }
+                    preview = handler.preview_resource(
+                        "hdhaven", candidate
                     )
                 finally:
                     handler.close(release_cache=False)
-                url = str(resolved.get("url") or "").strip()
-                resource_type = normalize_resource_type(
-                    resolved.get("resource_type")
-                )
-                if not url:
-                    raise RuntimeError("聚影资源链接为空")
+                files = [
+                    {
+                        **self._preview_file(item),
+                        "can_enter": False,
+                    }
+                    for item in (preview.get("files") or [])
+                ][:500]
+                file_count = len(files)
+                # 预览 403 时文件列表为空，从 episode_range 降级展示集数范围信息
+                episode_range_str = str(payload.get("episode_range") or "").strip()
+                preview_episodes = preview.get("preview_episodes") or {}
+                if file_count:
+                    msg = f"只读预览到 {file_count} 个文件，未执行解锁"
+                elif episode_range_str:
+                    msg = f"资源需先解锁才可预览文件，集数范围：{episode_range_str}"
+                else:
+                    msg = "资源需先解锁才可预览文件"
+                return {
+                    "success": True,
+                    "message": msg,
+                    "data": {
+                        "items": files,
+                        "count": file_count,
+                        "provider_name": "HDHaven",
+                        "resource_type": resource_type,
+                        "resource_type_name": resource_type_name(
+                            resource_type, resource_type.upper()
+                        ),
+                        "share_url": "",
+                        "parent_id": "",
+                        "preview_episodes": preview_episodes,
+                        "covers_target": preview.get("covers_target"),
+                        "resource_validate_status": preview.get(
+                            "resource_validate_status"
+                        ) or "",
+                        "resource_validate_message": preview.get(
+                            "resource_validate_message"
+                        ) or (f"集数范围：{episode_range_str}" if episode_range_str else ""),
+                    },
+                }
+
             if resource_type == "magnet":
                 if parent_id:
                     return {"success": False, "message": "磁力链接不支持目录导航"}
@@ -593,9 +519,7 @@ class SearchApi(OwnerDelegator):
             handler = self._build_test_search_handler(
                 source,
                 self._test_search_config(source, payload.get("config")),
-                confirmed_unlock_points=(
-                    points if source in ("hdhive", "dian115") else 0
-                ),
+                confirmed_unlock_points=points,
             )
             try:
                 if not handler.supports(
@@ -631,7 +555,6 @@ class SearchApi(OwnerDelegator):
                 },
             }
         except Exception as error:
-            logger.warning(f"测试资源解锁失败：{source} - {error}")
             return {"success": False, "message": f"解锁失败：{error}"}
 
     def _test_search_config(
@@ -641,7 +564,14 @@ class SearchApi(OwnerDelegator):
         base = dict(UIConfig.get_default_config())
         if isinstance(self._applied_config, dict):
             base.update(self._applied_config)
-        allowed = self._SEARCH_TEST_CONFIG_FIELDS[source] | {
+        definition = next(
+            (
+                item for item in SearchSourceRegistry.get_definitions()
+                if item.id == source
+            ),
+            None,
+        )
+        allowed = (definition.get_config_keys() if definition else set()) | {
             "resource_type_order", "search_proxy", "search_proxy_username",
             "search_proxy_password",
         }
@@ -659,267 +589,58 @@ class SearchApi(OwnerDelegator):
             confirmed_unlock_points: int = 0,
     ):
         """使用当前表单配置创建隔离搜索器，不修改已保存配置或运行中服务。"""
-        from ...handlers.search import SearchHandler
-        from ...search.hdhive import HDHiveOpenAPIClient
-        from ...search.juying import JuyingClient
-        from ...search.pansou import PanSouClient
-        from ...search.pinglian import PinglianClient
-        from ...search.seedhub import SeedHubClient
-        from ...search.online_docs import OnlineDocumentClient
-        from ...search.piratebay import PirateBayClient
-        from ...search.uindex import UIndexClient
-
-        def as_list(value: Any) -> list:
-            if isinstance(value, list):
-                return list(value)
-            if value is None:
-                return []
-            return [value]
-
         proxy = build_proxy_url(
             config.get("search_proxy", ""),
             config.get("search_proxy_username", ""),
             config.get("search_proxy_password", ""),
         )
-        hdhive_query_mode = str(config.get("hdhive_query_mode") or "web")
-        if hdhive_query_mode not in {"api", "web"}:
-            hdhive_query_mode = "web"
-        hdhive_client = None
-        if source == "hdhive" and hdhive_query_mode == "api":
-            hdhive_client = HDHiveOpenAPIClient(
-                app_secret=str(config.get("hdhive_api_key") or ""),
-                client_id=str(config.get("hdhive_client_id") or ""),
-                access_token=str(config.get("hdhive_access_token") or ""),
-                refresh_token=str(config.get("hdhive_refresh_token") or ""),
-                token_expires_at=float(
-                    config.get("hdhive_token_expires_at") or 0
-                ),
-                proxy=proxy,
-                request_interval=float(
-                    config.get("hdhive_request_interval", 5) or 5
-                ),
-            )
-        resource_type_order = list(dict.fromkeys(
-            str(value).strip().lower()
-            for value in as_list(config.get("resource_type_order"))
-            if str(value).strip().lower()
-            in {
-                "115", "123", "quark", "guangya", "tianyi", "alipan",
-                "ed2k", "magnet",
-            }
-        ))
-        # 测试只验证渠道原始候选，不继承当前目标网盘的优先级或类型白名单。
-        # 各渠道仍会自行识别真实资源类型，但不会因目标盘配置而丢弃候选。
-        if source in {
-            "hdhive", "dian115", "juying", "seedhub",
-            "pinglian", "pansou", "piratebay", "uindex", "mikan",
-        }:
-            resource_type_order = [
-                "115", "123", "quark", "guangya", "tianyi", "alipan",
-                "ed2k", "magnet",
-            ]
-        if not resource_type_order:
-            raise ValueError("请至少选择一种资源类型")
-
-        def require(*keys: str) -> None:
-            if any(not str(config.get(key) or "").strip() for key in keys):
-                raise ValueError("搜索渠道账号配置不完整")
-
-        if source == "pansou":
-            require("pansou_url")
-            if bool(config.get("pansou_auth_enabled", False)):
-                require("pansou_username", "pansou_password")
-        elif source == "hdhive":
-            if hdhive_query_mode == "api":
-                require("hdhive_api_key", "hdhive_access_token")
-            else:
-                require("hdhive_username", "hdhive_password")
-        elif source == "dian115":
-            require("dian115_email", "dian115_password")
-        elif source == "juying":
-            require("juying_username", "juying_password")
-        elif source == "pinglian":
-            require("pinglian_username", "pinglian_password")
-
-        hdhive_web_client = None
-        hdhive_web_client_owned = True
-        if (
-                source == "hdhive"
-                and hdhive_query_mode == "web"
-                and deadline is None
-        ):
+        definition = next(
             (
-                hdhive_web_client,
-                hdhive_web_client_owned,
-            ) = self._get_test_hdhive_web_client(config, proxy)
+                item for item in SearchSourceRegistry.get_definitions()
+                if item.id == source
+            ),
+            None,
+        )
+        if definition is None:
+            raise ValueError(f"搜索渠道未注册：{source}")
+        resource_type_order = list(
+            config.get("resource_type_order")
+            or getattr(self, "_resource_type_order", None)
+            or RESOURCE_TYPE_ORDER
+        )
+        pansou_cloud_types = list(
+            config.get("pansou_cloud_types")
+            or getattr(self, "_pansou_cloud_types", None)
+            or resource_type_order
+        )
 
-        pansou_client = None
-        pansou_timeout = 20
-        if source == "pansou":
-            pansou_url = str(config.get("pansou_url") or "").strip()
-            if not pansou_url:
-                raise ValueError("PanSou 服务地址为空")
-            pansou_timeout = min(
-                20, max(5, int(config.get("pansou_timeout", 30) or 30))
-            )
-            pansou_client = PanSouClient(
-                base_url=pansou_url,
-                username=str(config.get("pansou_username") or ""),
-                password=str(config.get("pansou_password") or ""),
-                auth_enabled=bool(config.get("pansou_auth_enabled", False)),
-                proxy=proxy,
-                search_timeout=pansou_timeout,
-                get_data_func=self.get_data,
-                save_data_func=self.save_data,
-            )
-
-        seedhub_client = SeedHubClient(
-            base_url=str(config.get("seedhub_base_url") or ""),
-            proxy=proxy,
-            request_timeout=int(config.get("seedhub_timeout", 20) or 20),
-            request_interval=float(
-                config.get("seedhub_request_interval", 1) or 1
-            ),
-        ) if source == "seedhub" else None
-        piratebay_client = PirateBayClient(
-            base_url=str(config.get("piratebay_base_url") or ""),
-            proxy=proxy,
-            request_timeout=int(config.get("piratebay_timeout", 20) or 20),
-            request_interval=float(
-                config.get("piratebay_request_interval", 1) or 1
-            ),
-        ) if source == "piratebay" else None
-        uindex_client = UIndexClient(
-            base_url=str(config.get("uindex_base_url") or ""),
-            proxy=proxy,
-            request_timeout=int(config.get("uindex_timeout", 20) or 20),
-            request_interval=float(
-                config.get("uindex_request_interval", 1) or 1
-            ),
-        ) if source == "uindex" else None
-        juying_client = None
-        if source == "juying":
-            juying_client = JuyingClient(
-                base_url=str(config.get("juying_base_url") or ""),
-                username=str(config.get("juying_username") or ""),
-                password=str(config.get("juying_password") or ""),
-                proxy=proxy,
-                request_interval=float(
-                    config.get("juying_request_interval", 1) or 1
-                ),
-                get_data_func=self.get_data,
-                save_data_func=self.save_data,
-                cache_namespace="test-preview",
-            )
-        pinglian_client = None
-        online_docs_client = OnlineDocumentClient(
-            config.get("online_docs") or config.get("online_docs_urls") or [],
-            config.get("online_docs_resource_types") or [],
-            proxy=proxy,
-        ) if source == "online_docs" else None
-        if source == "pinglian":
-            pinglian_client = PinglianClient(
-                base_url=str(config.get("pinglian_base_url") or ""),
-                username=str(config.get("pinglian_username") or ""),
-                password=str(config.get("pinglian_password") or ""),
-                proxy=proxy,
-                request_timeout=int(config.get("pinglian_timeout", 30) or 30),
-                request_interval=float(
-                    config.get("pinglian_request_interval", 2) or 2
-                ),
-                get_data_func=self.get_data,
-                save_data_func=self.save_data,
-            )
         confirmed_unlock_points = max(0, int(confirmed_unlock_points or 0))
-        handler = SearchHandler(
-            mikan_config=config,
-            pansou_client=pansou_client,
-            hdhive_client=hdhive_client,
-            seedhub_client=seedhub_client,
-            piratebay_client=piratebay_client,
-            piratebay_enabled=source == "piratebay",
-            piratebay_result_limit=int(config.get("piratebay_result_limit", 20) or 20),
-            uindex_client=uindex_client,
-            uindex_enabled=source == "uindex",
-            uindex_result_limit=int(config.get("uindex_result_limit", 20) or 20),
-            juying_client=juying_client,
-            pinglian_client=pinglian_client,
-            pansou_enabled=source == "pansou",
-            hdhive_enabled=source == "hdhive",
-            dian115_enabled=source == "dian115",
-            seedhub_enabled=source == "seedhub",
-            juying_enabled=source == "juying",
-            pinglian_enabled=source == "pinglian",
-            online_docs_client=online_docs_client,
-            hdhive_web_client=hdhive_web_client,
-            hdhive_web_client_owned=hdhive_web_client_owned,
-            hdhive_username=str(config.get("hdhive_username") or ""),
-            hdhive_password=str(config.get("hdhive_password") or ""),
-            hdhive_query_mode=hdhive_query_mode,
-            # HDHive 测试使用独立只读路径；显式关闭自动解锁能力。
-            hdhive_auto_unlock=False,
-            hdhive_max_unlock_points=confirmed_unlock_points,
-            hdhive_max_points_per_sub=confirmed_unlock_points,
-            dian115_email=str(config.get("dian115_email") or ""),
-            dian115_password=str(config.get("dian115_password") or ""),
-            dian115_auto_unlock=bool(
-                config.get("dian115_auto_unlock", False)
-            ),
-            # 显式解锁时按用户确认的价格放行单次解锁；预览路径保持 0 预算。
-            dian115_max_unlock_points=confirmed_unlock_points,
-            dian115_max_points_per_sub=confirmed_unlock_points,
-            pansou_channels=config.get("pansou_channels") or [],
-            pansou_plugins=config.get("pansou_plugins") or [],
-            pansou_cloud_types=resource_type_order,
-            pansou_filter_include=config.get("pansou_filter_include") or [],
-            pansou_filter_exclude=config.get("pansou_filter_exclude") or [],
-            resource_type_order=resource_type_order,
-            pansou_concurrency=config.get("pansou_concurrency") or None,
-            pansou_result_limit=int(
-                config.get("pansou_result_limit", 10) or 10
-            ),
-            pansou_refresh=False,
-            pansou_timeout=pansou_timeout,
-            seedhub_result_limit=int(
-                config.get("seedhub_result_limit", 20) or 20
-            ),
-            juying_result_limit=int(
-                config.get("juying_result_limit", 5) or 5
-            ),
-            pinglian_result_limit=int(
-                config.get("pinglian_result_limit", 20) or 20
-            ),
-            search_source_order=[source],
-            search_proxy=proxy,
-            search_cache_enabled=False,
-            search_concurrency=1,
-            hdhive_candidate_limit=int(
-                config.get("hdhive_candidate_limit", 4) or 4
-            ),
-            hdhive_request_interval=float(
-                config.get("hdhive_request_interval", 5) or 5
-            ),
-            hdhive_unlocks_per_minute=int(
-                config.get("hdhive_unlocks_per_minute", 2) or 2
-            ),
-            dian115_candidate_limit=int(
-                config.get("dian115_candidate_limit", 4) or 4
-            ),
-            dian115_request_interval=float(
-                config.get("dian115_request_interval", 1) or 1
-            ),
-            dian115_unlocks_per_minute=int(
-                config.get("dian115_unlocks_per_minute", 6) or 6
-            ),
-            hdhive_torrentclaw_enabled=bool(
-                config.get("hdhive_torrentclaw_enabled", False)
-            ),
-            hdhive_torrentclaw_subtitle_languages=as_list(
-                config.get("hdhive_torrentclaw_subtitle_languages") or ["zh"]
-            ),
-            should_stop=(
+        params = dict(config)
+        params.update({
+            "pansou_cloud_types": pansou_cloud_types,
+            "resource_type_order": resource_type_order,
+            "pansou_refresh": False,
+            "search_source_order": [source],
+            "search_proxy": proxy,
+            "search_cache_enabled": False,
+            "search_concurrency": 1,
+            "should_stop": (
                 (lambda: time.monotonic() >= deadline) if deadline else None
             ),
+        })
+        params.update(definition.build_test_context(config, {
+            "proxy": proxy,
+            "deadline": deadline,
+            "confirmed_unlock_points": confirmed_unlock_points,
+        }))
+
+        test_owner = type("SearchTestOwner", (), {})()
+        test_owner.get_data = self.get_data
+        test_owner.save_data = self.save_data
+
+        handler = SearchHandler(
+            plugin=test_owner,
+            **params,
         )
         handler.configure_point_storage(self.get_data, self.save_data)
         return handler
@@ -1101,16 +822,8 @@ class SearchApi(OwnerDelegator):
         payload = dict(payload or {})
         source = str(payload.get("source") or "").strip().lower()
         source_names = {
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "piratebay": "海盗湾",
-            "uindex": "UIndex",
-            "pansou": "PanSou",
-            "juying": "聚影",
-            "seedhub": "SeedHub",
-            "mikan": "蜜柑",
-            "pinglian": "盘链",
-            "online_docs": "在线文档",
+            definition.id: definition.name
+            for definition in SearchSourceRegistry.get_definitions()
         }
         if source not in source_names:
             return {"success": False, "message": "不支持的搜索渠道"}
@@ -1218,59 +931,6 @@ class SearchApi(OwnerDelegator):
         items = []
         resource_type_counts: Dict[str, int] = {}
 
-        def display_size(item: Dict[str, Any]) -> Any:
-            human = str(item.get("size_human") or "").strip()
-            if human:
-                return human
-            value = item.get("size")
-            if not isinstance(value, (int, float)) or value <= 0:
-                return value or 0
-            return StringUtils.format_size(int(value))
-
-        def display_tags(item: Dict[str, Any]) -> List[str]:
-            values = [item.get("tags") or []]
-            values.extend(
-                item.get(key)
-                for key in (
-                    "resolution", "quality", "source_type", "codec",
-                    "audio_codec", "hdr_type", "subtitle",
-                )
-                if item.get(key)
-            )
-
-            tags: List[str] = []
-            seen_tags = set()
-
-            def append_tag(value: Any) -> None:
-                if isinstance(value, dict):
-                    for nested in value.values():
-                        append_tag(nested)
-                    return
-                if isinstance(value, (list, tuple, set)):
-                    for nested in value:
-                        append_tag(nested)
-                    return
-
-                text = str(value or "").strip()
-                if not text:
-                    return
-                if text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
-                    try:
-                        parsed = ast.literal_eval(text)
-                    except (SyntaxError, ValueError):
-                        parsed = None
-                    if isinstance(parsed, (dict, list, tuple, set)):
-                        append_tag(parsed)
-                        return
-                if text in seen_tags:
-                    return
-                seen_tags.add(text)
-                tags.append(text)
-
-            for value in values:
-                append_tag(value)
-            return tags
-
         for item in (results or [])[:self._SEARCH_TEST_DISPLAY_LIMIT]:
             source_url = ""
             for value in (item.get("source_url"), item.get("media_page_url")):
@@ -1298,9 +958,9 @@ class SearchApi(OwnerDelegator):
                 "resource_type_name": resource_type_name(
                     resource_type, resource_type.upper() or "未知"
                 ),
-                "size": display_size(item),
+                "size": self._display_size(item),
                 "size_bytes": item.get("size") or 0,
-                "tags": display_tags(item),
+                "tags": self._display_tags(item),
                 "description": str(item.get("description") or "").strip(),
                 "source_url": source_url,
                 "url": str(
@@ -1320,6 +980,7 @@ class SearchApi(OwnerDelegator):
                 "preview_episodes": item.get("preview_episodes") or {},
                 "pending_resolution": bool(item.get("pending_resolution")),
                 "can_preview": resource_type in PREVIEW_RESOURCE_TYPES,
+                "fansub": str(item.get("fansub") or "").strip(),
             })
             resource_type_counts[resource_type] = (
                     resource_type_counts.get(resource_type, 0) + 1
@@ -1502,43 +1163,31 @@ class SearchApi(OwnerDelegator):
         if not handler:
             return {"success": False, "message": "搜索服务未就绪", "data": {"items": [], "sources": []}}
 
-        # 获取所有已注册的搜索渠道，无需用户在设置中开启
-        registered_sources = handler.get_all_search_sources()
-        if not registered_sources:
+        available_channels_meta = handler.get_available_sources_meta(
+            mediainfo=mediainfo, media_type=media_type
+        )
+        if not available_channels_meta:
             logger.warning("[网盘资源嗅探] 当前无可用的已注册搜索渠道")
             return {"success": True, "message": "暂无可用搜索渠道",
                     "data": {"items": [], "sources": [], "available_sources": []}}
 
-        # 权威渠道命名与顺序定义
-        source_display_names = {
-            "pansou": "PanSou",
-            "hdhive": "HDHive",
-            "dian115": "Dian115",
-            "juying": "聚影",
-            "pinglian": "盘链",
-            "seedhub": "SeedHub",
-            "piratebay": "海盗湾",
-            "uindex": "UIndex",
-            "online_docs": "在线文档",
-        }
-        # 优先读取用户配置的优先级顺序，其余按标准顺序排列
-        configured_order = getattr(handler, "_search_source_order", []) or []
-        default_pref = ["pansou", "hdhive", "dian115", "juying", "pinglian", "seedhub", "piratebay", "uindex"]
-        merged_order = []
-        for s in list(configured_order) + default_pref:
-            s_clean = str(s).strip().lower()
-            if s_clean in registered_sources and s_clean not in merged_order:
-                merged_order.append(s_clean)
-        for s in registered_sources:
-            if s not in merged_order:
-                merged_order.append(s)
+        registered_sources = [s["key"] for s in available_channels_meta]
+        source_display_names = {s["key"]: s["name"] for s in available_channels_meta}
 
         req_source = str(data.get("source") or "").strip().lower()
         force_refresh = bool(data.get("force") or data.get("force_refresh"))
         if req_source:
-            sources_to_search = [req_source] if req_source in registered_sources else registered_sources
+            if req_source not in registered_sources:
+                logger.warning(f"[网盘资源嗅探] 请求的搜索渠道 [{req_source}] 未就绪或未注册")
+                return {
+                    "success": True,
+                    "message": f"渠道 {source_display_names.get(req_source, req_source)} 暂不可用",
+                    "data": {"items": [], "sources": [], "available_sources": available_channels_meta},
+                }
+            sources_to_search = [req_source]
         else:
-            sources_to_search = merged_order
+            sources_to_search = registered_sources
+
 
         logger.debug(
             f"🔍 [网盘资源嗅探] 开始检索媒体《{title}》"
@@ -1589,15 +1238,21 @@ class SearchApi(OwnerDelegator):
                 item_copy["tags"] = self._display_tags(item)
                 if not item_copy.get("size_formatted"):
                     item_copy["size_formatted"] = self._display_size(item)
+
+                size_bytes = self._sort_size(item.get("size"))
+                item_copy["size_bytes"] = size_bytes
+                try:
+                    seeders_count = int(item.get("seeders") or 0)
+                except (TypeError, ValueError):
+                    seeders_count = 0
+                item_copy["seeders"] = seeders_count
+
                 all_items.append(item_copy)
                 resource_type_counts[r_type] = resource_type_counts.get(r_type, 0) + 1
 
-        # 排序：有做种数排前面，其次按大小降序
+        # 排序：有做种数排前面，其次按大小降序（纯数值比较，无正则开销）
         all_items.sort(
-            key=lambda x: (
-                self._sort_size(x.get("seeders")),
-                self._sort_size(x.get("size")),
-            ),
+            key=lambda x: (x.get("seeders", 0), x.get("size_bytes", 0)),
             reverse=True,
         )
         elapsed = round(time.monotonic() - started, 2)
@@ -1605,27 +1260,20 @@ class SearchApi(OwnerDelegator):
             f"✅ [网盘资源嗅探] 《{title}》检索完成，有效候选共 {len(all_items)} 条，总耗时 {elapsed}s"
         )
 
-        # 构造网盘分类和资源类型 tabs 统计列表
+        # 构造网盘分类和资源类型 tabs 统计列表（统一按资源优先级与数量排列）
         resource_types_list = [
             {
                 "value": t_val,
-                "title": resource_type_name(t_val, t_val.upper()),
+                "title": resource_type_name(t_val, t_val.upper() if t_val else "未知"),
                 "count": t_cnt,
             }
             for t_val, t_cnt in sorted(
                 resource_type_counts.items(),
-                key=lambda x: x[1],
-                reverse=True,
+                key=lambda pair: (
+                    RESOURCE_TYPE_PRIORITY.get(pair[0], 99),
+                    -pair[1],
+                ),
             )
-        ]
-
-        # 构造规范有序的渠道列表供前端渲染Tab
-        available_channels_meta = [
-            {
-                "key": src_key,
-                "name": source_display_names.get(src_key, src_key),
-            }
-            for src_key in merged_order
         ]
 
         # 构造当前系统可用且支持的目标网盘列表供跨盘转存选择

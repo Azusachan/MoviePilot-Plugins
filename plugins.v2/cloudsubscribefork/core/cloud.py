@@ -100,6 +100,42 @@ class CloudFile(Mapping[str, Any]):
     def __len__(self) -> int:
         return 6
 
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def as_native_dict(self) -> Dict[str, Any]:
+        """展开为普通可变字典：标准字段 + native 字段 + playback_values。"""
+        merged: Dict[str, Any] = {}
+        if isinstance(self.native, Mapping):
+            merged.update(dict(self.native))
+        merged.update({
+            "id": self.id,
+            "name": self.name,
+            "is_dir": self.is_directory,
+            "size": self.size,
+            "sha1": self.sha1,
+            "md5": self.md5,
+        })
+        for key, value in self.playback_values.items():
+            merged.setdefault(str(key), value)
+        return merged
+
+
+def native_dict(item: Any) -> Dict[str, Any]:
+    """将 CloudFile（或任何 Mapping）展开为普通可变字典。
+
+    CloudFile 是不可变 Mapping，其 native 属性在部分网盘实现下可能为 None。
+    统一通过该辅助函数进行下游可变操作，避免引发 AttributeError 或 KeyError。
+    """
+    if isinstance(item, CloudFile):
+        return item.as_native_dict()
+    if isinstance(item, Mapping):
+        return dict(item)
+    return dict(item or {})
+
 
 @dataclass(frozen=True)
 class DirectoryLookup:

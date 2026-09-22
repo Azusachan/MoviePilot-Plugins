@@ -179,10 +179,11 @@ class SyncExecutionService(OwnerDelegator):
     def _prepare_searchable_subscribes(
             self, subscribes: List[Any]
     ) -> Tuple[List[Any], int]:
-        """统一准备媒体身份、目标集和播出日历，供任务线程直接复用。"""
-        prepared = []
-        unresolved_count = 0
-        for subscribe in subscribes:
+        """统一准备媒体身份、目标集和播出日历，供任务线程直接复用（多线程并发加速）。"""
+        if not subscribes:
+            return [], 0
+
+        def _prepare_one(subscribe: Any) -> Optional[Any]:
             try:
                 has_tmdb_id = bool(tmdb_id_of(subscribe))
             except (TypeError, ValueError):
@@ -192,14 +193,7 @@ class SyncExecutionService(OwnerDelegator):
                 and self._sync_handler.repair_subscribe_tmdb_id(subscribe)
             )
             if not repaired:
-                unresolved_count += 1
-                logger.debug(
-                    "订阅缺少 TMDB ID 且自动修复失败，任务创建前跳过："
-                    f"#{getattr(subscribe, 'id', '')} "
-                    f"{getattr(subscribe, 'name', '')} "
-                    f"({getattr(subscribe, 'year', '')})"
-                )
-                continue
+                return None
 
             is_tv = getattr(subscribe, "type", "") == MediaType.TV.value
             start_episode = (
@@ -241,7 +235,31 @@ class SyncExecutionService(OwnerDelegator):
                 ),
             }
             setattr(subscribe, "_cloudsubscribefork_preparation", preparation)
-            prepared.append(subscribe)
+            return subscribe
+
+        prepared = []
+        unresolved_count = 0
+
+        if len(subscribes) <= 1:
+            for sub in subscribes:
+                res = _prepare_one(sub)
+                if res is not None:
+                    prepared.append(res)
+                else:
+                    unresolved_count += 1
+        else:
+            worker_count = min(8, len(subscribes))
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="cloudsubscribefork-prep"
+            ) as executor:
+                results = list(executor.map(_prepare_one, subscribes))
+            for res in results:
+                if res is not None:
+                    prepared.append(res)
+                else:
+                    unresolved_count += 1
+
         return prepared, unresolved_count
 
     def _deduplicate_subscribes(
@@ -722,6 +740,12 @@ class SyncExecutionService(OwnerDelegator):
                 candidates.append(subscribe)
 
             candidates, _ = self._deduplicate_subscribes(candidates)
+            if candidates:
+                self._set_sync_status(
+                    "running",
+                    f"正在预处理订阅列表（共 {len(candidates)} 个）",
+                    8,
+                )
             prepared, unresolved_tmdb_count = self._prepare_searchable_subscribes(candidates)
             if prepared:
                 logger.debug(
@@ -1009,9 +1033,6 @@ class SyncExecutionService(OwnerDelegator):
                 "phase": "保存结果与发送通知",
             },
         )
-        logger.info(
-            f"网盘订阅同步完成，共{action_name} {transferred_count} 个文件"
-        )
         pending_finalize_count = 0
         if self._sync_handler:
             pending_finalize_tasks = self._sync_handler.get_pending_finalize_tasks()
@@ -1025,11 +1046,28 @@ class SyncExecutionService(OwnerDelegator):
             self._sync_context["pending_finalize"] = pending_finalize_count
             self._sync_context["offline_pending"] = offline_pending_count
             self._sync_context["cloud_pending"] = cloud_pending_count
-            if pending_finalize_count:
-                logger.debug(
-                    f"本次仍有 {pending_finalize_count} 个文件等待网盘文件就绪，"
-                    "暂不发送完成确认"
+
+        if pending_finalize_count:
+            if offline_pending_count and cloud_pending_count:
+                logger.info(
+                    f"网盘订阅同步已提交：{offline_pending_count} 个离线下载任务、"
+                    f"{cloud_pending_count} 个网盘文件等待就绪，后台完成后将自动整理并通知"
                 )
+            elif offline_pending_count:
+                logger.info(
+                    f"网盘订阅同步已提交：{offline_pending_count} 个离线下载任务，"
+                    "等待网盘下载完成后自动整理"
+                )
+            else:
+                logger.info(
+                    f"网盘订阅同步进行中：{cloud_pending_count} 个网盘文件等待就绪，"
+                    "等待后台后处理完成"
+                )
+        else:
+            logger.info(
+                f"网盘订阅同步完成，共{action_name} {transferred_count} 个文件"
+            )
+
         if self._sync_handler:
             sync_metrics = self._sync_handler.get_sync_metrics()
             if sync_metrics:
@@ -1052,7 +1090,7 @@ class SyncExecutionService(OwnerDelegator):
                 ]
                 logger.debug(f"搜索性能汇总：{'；'.join(summary)}")
 
-        if self._notify and transferred_count == 0 and not manual_resources:
+        if self._notify and transferred_count == 0 and not manual_resources and not pending_finalize_count:
             self.post_message(
                 mtype=self._notification_type,
                 title="【网盘订阅助手】执行完成",
@@ -1081,11 +1119,6 @@ class SyncExecutionService(OwnerDelegator):
             logger.error(f"插件全局配置应用失败（下次首次执行重试）: {e}")
 
     def _release_sync_resources(self, notification_batch_started: bool) -> None:
-        if self._search_handler:
-            try:
-                self._search_handler.close()
-            except Exception as error:
-                logger.warning(f"同步结束关闭搜索客户端失败：{error}")
         try:
             # 配置重载会关闭旧 SyncHandler；必须避开正在使用它的后处理线程。
             with self._offline_monitor_lock:
@@ -1247,7 +1280,7 @@ class SyncExecutionService(OwnerDelegator):
                     )
                 elif not success:
                     message = "订阅搜索执行失败"
-                elif transferred and run_context.get("pending_finalize"):
+                elif run_context.get("pending_finalize"):
                     pending_count = int(run_context["pending_finalize"] or 0)
                     offline_count = int(run_context.get("offline_pending") or 0)
                     cloud_count = int(run_context.get("cloud_pending") or 0)
@@ -1260,11 +1293,18 @@ class SyncExecutionService(OwnerDelegator):
                         pending_text = f"其中 {offline_count} 个离线文件等待下载，"
                     else:
                         pending_text = f"其中 {pending_count} 个网盘文件等待就绪，"
-                    message = (
-                        f"订阅搜索已提交{action_name} {transferred} 个文件，"
-                        f"{pending_text}"
-                        "完成后将再通知"
-                    )
+                    if transferred:
+                        message = (
+                            f"订阅搜索已提交{action_name} {transferred} 个文件，"
+                            f"{pending_text}"
+                            "完成后将再通知"
+                        )
+                    else:
+                        message = (
+                            f"订阅搜索已提交网盘任务，"
+                            f"{pending_text}"
+                            "后台完成后将自动整理并通知"
+                        )
                 elif transferred:
                     message = (
                         f"订阅搜索完成，共{action_name} {transferred} 个文件"

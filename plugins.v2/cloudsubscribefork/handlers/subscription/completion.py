@@ -4,7 +4,7 @@
 """
 import ast
 from threading import RLock
-from typing import Callable, List
+from typing import Any, Callable, List, Optional
 
 from app.chain.subscribe import SubscribeChain
 from app.core.metainfo import MetaInfo
@@ -68,14 +68,27 @@ class SubscribeHandler:
 
     def __init__(
             self,
-            exclude_subscribes: List[int] = None,
-            is_excluded_func: Callable[[int], bool] = None
+            exclude_subscribes: Any = None,
+            is_excluded_func: Optional[Callable[[int], bool]] = None,
+            *,
+            plugin: Any = None,
     ):
         """
         :param exclude_subscribes: 排除的订阅ID列表（is_excluded_func 未提供时使用）
         :param is_excluded_func: 订阅过滤判断函数，支持排除/指定两种模式
+        :param plugin: 宿主插件实例，提供时自动解析配置
         """
-        self._exclude_subscribes = exclude_subscribes or []
+        if plugin is None and exclude_subscribes is not None and not isinstance(exclude_subscribes, (list, tuple, set)):
+            plugin = exclude_subscribes
+            exclude_subscribes = None
+
+        if plugin is not None:
+            if exclude_subscribes is None:
+                exclude_subscribes = getattr(plugin, "_exclude_subscribes", None)
+            if is_excluded_func is None:
+                is_excluded_func = getattr(plugin, "_is_subscribe_excluded", None)
+
+        self._exclude_subscribes = list(exclude_subscribes or [])
         self._is_excluded_func = is_excluded_func
         self._progress_lock = RLock()
 

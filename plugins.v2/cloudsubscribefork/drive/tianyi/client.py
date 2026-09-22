@@ -56,7 +56,30 @@ class TianyiClient:
             "User-Agent": "Mozilla/5.0",
         })
         if cookie:
-            self.session.headers["Cookie"] = cookie
+            self._set_cookie_str(cookie)
+
+    def _set_cookie_str(self, cookie: str) -> None:
+        if not cookie:
+            return
+        self.session.headers["Cookie"] = cookie
+        for pair in str(cookie).split(";"):
+            if "=" in pair:
+                k, v = pair.strip().split("=", 1)
+                if k.strip():
+                    self.session.cookies.set(k.strip(), v.strip(), domain=".189.cn")
+
+    def _export_cookies(self) -> str:
+        pairs = {}
+        header_cookie = self.session.headers.get("Cookie", "")
+        if header_cookie:
+            for pair in header_cookie.split(";"):
+                if "=" in pair:
+                    k, v = pair.strip().split("=", 1)
+                    if k.strip():
+                        pairs[k.strip()] = v.strip()
+        for c in self.session.cookies:
+            pairs[c.name] = c.value
+        return "; ".join(f"{k}={v}" for k, v in pairs.items())
 
     def close(self):
         self.session.close()
@@ -140,7 +163,17 @@ class TianyiClient:
             params.setdefault("noCache", random.random())
             params.setdefault("sessionKey", self.session_key)
             kwargs["params"] = params
-        return self._raw_request(method, url, **kwargs)
+        try:
+            return self._raw_request(method, url, **kwargs)
+        except TianyiApiError as error:
+            err_msg = str(error)
+            if "cookieUserSession" in err_msg and (self.refresh_token or self.access_token):
+                self.session_key = ""
+                self.ensure_session()
+                if url.startswith(self.WEB_URL) and "params" in kwargs:
+                    kwargs["params"]["sessionKey"] = self.session_key
+                return self._raw_request(method, url, **kwargs)
+            raise
 
     def _get_login_form(self) -> dict:
         response = self.rate_limiter.call(
@@ -280,11 +313,26 @@ class TianyiClient:
         redirect_url = str(data.get("redirectUrl") or "").strip()
         if not redirect_url:
             raise TianyiApiError("天翼扫码成功但未返回登录地址")
+        try:
+            self.rate_limiter.call(
+                self.session.get,
+                redirect_url,
+                allow_redirects=True,
+                timeout=self.timeout,
+                retry_exceptions=(requests.Timeout, requests.ConnectionError),
+            )
+        except Exception as error:
+            logger.warning(f"访问天翼登录跳转地址获取Cookie失败：{error}")
+
         session_data = self._get_session_for_pc(redirect_url=redirect_url)
         self._apply_token_session(session_data)
+        cookie_str = self._export_cookies()
+        if cookie_str:
+            self._set_cookie_str(cookie_str)
         return {
             "status": "success",
             "message": "登录成功",
+            "cookie": cookie_str,
             "access_token": self.access_token,
             "refresh_token": self.refresh_token,
             "session_key": self.session_key,

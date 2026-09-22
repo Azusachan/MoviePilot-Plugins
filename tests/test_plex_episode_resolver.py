@@ -66,7 +66,7 @@ class ResolverTests(unittest.TestCase):
             3: "ep-3",
         }
 
-        checked, episodes = module.MediaServerEpisodeResolver.episode_numbers(
+        checked, episodes = module.MediaServerResolver.episode_numbers(
             self.chain, self.media, 1
         )
 
@@ -88,7 +88,7 @@ class ResolverTests(unittest.TestCase):
         }
         self.chain.media_exists.return_value = None
 
-        checked, episodes = module.MediaServerEpisodeResolver.episode_numbers(
+        checked, episodes = module.MediaServerResolver.episode_numbers(
             self.chain, self.media, 1
         )
 
@@ -100,7 +100,7 @@ class ResolverTests(unittest.TestCase):
             "Disabled": self.inactive,
         }
 
-        checked, episodes = module.MediaServerEpisodeResolver.episode_numbers(
+        checked, episodes = module.MediaServerResolver.episode_numbers(
             self.chain, self.media, 1
         )
 

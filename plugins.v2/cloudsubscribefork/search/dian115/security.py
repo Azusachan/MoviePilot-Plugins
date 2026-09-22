@@ -4,9 +4,10 @@ import base64
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
-from urllib.parse import urlsplit
 
 from app.log import logger
+
+from ..cloudflare import browser_proxy, click_challenge_frame, launch_challenge_context
 
 _KEY_VERSION = 1
 _KEY_MASK = (55, 161, 92, 233)
@@ -52,13 +53,7 @@ class Dian115Turnstile:
         if self._page is not None and not self._page.is_closed():
             return
         self._close_browser()
-        from app.core.config import settings
-        from cloakbrowser import launch_context
-        self._context = launch_context(
-            headless=True, proxy=self._proxy,
-            humanize=getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
-            human_preset="careful",
-        )
+        self._context = launch_challenge_context(self._proxy)
         self._page = self._context.new_page()
         url = f"{self._base_url}/login"
         self._page.route(url, lambda route: route.fulfill(
@@ -93,20 +88,7 @@ class Dian115Turnstile:
                 if state.get("error"):
                     raise RuntimeError(f"Cloudflare 验证失败：{state['error']}")
                 if state.get("interactive") and not clicked:
-                    for frame in self._page.frames:
-                        if urlsplit(frame.url).hostname != "challenges.cloudflare.com":
-                            continue
-                        try:
-                            element = frame.frame_element()
-                            if not element.is_visible():
-                                continue
-                            box = element.bounding_box()
-                        except Exception:
-                            continue
-                        if box and box["width"] >= 60 and box["height"] >= 30:
-                            self._page.mouse.click(box["x"] + 30, box["y"] + box["height"] / 2)
-                            clicked = True
-                            break
+                    clicked = click_challenge_frame(self._page)
                 self._page.wait_for_timeout(200)
             raise TimeoutError("Cloudflare 验证超过 60 秒")
         except Exception:
@@ -178,7 +160,7 @@ def turnstile_token(client: Any, action: str, allow_browser: bool = True) -> Opt
         )
     try:
         if client._turnstile is None:
-            client._turnstile = Dian115Turnstile(client.base_url, client._browser_proxy())
+            client._turnstile = Dian115Turnstile(client.base_url, browser_proxy(client._proxies))
         token = client._turnstile.token(site_key, action)
         if not token:
             raise RuntimeError("Cloudflare 未返回验证 token")

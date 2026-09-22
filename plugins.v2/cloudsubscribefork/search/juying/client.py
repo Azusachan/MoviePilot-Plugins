@@ -49,7 +49,6 @@ class JuyingClient:
             request_interval: float = 1.0,
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
-            cache_namespace: str = "",
     ):
         self.base_url = str(base_url or self.BASE_URL).rstrip("/")
         self.username = str(username or "").strip()
@@ -60,7 +59,6 @@ class JuyingClient:
         self._token = ""
         self._get_data_func = get_data_func
         self._save_data_func = save_data_func
-        self.cache_namespace = str(cache_namespace or "").strip()
         self._lock = threading.RLock()
         self._circuit_open_until = 0.0
         self._request_gate = RequestGate.shared(
@@ -272,9 +270,9 @@ class JuyingClient:
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after") or ""
             try:
-                seconds = max(60, min(600, int(float(retry_after))))
+                seconds = max(30, min(120, int(float(retry_after))))
             except (TypeError, ValueError):
-                seconds = 300
+                seconds = 60
             self._request_gate.activate_cooldown(
                 seconds, status=429, reason="聚影 HTTP 429"
             )
@@ -374,8 +372,8 @@ class JuyingClient:
             )
         return payload
 
-    def checkin(self) -> Dict[str, Any]:
-        """通过聚影 WebAPI 完成每日签到。"""
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        """通过聚影 WebAPI 完成每日签到（聚影只有普通签到一种模式）。"""
         before = self.get_account_info()
         stats_before = self.get_checkin_stats()
         already_checked_in = bool(stats_before.get("checked_today"))

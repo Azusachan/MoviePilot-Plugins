@@ -8,6 +8,8 @@ from typing import Any, Dict
 from app.log import logger
 
 from .database import CloudSubscribeForkDatabaseManager, CloudSubscribeForkRepositories
+
+
 class CloudSubscribeForkDataStore:
     """业务数据和可恢复运行状态按职责写入独立数据库。"""
 
@@ -16,10 +18,6 @@ class CloudSubscribeForkDataStore:
     SCHEDULE_KEY = "checkin_schedule_state"
     RUNTIME_KEYS = {
         "account_info_cache",
-        "dian115_auth_session",
-        "juying_auth_session",
-        "pansou_auth_session",
-        "pinglian_auth_session",
     }
 
     def __init__(self, owner):

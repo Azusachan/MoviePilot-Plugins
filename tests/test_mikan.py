@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import unittest
 from types import MappingProxyType
+from types import SimpleNamespace
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 
@@ -18,10 +20,20 @@ namespace = dict(re=re, BeautifulSoup=BeautifulSoup, parse_qs=parse_qs, quote=qu
 fspec=importlib.util.spec_from_file_location('fansubs_for_mikan_test',SEARCH/'fansubs.py')
 fansubs=importlib.util.module_from_spec(fspec)
 fspec.loader.exec_module(fansubs)
-namespace['fansub_priority']=fansubs.fansub_priority
-tree = ast.parse((SEARCH / "mikan.py").read_text(encoding="utf-8"))
-tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-exec(compile(tree, "mikan.py", "exec"), namespace)
+namespace.update(Any=Any, Dict=Dict, Iterable=Iterable, List=List, Optional=Optional,
+                 title_without_season=matching.title_without_season)
+tree = ast.parse((SEARCH / "subs_filter.py").read_text(encoding="utf-8"))
+tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
+exec(compile(tree, "subs_filter.py", "exec"), namespace)
+namespace['mikan_file_candidates'] = namespace['anime_file_candidates']
+# Test the native parser without constructing a network client.
+tree = ast.parse((SEARCH / 'mikan/client.py').read_text(encoding='utf-8'))
+client = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'MikanClient')
+method = next(node for node in client.body if isinstance(node, ast.FunctionDef) and node.name == 'parse_rows')
+namespace.update(parse_size_str=lambda value: 0, MikanClientError=RuntimeError)
+exec(compile(ast.Module(body=[method], type_ignores=[]), 'mikan/client.py', 'exec'), namespace)
+native_parse_rows = namespace['parse_rows']
+namespace['parse_rows'] = lambda html, base_url: native_parse_rows(SimpleNamespace(base_url=base_url), html)
 
 
 class MikanTests(unittest.TestCase):
@@ -30,7 +42,10 @@ class MikanTests(unittest.TestCase):
         parser=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(parser)
         item=MappingProxyType({'name':'Example.mkv','is_dir':False})
-        self.assertIs(list(parser.MediaFileParser.iter_files([item]))[0],item)
+        parsed = list(parser.MediaFileParser.iter_files([item]))[0]
+        self.assertEqual(parsed['name'], item['name'])
+        self.assertNotIn('_relative_path', item)
+        self.assertEqual(parsed['_relative_path'], 'Example.mkv')
     def test_real_file_bilingual_identity_and_episode(self):
         release='[桜都字幕组] 示例 / Example [08][简繁内封]'
         good={'name':'[Sakurato] Example [08][1080p][CHS&CHT].mkv'}

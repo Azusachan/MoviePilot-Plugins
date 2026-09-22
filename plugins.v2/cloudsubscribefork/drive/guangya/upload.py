@@ -7,19 +7,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urlparse
 
 from app.log import logger
 
 from .files import GuangyaFileService
-
-try:
-    import oss2
-
-    OSS2_AVAILABLE = True
-except ImportError:
-    oss2 = None
-    OSS2_AVAILABLE = False
+from .oss import GuangyaOssClient, OssStsCredentials
 
 
 @dataclass
@@ -70,9 +62,6 @@ class GuangyaUploadService:
             file_sha1: str = "",
             progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> bool:
-        if not OSS2_AVAILABLE:
-            logger.error("光鸭本地上传不可用：oss2 未安装")
-            return False
         source = Path(str(local_path or ""))
         if not source.is_file():
             logger.error(f"光鸭本地上传文件不存在：{source}")
@@ -151,24 +140,14 @@ class GuangyaUploadService:
         security_token = str(credentials.get("sessionToken") or "")
         if not all((object_path, bucket_name, endpoint, access_key, secret_key, security_token)):
             raise RuntimeError("上传凭证缺少 OSS 参数")
-        parsed = urlparse(endpoint if endpoint.startswith("http") else f"https://{endpoint}")
-        host = parsed.netloc or parsed.path
-        if host.startswith(f"{bucket_name}."):
-            host = host[len(bucket_name) + 1:]
-        auth = oss2.StsAuth(access_key, secret_key, security_token)
-        bucket = oss2.Bucket(auth, f"https://{host}", bucket_name)
-        result = oss2.resumable_upload(
-            bucket,
-            object_path,
-            str(source),
-            part_size=5 * 1024 * 1024,
-            progress_callback=(
-                (lambda consumed, total: progress_callback(consumed, total))
-                if progress_callback else None
-            ),
-        )
-        if result is None:
-            raise RuntimeError("OSS 分片上传未返回结果")
+        credentials = OssStsCredentials(access_key, secret_key, security_token)
+        with GuangyaOssClient(endpoint, bucket_name, credentials) as oss_client:
+            oss_client.upload_file(
+                source,
+                object_path,
+                part_size=5 * 1024 * 1024,
+                progress_callback=progress_callback,
+            )
 
     def _wait_task(self, task_id: str, retry: int = 120) -> None:
         for index in range(max(1, retry)):

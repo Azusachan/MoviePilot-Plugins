@@ -17,11 +17,24 @@ from ...utils.http_client import build_proxy_url, validate_proxy_address
 class ConfigApi(OwnerDelegator):
     AGENT_CONFIG_FIELDS = frozenset(
         {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_cache_ttl_minutes",
-         "search_concurrency", "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit"})
-    _AGENT_BOOL_FIELDS = frozenset({"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled"})
+         "search_concurrency", "search_source_timeout", "search_circuit_breaker_enabled",
+         "search_circuit_breaker_threshold", "search_circuit_breaker_cooldown", "hdhive_timeout",
+         "dian115_timeout", "juying_timeout", "pansou_timeout", "seedhub_timeout", "piratebay_timeout",
+         "uindex_timeout", "pinglian_timeout", "mikan_timeout", "animegarden_timeout",
+         "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit", "hdhaven_candidate_limit"})
+    _AGENT_BOOL_FIELDS = frozenset(
+        {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_circuit_breaker_enabled"})
     _AGENT_INT_RANGES = {"search_cache_ttl_minutes": (1, 1440), "search_concurrency": (1, 5),
+                         "search_source_timeout": (5, 120), "search_circuit_breaker_threshold": (1, 10),
+                         "search_circuit_breaker_cooldown": (10, 600), "hdhive_timeout": (5, 120),
+                         "hdhaven_timeout": (5, 120),
+                         "dian115_timeout": (5, 120), "juying_timeout": (5, 120),
+                         "pansou_timeout": (5, 120), "seedhub_timeout": (5, 120), "piratebay_timeout": (5, 120),
+                         "uindex_timeout": (5, 120), "pinglian_timeout": (5, 120),
+                         "mikan_timeout": (5, 120), "animegarden_timeout": (5, 120),
                          "subscription_concurrency": (1, 5), "pansou_result_limit": (1, 100),
                          "hdhive_candidate_limit": (1, 20), "hdhive_unlocks_per_minute": (1, 3),
+                         "hdhaven_candidate_limit": (1, 20), "hdhaven_unlocks_per_minute": (1, 10),
                          "dian115_unlocks_per_minute": (1, 10)}
 
     @staticmethod
@@ -40,14 +53,14 @@ class ConfigApi(OwnerDelegator):
             self,
             payload: Dict[str, Any],
     ) -> Optional[str]:
-        providers = self.get_checkin_provider_specs()
+        providers = self.get_checkin_providers()
         for provider in providers:
-            mode_key = f"{provider['key']}_checkin_mode"
+            mode_key = provider.mode_key
             mode = str(
                 payload.get(mode_key, "normal") or "normal"
             ).strip().lower()
-            if mode not in provider["modes"]:
-                return f"{provider['name']} 签到模式无效"
+            if mode not in provider.modes:
+                return f"{provider.name} 签到模式无效"
             payload[mode_key] = mode
         try:
             lottery_count = int(
@@ -66,7 +79,7 @@ class ConfigApi(OwnerDelegator):
             or "0 8 * * *"
         ).strip()
         enabled = any(
-            payload.get(f"{provider['key']}_checkin_enabled")
+            payload.get(provider.enabled_key)
             for provider in providers
         )
         if enabled and not self._cron_is_valid(cron):
@@ -115,6 +128,7 @@ class ConfigApi(OwnerDelegator):
             payload = await request.json()
             if not isinstance(payload, dict):
                 return {"success": False, "message": "配置数据格式错误"}
+            UIConfig.normalize_config(payload)
             self._validate_search_proxy_config(payload)
             auto_subscribe_error = self._validate_auto_subscribe_config(payload)
             if auto_subscribe_error:
@@ -122,7 +136,9 @@ class ConfigApi(OwnerDelegator):
             checkin_error = self._validate_checkin_config(payload)
             if checkin_error:
                 return {"success": False, "message": checkin_error}
-            self.update_config(payload)
+            # 宿主 update_config 仅在真正失败时返回 False，None 表示配置未变化。
+            if self.update_config(payload) is False:
+                return {"success": False, "message": "配置保存失败，请重试"}
             clear_ui_options_cache()
             clear_account_cache()
             if not sync_lock.acquire(blocking=False):
@@ -342,7 +358,8 @@ class ConfigApi(OwnerDelegator):
         if not changed:
             return {"success": True, "message": "配置未变化", "data": {"changed": {}}}
         payload.update(changed)
-        self.update_config(payload)
+        if self.update_config(payload) is False:
+            return {"success": False, "message": "配置保存失败，请重试"}
         if not sync_lock.acquire(blocking=False):
             self._queue_pending_config(payload)
             return {

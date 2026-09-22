@@ -7,7 +7,11 @@ from urllib.parse import urlsplit, urlunsplit
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
-from app.helper.mediaserver import MediaServerHelper
+
+try:
+    from app.helper.mediaserver import MediaServerHelper
+except ImportError:
+    from app.application.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
 
@@ -137,11 +141,19 @@ class UIConfig:
             "tianyi_cookie": "",
             "tianyi_access_token": "",
             "tianyi_refresh_token": "",
+            "tianyi_session_key": "",
             "tianyi_request_timeout": 60,
+            "yun139_authorization": "",
+            "yun139_request_timeout": 60,
             "alipan_access_token": "",
             "alipan_refresh_token": "",
             "alipan_request_timeout": 60,
             "cloud_drive": "115",
+            "organize_after_transfer": True,
+            "organize_subtitles": True,
+            "subtitle_traditional_to_simplified": False,
+            "anime_pack_preferred": True,
+            "offline_timeout": 30,
             "strm_generate_enabled": True,
             "nfo_scrape_enabled": False,
             "image_scrape_enabled": False,
@@ -167,6 +179,7 @@ class UIConfig:
             "pansou_url": "https://so.252035.xyz/",
             "hdhive_base_url": "https://re0.me",
             "dian115_base_url": "https://m.dian115.com",
+            "hdhaven_base_url": "https://hdhaven.com",
             "juying_base_url": "https://www.jying.top",
             "seedhub_base_url": "https://www.seedhub.cc",
             "piratebay_base_url": "https://apibay.org",
@@ -187,20 +200,46 @@ class UIConfig:
             "pansou_concurrency": None,
             "pansou_result_limit": 10,
             "pansou_refresh": True,
-            "pansou_timeout": 30,
+            "pansou_timeout": 60,
             "seedhub_result_limit": 20,
             "seedhub_request_interval": 1.0,
-            "seedhub_timeout": 20,
-            "mikan_base_url": "https://mikanani.me",
-            "mikan_result_limit": 80,
-            "mikan_timeout": 30,
-            "mikan_request_interval": 2,
+            "seedhub_timeout": 60,
             "piratebay_result_limit": 20,
             "piratebay_request_interval": 1.0,
-            "piratebay_timeout": 20,
+            "piratebay_timeout": 60,
+            "mikan_base_url": "https://mikanani.me",
+            "mikan_result_limit": 10,
+            "mikan_request_interval": 2.0,
+            "mikan_timeout": 60,
+            "mikan_fansub_order": [
+                "LoliHouse",
+                "VCB-Studio",
+                "喵萌奶茶|Nekomoe",
+                "Nix-Raws",
+                r"\bANI\b|ANi",
+            ],
+            "mikan_fansub_exclude": "",
+            "mikan_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
+            "mikan_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
+            "mikan_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
+            "animegarden_base_url": "https://animes.garden/",
+
+            "animegarden_fansub_order": [
+                "LoliHouse",
+                "VCB-Studio",
+                "喵萌奶茶|Nekomoe",
+                "Nix-Raws",
+                r"\bANI\b|ANi",
+            ],
+            "animegarden_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
+            "animegarden_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
+            "animegarden_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
+            "animegarden_result_limit": 10,
+            "animegarden_request_interval": 1.0,
+            "animegarden_timeout": 60,
             "uindex_result_limit": 20,
             "uindex_request_interval": 1.0,
-            "uindex_timeout": 20,
+            "uindex_timeout": 60,
             "juying_username": "",
             "juying_password": "",
             "juying_checkin_enabled": False,
@@ -210,7 +249,7 @@ class UIConfig:
             "pinglian_password": "",
             "pinglian_result_limit": 20,
             "pinglian_request_interval": 1.0,
-            "pinglian_timeout": 30,
+            "pinglian_timeout": 60,
             "hdhive_query_mode": "web",
             "hdhive_api_key": "",
             "hdhive_client_id": "",
@@ -239,6 +278,18 @@ class UIConfig:
             "dian115_auto_unlock": False,
             "dian115_max_unlock_points": 50,
             "dian115_max_points_per_sub": 20,
+            "hdhaven_username": "",
+            "hdhaven_password": "",
+            "hdhaven_auto_unlock": True,
+            "hdhaven_max_unlock_points": 50,
+            "hdhaven_max_points_per_sub": 20,
+            "hdhaven_checkin_enabled": False,
+            "hdhaven_checkin_mode": "gambler",
+            "hdhaven_candidate_limit": 4,
+            "hdhaven_request_interval": 2.0,
+            "hdhaven_unlocks_per_minute": 5,
+            "hdhaven_timeout": 60,
+            "hdhaven_magnet_enabled": False,
             "search_source_order": ["pansou"],
             "search_proxy": "",
             "search_proxy_username": "",
@@ -246,6 +297,13 @@ class UIConfig:
             "search_cache_enabled": True,
             "search_cache_ttl_minutes": 30,
             "search_concurrency": 2,
+            "search_source_timeout": 60,
+            "search_circuit_breaker_enabled": True,
+            "search_circuit_breaker_threshold": 3,
+            "search_circuit_breaker_cooldown": 60,
+            "hdhive_timeout": 60,
+            "dian115_timeout": 60,
+            "juying_timeout": 60,
             "hdhive_candidate_limit": 4,
             "hdhive_request_interval": 5,
             "hdhive_unlocks_per_minute": 2,
@@ -265,7 +323,7 @@ class UIConfig:
             "transfer_task_batch_size": 50,
             "cross_transfer_enabled": False,
             "cross_transfer_media_types": ["movie", "tv"],
-            "cross_transfer_download_path": "",
+            "cross_transfer_download_path": "/tmp",
             "cross_transfer_download_threads": 5,
             "cross_transfer_max_concurrent": 2,
             "subscription_concurrency": 2,
@@ -278,19 +336,23 @@ class UIConfig:
             "upgrade_mode": "largest",
             "upgrade_subscribe_ids": [],
             "local_resource_path": "",
-            "cloud_transfer_path": "/",
+            "p115_transfer_path": "/",
             "p123_transfer_path": "/",
             "quark_transfer_path": "/",
             "guangya_transfer_path": "/",
             "tianyi_transfer_path": "/",
+            "yun139_transfer_path": "/",
             "alipan_transfer_path": "/",
-            "cloud_media_path": "/",
+            "p115_media_path": "/",
             "p123_media_path": "/",
             "quark_media_path": "/",
             "guangya_media_path": "/",
             "tianyi_media_path": "/",
+            "yun139_media_path": "/",
             "alipan_media_path": "/",
             "self_heal_interval": 10,
+            "anime_pack_preferred": True,
+            "offline_timeout": 30,
         }
 
     @staticmethod
@@ -415,3 +477,120 @@ class UIConfig:
         except Exception as error:
             logger.error(f"获取媒体服务器列表失败: {error}")
             return []
+
+    @staticmethod
+    def normalize_config(target: Dict[str, Any]) -> Dict[str, Any]:
+        """集中处理配置清洗、赋初值、字符串与数组拆分转换，解耦前端。"""
+        if not isinstance(target, dict):
+            return {}
+        import re
+        current_year = datetime.datetime.now().year
+        current_month = datetime.datetime.now().month
+
+        if not str(target.get("auto_subscribe_username") or "").strip():
+            target["auto_subscribe_username"] = DEFAULT_AUTO_SUBSCRIBE_USERNAME
+
+        year_keys = [
+            "auto_subscribe_douban_min_year",
+            "auto_subscribe_maoyan_min_year",
+            "auto_subscribe_netflix_min_year",
+            "auto_subscribe_mikan_year",
+            "auto_subscribe_mikan_min_year",
+            "auto_subscribe_tmdb_min_year",
+            "auto_subscribe_bangumi_min_year",
+            "auto_subscribe_anilist_min_year",
+        ]
+        for key in year_keys:
+            try:
+                val = int(target.get(key) or 0)
+            except (TypeError, ValueError):
+                val = 0
+            if val <= 0:
+                target[key] = current_year
+
+        month_keys = [
+            "auto_subscribe_douban_min_month",
+            "auto_subscribe_maoyan_min_month",
+            "auto_subscribe_netflix_min_month",
+            "auto_subscribe_mikan_min_month",
+            "auto_subscribe_tmdb_min_month",
+            "auto_subscribe_bangumi_min_month",
+            "auto_subscribe_anilist_min_month",
+        ]
+        for key in month_keys:
+            try:
+                val = int(target.get(key) or 0)
+            except (TypeError, ValueError):
+                val = 0
+            if not 1 <= val <= 12:
+                target[key] = current_month
+
+        rss_urls = target.get("auto_subscribe_douban_rss_urls")
+        if isinstance(rss_urls, str):
+            target["auto_subscribe_douban_rss_urls"] = [
+                u.strip() for u in re.split(r"[\n,，]+", rss_urls) if u.strip()
+            ]
+        elif not isinstance(rss_urls, list):
+            target["auto_subscribe_douban_rss_urls"] = []
+
+        mikan_urls = target.get("auto_subscribe_mikan_base_urls")
+        if isinstance(mikan_urls, str):
+            target["auto_subscribe_mikan_base_urls"] = [
+                u.strip() for u in re.split(r"[\n,，]+", mikan_urls) if u.strip()
+            ]
+        elif not isinstance(mikan_urls, list) or not mikan_urls:
+            target["auto_subscribe_mikan_base_urls"] = ["https://mikanani.me", "https://mikanime.tv"]
+
+        default_fansub_order = ["LoliHouse", "VCB-Studio", "喵萌奶茶|Nekomoe", "Nix-Raws", r"\bANI\b|ANi"]
+        if not isinstance(target.get("mikan_fansub_order"), list) or not target["mikan_fansub_order"]:
+            target["mikan_fansub_order"] = list(default_fansub_order)
+        if not isinstance(target.get("animegarden_fansub_order"), list) or not target["animegarden_fansub_order"]:
+            target["animegarden_fansub_order"] = list(default_fansub_order)
+
+        default_no_subs_re = r"无字幕|無字幕|无字版|偏字版|生肉|\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\b"
+        default_chinese_re = r"简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\b|_)"
+        default_exclude_re = r"720[pP]|480[pP]|特别篇|特別篇|\b(?:SP|OVA|OAD)\d*|\b\d+\s*-\s*\d+\b"
+
+        if not target.get("mikan_no_subs_re"):
+            target["mikan_no_subs_re"] = default_no_subs_re
+        if not target.get("mikan_chinese_re"):
+            target["mikan_chinese_re"] = default_chinese_re
+        if not target.get("mikan_exclude_re"):
+            target["mikan_exclude_re"] = default_exclude_re
+
+        if not target.get("animegarden_no_subs_re"):
+            target["animegarden_no_subs_re"] = default_no_subs_re
+        if not target.get("animegarden_chinese_re"):
+            target["animegarden_chinese_re"] = default_chinese_re
+        if not target.get("animegarden_exclude_re"):
+            target["animegarden_exclude_re"] = default_exclude_re
+
+        if not str(target.get("cross_transfer_download_path") or "").strip():
+            target["cross_transfer_download_path"] = "/tmp"
+
+        online_docs = target.get("online_docs")
+        if not isinstance(online_docs, list) or not online_docs:
+            legacy_urls = target.get("online_docs_urls") or []
+            if isinstance(legacy_urls, str):
+                legacy_urls = [u.strip() for u in re.split(r"[,，\n]+", legacy_urls) if u.strip()]
+            legacy_types = target.get("online_docs_resource_types") or []
+            if not isinstance(legacy_types, list):
+                legacy_types = []
+            target["online_docs"] = [
+                {"url": url, "resource_types": list(legacy_types)}
+                for url in legacy_urls if url
+            ]
+        if not target["online_docs"]:
+            target["online_docs"].append({"url": "", "resource_types": []})
+        target["online_docs_urls"] = []
+        target["online_docs_resource_types"] = []
+
+        for key in ("search_source_order", "pansou_channels", "pansou_plugins", "pansou_filter_include",
+                    "pansou_filter_exclude"):
+            val = target.get(key)
+            if isinstance(val, str):
+                target[key] = [v.strip() for v in re.split(r"[,，\n]+", val) if v.strip()]
+            elif not isinstance(val, list):
+                target[key] = []
+
+        return target

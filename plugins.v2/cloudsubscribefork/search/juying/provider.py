@@ -25,6 +25,7 @@ def create_juying_provider(
             SearchCapability.ACCOUNT: client,
             SearchCapability.CHECKIN: client,
             SearchCapability.CACHE_MAINTENANCE: service,
+            SearchCapability.LIFECYCLE: client,
         },
         policy=SearchPolicy(
             cacheable=False,

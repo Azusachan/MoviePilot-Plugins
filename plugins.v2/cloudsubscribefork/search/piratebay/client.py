@@ -12,6 +12,7 @@ from ..http_client import (
     normalize_proxy_address,
     requests,
 )
+from ..magnet import build_magnet_url
 from ...utils.cache import create_platform_ttl_cache
 
 
@@ -134,7 +135,7 @@ class PirateBayClient:
                 except (ValueError, TypeError):
                     leechers = 0
 
-                magnet_url = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(name)}"
+                magnet_url = build_magnet_url(info_hash, name)
                 results.append({
                     "url": magnet_url,
                     "title": name,

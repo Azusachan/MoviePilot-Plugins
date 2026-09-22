@@ -1,5 +1,7 @@
 """搜索渠道能力规范与运行时注册表。"""
 
+import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -15,6 +17,8 @@ from typing import (
     Union,
     runtime_checkable,
 )
+
+from app.log import logger
 
 
 class SearchCapability(str, Enum):
@@ -136,6 +140,7 @@ class SearchQuery:
     subscribe: Any = field(default=None, repr=False, compare=False)
     resource_list_mode: bool = False
     result_limit: Optional[int] = None
+    keyword: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -186,7 +191,9 @@ class SearchAccountOperations(Protocol):
 
 @runtime_checkable
 class SearchCheckinOperations(Protocol):
-    def checkin(self, **kwargs: Any) -> Dict[str, Any]: ...
+    """签到能力的统一契约：渠道只按模式入参，不暴露渠道私有参数。"""
+
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -337,7 +344,16 @@ class SearchRegistry:
             raise ValueError(f"搜索渠道重复注册：{key}")
         self._providers[key] = provider
 
-    def get(self, key: str) -> SearchProvider:
+    def __contains__(self, key: str) -> bool:
+        return str(key or "").strip().lower() in self._providers
+
+    def has(self, key: str) -> bool:
+        return str(key or "").strip().lower() in self._providers
+
+    def get(self, key: str, default: Optional[SearchProvider] = None) -> Optional[SearchProvider]:
+        return self._providers.get(str(key or "").strip().lower(), default)
+
+    def require(self, key: str) -> SearchProvider:
         normalized = str(key or "").strip().lower()
         provider = self._providers.get(normalized)
         if provider is None:
@@ -346,3 +362,132 @@ class SearchRegistry:
 
     def available(self) -> List[SearchProvider]:
         return list(self._providers.values())
+
+
+
+class CircuitState(str, Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+class SearchCircuitBreaker:
+    """搜索渠道熔断器，防止故障、超时或风控渠道拖垮全局搜索调度。"""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._states: Dict[str, CircuitState] = {}
+        self._failure_counts: Dict[str, int] = {}
+        self._open_untils: Dict[str, float] = {}
+        self._reasons: Dict[str, str] = {}
+        self._enabled: bool = True
+        self._failure_threshold: int = 3
+        self._cooldown_seconds: float = 60.0
+
+    def configure(
+            self,
+            enabled: bool = True,
+            failure_threshold: int = 3,
+            cooldown_seconds: float = 60.0,
+    ) -> None:
+        """配置熔断器全局策略。"""
+        with self._lock:
+            self._enabled = bool(enabled)
+            self._failure_threshold = max(1, int(failure_threshold or 3))
+            self._cooldown_seconds = max(5.0, float(cooldown_seconds or 60.0))
+
+    def get_state(self, key: str) -> CircuitState:
+        """获取渠道当前熔断状态。"""
+        normalized = str(key or "").strip().lower()
+        with self._lock:
+            state = self._states.get(normalized, CircuitState.CLOSED)
+            if state == CircuitState.OPEN and time.monotonic() >= self._open_untils.get(normalized, 0.0):
+                return CircuitState.HALF_OPEN
+            return state
+
+    def can_execute(self, key: str) -> bool:
+        if not self._enabled:
+            return True
+        normalized = str(key or "").strip().lower()
+        with self._lock:
+            state = self._states.get(normalized, CircuitState.CLOSED)
+            if state == CircuitState.CLOSED:
+                return True
+            now = time.monotonic()
+            open_until = self._open_untils.get(normalized, 0.0)
+            if now >= open_until:
+                self._states[normalized] = CircuitState.HALF_OPEN
+                return True
+            return False
+
+    def cooldown_remaining(self, key: str) -> float:
+        normalized = str(key or "").strip().lower()
+        with self._lock:
+            state = self._states.get(normalized, CircuitState.CLOSED)
+            if state == CircuitState.CLOSED:
+                return 0.0
+            return max(0.0, self._open_untils.get(normalized, 0.0) - time.monotonic())
+
+    def get_cooldown_remaining(self, key: str) -> float:
+        """别名方法：获取剩余冷却秒数。"""
+        return self.cooldown_remaining(key)
+
+    def get_reason(self, key: str) -> str:
+        normalized = str(key or "").strip().lower()
+        with self._lock:
+            return self._reasons.get(normalized, "")
+
+    def record_success(self, key: str) -> None:
+        normalized = str(key or "").strip().lower()
+        with self._lock:
+            self._failure_counts[normalized] = 0
+            self._states[normalized] = CircuitState.CLOSED
+            self._open_untils.pop(normalized, None)
+            self._reasons.pop(normalized, None)
+
+    def record_failure(
+            self,
+            key: str,
+            reason: str = "",
+            threshold: Optional[int] = None,
+            cooldown_seconds: Optional[float] = None,
+    ) -> None:
+        if not self._enabled:
+            return
+        normalized = str(key or "").strip().lower()
+        max_threshold = max(1, int(threshold or self._failure_threshold))
+        cooldown = max(5.0, float(cooldown_seconds or self._cooldown_seconds))
+        with self._lock:
+            count = self._failure_counts.get(normalized, 0) + 1
+            self._failure_counts[normalized] = count
+            if count >= max_threshold:
+                self.trip(normalized, cooldown, reason=reason or f"连续失败 {count} 次")
+
+    def trip(self, key: str, cooldown_seconds: float, reason: str = "风控保护") -> None:
+        normalized = str(key or "").strip().lower()
+        cooldown = max(1.0, float(cooldown_seconds or self._cooldown_seconds))
+        with self._lock:
+            self._states[normalized] = CircuitState.OPEN
+            self._open_untils[normalized] = time.monotonic() + cooldown
+            self._reasons[normalized] = str(reason or "风控保护")
+        logger.warning(
+            f"[{normalized.upper()}] 触发搜索熔断（原因：{reason}），"
+            f"将在接下来的 {int(cooldown + 0.999)} 秒内短路跳过该渠道查询"
+        )
+
+    def reset(self, key: str = "") -> None:
+        with self._lock:
+            if key:
+                normalized = str(key).strip().lower()
+                self._states.pop(normalized, None)
+                self._failure_counts.pop(normalized, None)
+                self._open_untils.pop(normalized, None)
+                self._reasons.pop(normalized, None)
+            else:
+                self._states.clear()
+                self._failure_counts.clear()
+                self._open_untils.clear()
+                self._reasons.clear()
+
+
+SEARCH_CIRCUIT_BREAKER = SearchCircuitBreaker()

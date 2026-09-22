@@ -1,96 +1,236 @@
 <template>
   <div class="cloud-subscribe-config">
-    <v-card flat class="border rounded config-shell">
-      <v-card-title class="config-header d-flex align-center ga-1 px-3 py-2 bg-primary-lighten-5">
-        <v-icon icon="mdi-cloud-cog-outline" color="primary" size="small" class="mr-1" />
-        <span class="config-title text-subtitle-1">网盘订阅助手</span>
-        <v-spacer />
-        <v-btn
-          v-if="showSwitch"
-          class="config-header-action"
-          variant="text"
-          size="small"
-          prepend-icon="mdi-arrow-left"
-          title="返回详情"
-          @click="emit('switch')">
-          返回详情
-        </v-btn>
-        <v-btn
-          class="config-header-action"
-          variant="text"
-          size="small"
-          prepend-icon="mdi-close"
-          title="关闭"
-          @click="emit('close')">
-          关闭
-        </v-btn>
-      </v-card-title>
-      <v-card-text class="pa-0 config-body">
-        <v-tabs v-model="activeTab" color="primary" density="compact" show-arrows class="config-tabs border-b">
-          <v-tab v-for="section in sections" :key="section.value" :value="section.value">
-            <v-icon :icon="section.icon" size="small" class="mr-2" />
-            {{ section.title }}
-          </v-tab>
-        </v-tabs>
-        <div class="config-content-scroll">
-          <div class="config-window">
-            <section
-              v-for="section in sections"
-              :key="section.value"
-              v-show="activeTab === section.value"
-              class="config-window-section">
-              <ConfigSection
-                :section="section"
-                :config="config"
-                :api="api"
-                :refreshing-accounts="refreshingAccounts"
-                :testing-source="testingSource"
-                :testing-auto-subscribe="testingAutoSubscribe"
-                :testing-proxy="testingProxy"
-                :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
-                :hdhive-oauth-action="hdhiveOauthAction"
-                @scan="openQrCode"
-                @browse-directory="openDirectoryPicker"
-                @test-source="openSourceTest"
-                @test-auto-subscribe="testAutoSubscribe"
-                @test-proxy="testSearchProxy"
-                @test-auto-subscribe-proxy="testAutoSubscribeProxy"
-                @refresh-account="refreshAccount"
-                @hdhive-oauth-start="startHdhiveOAuth"
-                @hdhive-oauth-exchange="exchangeHdhiveOAuth"
-                @checkin-result="handleCheckinResult"
-                @copy-text="copyText" />
-            </section>
+    <v-card flat class="border rounded-lg config-shell">
+      <div class="config-layout">
+        <!-- 左侧通顶侧边栏：融合品牌标题，结构化层级与精致底座 -->
+        <aside class="config-sidebar">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-main">
+              <div class="sidebar-brand-badge">
+                <v-icon icon="mdi-cloud-cog-outline" color="primary" size="18" class="sidebar-brand-icon" />
+              </div>
+              <div class="sidebar-brand-text">
+                <span class="sidebar-brand-title">网盘订阅助手</span>
+                <span class="sidebar-brand-subtitle">CloudSubscribeFork</span>
+              </div>
+            </div>
+            <!-- 手机端顶部右侧操作栏（位置正确且直接置顶） -->
+            <div class="sidebar-mobile-actions d-md-none">
+              <v-btn
+                v-if="showSwitch"
+                class="mobile-header-btn"
+                variant="text"
+                size="small"
+                density="compact"
+                prepend-icon="mdi-arrow-left"
+                title="返回详情"
+                @click="emit('switch')">
+                返回
+              </v-btn>
+              <v-btn
+                class="mobile-header-btn"
+                variant="text"
+                size="small"
+                density="compact"
+                icon="mdi-close"
+                title="关闭"
+                @click="emit('close')" />
+            </div>
           </div>
-        </div>
-      </v-card-text>
-      <v-divider />
-      <v-card-actions class="config-actions px-4 py-3">
-        <v-progress-linear v-if="saving" class="save-progress" color="primary" indeterminate />
-        <v-slide-y-transition>
-          <div v-if="saving" class="save-state" aria-live="polite">
-            <v-progress-circular indeterminate size="16" width="2" color="primary" />
-            正在保存配置
+          <nav class="sidebar-nav" aria-label="配置导航">
+            <!-- 电脑端：带精美分组层级 -->
+            <template v-if="!isMobile">
+              <div
+                v-for="group in navGroups"
+                :key="group.name"
+                class="sidebar-nav-group">
+                <div class="sidebar-group-title">{{ group.name }}</div>
+                <button
+                  v-for="section in group.items"
+                  :key="section.value"
+                  type="button"
+                  class="sidebar-nav-item"
+                  :class="{ 'sidebar-nav-item--active': activeTab === section.value }"
+                  @click="onNavClick(section.value, $event)">
+                  <span v-if="activeTab === section.value" class="sidebar-active-pill"></span>
+                  <v-icon :icon="section.icon" size="17" class="sidebar-nav-icon" />
+                  <span class="sidebar-nav-title">{{ section.title }}</span>
+                </button>
+              </div>
+            </template>
+            <!-- 手机端：平铺横向流畅滑动 -->
+            <template v-else>
+              <button
+                v-for="section in sections"
+                :key="section.value"
+                type="button"
+                class="sidebar-nav-item"
+                :class="{ 'sidebar-nav-item--active': activeTab === section.value }"
+                @click="onNavClick(section.value, $event)">
+                <v-icon :icon="section.icon" size="16" class="sidebar-nav-icon" />
+                <span class="sidebar-nav-title">{{ section.title }}</span>
+              </button>
+            </template>
+          </nav>
+          <!-- 电脑端左下角全高状态看板卡片（排版饱满高级，不显空旷） -->
+          <div class="sidebar-footer">
+            <div class="sidebar-status-panel">
+              <!-- 顶部：运行状态与版本标签 -->
+              <div class="status-panel-top">
+                <div class="status-live-badge">
+                  <span class="status-live-dot"></span>
+                  <span class="status-live-text">运行中</span>
+                </div>
+                <span v-if="pluginVersion" class="status-version-tag">v{{ pluginVersion }}</span>
+              </div>
+
+              <!-- 中部：元数据指标卡片网格 -->
+              <div class="status-info-grid">
+                <div v-if="pluginAuthor" class="status-info-row">
+                  <span class="status-info-label">作者</span>
+                  <span class="status-info-value">{{ pluginAuthor }}</span>
+                </div>
+              </div>
+
+              <!-- 底部：开源社区链接与支持 -->
+              <div v-if="repoUrl || authorUrl" class="status-panel-links">
+                <a
+                  v-if="repoUrl"
+                  :href="repoUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="status-action-link"
+                  title="访问 GitHub 开源项目仓库">
+                  <v-icon icon="mdi-github" size="13" class="mr-1" />
+                  <span>开源仓库</span>
+                  <v-icon icon="mdi-open-in-new" size="10" class="ml-auto opacity-50" />
+                </a>
+                <a
+                  v-if="issuesUrl"
+                  :href="issuesUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="status-action-link"
+                  title="提交问题反馈或功能建议">
+                  <v-icon icon="mdi-help-circle-outline" size="13" class="mr-1" />
+                  <span>反馈支持</span>
+                  <v-icon icon="mdi-chevron-right" size="12" class="ml-auto opacity-50" />
+                </a>
+                <a
+                  v-else-if="authorUrl && !repoUrl"
+                  :href="authorUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="status-action-link"
+                  title="访问插件作者主页">
+                  <v-icon icon="mdi-account-outline" size="13" class="mr-1" />
+                  <span>作者主页</span>
+                  <v-icon icon="mdi-open-in-new" size="10" class="ml-auto opacity-50" />
+                </a>
+              </div>
+            </div>
           </div>
-        </v-slide-y-transition>
-        <v-spacer />
-        <v-btn
-          color="primary"
-          class="save-config-button"
-          variant="flat"
-          elevation="2"
-          prepend-icon="mdi-content-save-check-outline"
-          :loading="saving"
-          @click="save">
-          保存配置
-        </v-btn>
-      </v-card-actions>
+        </aside>
+
+        <!-- 右侧主界面 -->
+        <main class="config-main">
+          <!-- 电脑端极简顶栏：展示当前模块名称，右侧放置返回/关闭操作；手机端已置顶整合 -->
+          <header class="config-main-header d-none d-md-flex">
+            <div class="config-main-title">
+              <v-icon
+                v-if="currentSection?.icon"
+                :icon="currentSection.icon"
+                size="20"
+                color="primary"
+                class="mr-2 flex-shrink-0" />
+              <span>{{ currentSectionTitle }}</span>
+            </div>
+            <div class="config-header-actions">
+              <v-btn
+                v-if="showSwitch"
+                class="config-header-btn"
+                variant="text"
+                size="small"
+                prepend-icon="mdi-arrow-left"
+                title="返回详情"
+                @click="emit('switch')">
+                返回详情
+              </v-btn>
+              <v-btn
+                class="config-header-btn"
+                variant="text"
+                size="small"
+                prepend-icon="mdi-close"
+                title="关闭"
+                @click="emit('close')">
+                关闭
+              </v-btn>
+            </div>
+          </header>
+
+          <!-- 内容展示容器：带丝滑淡入过渡动画，仅渲染当前激活的 section -->
+          <div class="config-main-body">
+            <transition name="fade-slide" mode="out-in">
+              <div :key="activeTab" class="config-window-section">
+                <ConfigSection
+                  v-if="currentSection"
+                  :section="currentSection"
+                  :config="config"
+                  :options="options"
+                  :api="api"
+                  :refreshing-accounts="refreshingAccounts"
+                  :testing-source="testingSource"
+                  :testing-auto-subscribe="testingAutoSubscribe"
+                  :testing-proxy="testingProxy"
+                  :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
+                  :hdhive-oauth-action="hdhiveOauthAction"
+                  @scan="openQrCode"
+                  @browse-directory="openDirectoryPicker"
+                  @test-source="openSourceTest"
+                  @test-auto-subscribe="testAutoSubscribe"
+                  @test-proxy="testSearchProxy"
+                  @test-auto-subscribe-proxy="testAutoSubscribeProxy"
+                  @refresh-account="refreshAccount"
+                  @hdhive-oauth-start="startHdhiveOAuth"
+                  @hdhive-oauth-exchange="exchangeHdhiveOAuth"
+                  @checkin-result="handleCheckinResult"
+                  @copy-text="copyText"
+                  @load-options="loadDynamicOptions"
+                  @refresh-options="refreshDynamicOptions" />
+              </div>
+            </transition>
+          </div>
+
+          <!-- 底部操作栏 -->
+          <footer class="config-actions">
+            <v-progress-linear v-if="saving" class="save-progress" color="primary" indeterminate />
+            <v-slide-y-transition>
+              <div v-if="saving" class="save-state" aria-live="polite">
+                <v-progress-circular indeterminate size="16" width="2" color="primary" />
+                正在保存配置
+              </div>
+            </v-slide-y-transition>
+            <div class="actions-spacer"></div>
+            <v-btn
+              color="primary"
+              class="save-config-button"
+              variant="flat"
+              elevation="1"
+              prepend-icon="mdi-content-save-check-outline"
+              :loading="saving"
+              @click="save">
+              保存配置
+            </v-btn>
+          </footer>
+        </main>
+      </div>
     </v-card>
     <QrCodeDialog v-show="qrVisible" v-model="qrVisible" :api="api" :provider="qrProvider" @success="handleQrSuccess" />
-    <CloudDirectoryDialog
+    <DirectoryDialog
       v-show="directoryVisible"
       v-model="directoryVisible"
       :api="api"
+      :mode="directoryMode"
       :provider="directoryProvider"
       :initial-path="directoryInitialPath"
       @select="selectDirectory" />
@@ -210,6 +350,25 @@
                   <v-badge inline :content="resourceType.count" color="primary" class="ml-2" />
                 </v-tab>
               </v-tabs>
+              <v-tabs
+                v-if="testFansubs.length > 1"
+                v-model="selectedTestFansub"
+                color="secondary"
+                density="compact"
+                show-arrows
+                class="source-test-tabs source-test-fansub-tabs mt-1">
+                <v-tab value="">
+                  全部字幕组
+                  <v-badge inline :content="testResult.items?.length || 0" color="secondary" class="ml-2" />
+                </v-tab>
+                <v-tab
+                  v-for="fansub in testFansubs"
+                  :key="fansub.value"
+                  :value="fansub.value">
+                  {{ fansub.title }}
+                  <v-badge inline :content="fansub.count" color="secondary" class="ml-2" />
+                </v-tab>
+              </v-tabs>
               <div class="source-test-result-scroll">
                 <v-list v-if="filteredTestItems.length" density="compact" class="source-test-result-list">
                   <v-list-item
@@ -232,6 +391,14 @@
                         </v-chip>
                         <v-chip size="x-small" variant="tonal">
                           {{ item.resource_type_name || item.resource_type || "未知类型" }}
+                        </v-chip>
+                        <v-chip
+                          v-if="item.fansub"
+                          size="x-small"
+                          variant="tonal"
+                          color="secondary"
+                          class="font-weight-medium">
+                          {{ item.fansub }}
                         </v-chip>
                         <v-chip
                           v-if="testItemStatus(item)"
@@ -492,71 +659,162 @@
 
 <script setup>
 import {computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch} from "vue";
+import {useDisplay} from "vuetify";
 import ConfigSection from "./config/ConfigSection.vue";
 import {createConfigSections} from "../config/fields.js";
-import {createResourceTypeItems} from "../config/fields/helpers.js";
 
 const QrCodeDialog = defineAsyncComponent(() => import("./dialogs/QrCodeDialog.vue"))
-const CloudDirectoryDialog = defineAsyncComponent(() => import("./dialogs/CloudDirectoryDialog.vue"))
+const DirectoryDialog = defineAsyncComponent(() => import("./dialogs/DirectoryDialog.vue"));
+
 const props = defineProps({
   api: { type: [Object, Function], required: true },
   initialConfig: { type: Object, default: () => ({}) },
+  pluginId: {type: String, default: ""},
+  sourcePluginId: {type: String, default: ""},
   showSwitch: { type: Boolean, default: true },
 })
 const emit = defineEmits(["save", "close", "switch", "layout"])
 const api = props.api
+
+const pluginDetail = ref(null);
+
+/** 将 raw.githubusercontent.com 插件地址转换为可访问的 GitHub 项目主页（对齐 MoviePilot 平台 PluginCard.vue 逻辑） */
+function normalizePluginRepoUrl(repoUrl) {
+  if (!repoUrl || typeof repoUrl !== "string" || !repoUrl.includes("raw.githubusercontent.com")) return repoUrl || "";
+  try {
+    const rawUrl = new URL(repoUrl);
+    const [user, repo] = rawUrl.pathname.split("/").filter(Boolean);
+    if (user && repo) return `https://github.com/${user}/${repo}`;
+  } catch (error) {
+    console.error(error);
+  }
+  return repoUrl;
+}
+
+function hasRemoteRepoUrl(plugin) {
+  return Boolean(plugin?.repo_url && !plugin.repo_url.startsWith("local://"));
+}
+
+function resolvePluginPageUrl(plugin) {
+  if (!plugin) return "";
+  const url = hasRemoteRepoUrl(plugin) ? normalizePluginRepoUrl(plugin.repo_url) : plugin.author_url;
+  return url || plugin.author_url || "";
+}
+
+async function fetchMarketPlugin(pluginId) {
+  if (!pluginId) return null;
+  try {
+    const marketPlugins = await props.api.get("plugin/", {
+      params: {state: "market", force: false},
+    });
+    const list = Array.isArray(marketPlugins?.data)
+      ? marketPlugins.data
+      : Array.isArray(marketPlugins)
+        ? marketPlugins
+        : [];
+    return list.find((p) => p.id === pluginId) || null;
+  } catch (error) {
+    console.error("从插件市场获取插件详情失败:", error);
+    return null;
+  }
+}
+
+async function fetchInstalledPluginDetail() {
+  const currentPluginId = props.pluginId || props.sourcePluginId || "CloudSubscribeFork";
+  let detail = null;
+  try {
+    const historyRes = await props.api.get(`plugin/history/${currentPluginId}`, {
+      params: {force: false},
+    });
+    const historyPlugin = historyRes?.data || historyRes;
+    if (historyPlugin && typeof historyPlugin === "object") {
+      detail = historyPlugin;
+    }
+  } catch (error) {
+    // 忽略未安装或获取异常
+  }
+
+  if (!hasRemoteRepoUrl(detail)) {
+    const marketPlugin = await fetchMarketPlugin(currentPluginId);
+    if (marketPlugin) {
+      detail = {...(detail || {}), ...marketPlugin};
+    }
+  }
+
+  if (detail) {
+    pluginDetail.value = detail;
+  }
+}
+
+onMounted(() => {
+  fetchInstalledPluginDetail();
+});
+
+const pluginVersion = computed(() => {
+  return (
+    pluginDetail.value?.plugin_version ||
+    props.initialConfig?.plugin_version ||
+    props.initialConfig?.version ||
+    ""
+  );
+});
+
+const pluginAuthor = computed(() => {
+  return pluginDetail.value?.plugin_author || props.initialConfig?.plugin_author || "";
+});
+
+const authorUrl = computed(() => {
+  return pluginDetail.value?.author_url || props.initialConfig?.author_url || "";
+});
+
+const repoUrl = computed(() => {
+  if (pluginDetail.value) {
+    const pageUrl = resolvePluginPageUrl(pluginDetail.value);
+    if (pageUrl) return pageUrl;
+  }
+  const initial = props.initialConfig || {};
+  const rawRepo = initial.repo_url && !initial.repo_url.startsWith("local://") ? initial.repo_url : "";
+  if (rawRepo) return normalizePluginRepoUrl(rawRepo);
+  return "";
+});
+
+const issuesUrl = computed(() => {
+  const base = repoUrl.value;
+  if (!base) return "";
+  try {
+    const parsed = new URL(base);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length >= 2) {
+      return `${base.replace(/\/+$/, "")}/issues`;
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+});
+let display = null;
+try {
+  display = useDisplay();
+} catch {
+  display = null;
+}
+const isMobile = computed(() => (display?.smAndDown?.value ?? false) || (typeof window !== "undefined" && window.innerWidth <= 768));
 const config = reactive(JSON.parse(JSON.stringify(props.initialConfig || {})))
-
-function normalizeAutoSubscribeYears(target) {
-  const currentYear = new Date().getFullYear();
-  if (!String(target.auto_subscribe_username || "").trim()) target.auto_subscribe_username = "网盘订阅助手"
-  ;
-  [
-    "auto_subscribe_douban_min_year",
-    "auto_subscribe_maoyan_min_year",
-    "auto_subscribe_netflix_min_year",
-    "auto_subscribe_mikan_year",
-    "auto_subscribe_mikan_min_year",
-  ].forEach((key) => {
-    const value = Number(target[key]);
-    if (!Number.isFinite(value) || value === 0) target[key] = currentYear;
-  })
-  if (typeof target.auto_subscribe_douban_rss_urls === "string") {
-    target.auto_subscribe_douban_rss_urls = target.auto_subscribe_douban_rss_urls
-      .split(/[\n,，]+/)
-      .map((value) => value.trim())
-      .filter(Boolean)
-  }
-  if (!Array.isArray(target.auto_subscribe_mikan_base_urls)) {
-    const value = String(target.auto_subscribe_mikan_base_urls || "").trim();
-    target.auto_subscribe_mikan_base_urls = value ? [value] : ["https://mikanani.me", "https://mikanime.tv"];
-  }
-}
-
-normalizeAutoSubscribeYears(config);
-if (!Array.isArray(config.online_docs) || !config.online_docs.length) {
-  const legacyUrls = Array.isArray(config.online_docs_urls)
-    ? config.online_docs_urls
-    : String(config.online_docs_urls || "").split(/[,，\n]+/)
-  const legacyTypes = Array.isArray(config.online_docs_resource_types) ? config.online_docs_resource_types : []
-  config.online_docs = legacyUrls
-    .map((url) => String(url || "").trim())
-    .filter(Boolean)
-    .map((url) => ({ url, resource_types: [...legacyTypes] }))
-}
-if (!config.online_docs.length) {
-  config.online_docs.push({ url: "", resource_types: [] })
-}
-config.online_docs_urls = []
-config.online_docs_resource_types = []
 const activeTab = ref("basic")
+
+function onNavClick(val, event) {
+  activeTab.value = val;
+  if (event?.currentTarget) {
+    event.currentTarget.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
+  }
+}
 const optionScopeByTab = Object.freeze({
   basic: "base",
   transfer: "subscriptions",
   upgrade: "subscriptions",
   drive: "drive",
   search: "search",
-  checkin: "base",
+  checkin: "checkin",
   notify: "notify",
 })
 const loadedOptionScopes = new Set()
@@ -564,6 +822,7 @@ const optionScopeRequests = new Map()
 const qrVisible = ref(false),
   qrProvider = ref("115"),
   directoryVisible = ref(false),
+  directoryMode = ref("cloud"),
   directoryField = ref(""),
   directoryInitialPath = ref("/"),
   directoryProvider = ref("115"),
@@ -584,6 +843,7 @@ const qrVisible = ref(false),
   selectedTmdbId = ref(0),
   testResult = ref({}),
   selectedTestResourceType = ref(""),
+  selectedTestFansub = ref(""),
   sourceTestVisible = ref(false),
   testSubmitted = ref(false),
   testError = ref(""),
@@ -612,19 +872,53 @@ const qrVisible = ref(false),
   messageVisible = ref(false)
 let previewRequestId = 0
 const options = reactive({
+  sections: [],
   subscribes: [],
   mediaservers: [],
   mediaLibraryWebhookUrls: {},
   notificationTypes: [],
   cloudDrives: [],
+  resourceTypes: [],
+  sources: [],
   account: {},
   accounts: {},
   searchAccounts: {},
   pansou: {},
+  dynamicOptionLoading: {},
+  dynamicOptionErrors: {},
+  driverSchemas: [],
+  searchSchemas: [],
+  checkinSchemas: {providers: [], groups: []},
   rsshubInstances: [],
   rsshubLoading: false,
 })
 const sections = computed(() => createConfigSections(options, config))
+const navGroups = computed(() => {
+  const all = sections.value || [];
+  const map = new Map(all.map((s) => [s.value, s]));
+  const groups = [
+    {
+      name: "核心订阅",
+      items: ["basic", "transfer", "subscribe", "upgrade"].map((v) => map.get(v)).filter(Boolean),
+    },
+    {
+      name: "存储与渠道",
+      items: ["drive", "search"].map((v) => map.get(v)).filter(Boolean),
+    },
+    {
+      name: "服务与通知",
+      items: ["checkin", "notify"].map((v) => map.get(v)).filter(Boolean),
+    },
+  ];
+  return groups.filter((g) => g.items.length > 0);
+});
+const currentSection = computed(() => {
+  return sections.value.find((s) => s.value === activeTab.value) || sections.value[0];
+});
+const currentSectionTitle = computed(() => {
+  const current = sections.value.find((s) => s.value === activeTab.value);
+  return current?.title || "配置详情";
+});
 const testResourceTypes = computed(() => {
   const declared = Array.isArray(testResult.value?.resource_types)
     ? testResult.value.resource_types
@@ -646,22 +940,29 @@ watch(testResourceTypes, (types) => {
     selectedTestResourceType.value = types[0]?.value || "";
   }
 }, {immediate: true});
+const testFansubs = computed(() => {
+  const items = Array.isArray(testResult.value?.items) ? testResult.value.items : [];
+  const counts = new Map();
+  items.forEach((item) => {
+    const fansub = String(item?.fansub || "").trim();
+    if (fansub) {
+      const current = counts.get(fansub) || {value: fansub, title: fansub, count: 0};
+      current.count += 1;
+      counts.set(fansub, current);
+    }
+  });
+  return [...counts.values()].sort((a, b) => b.count - a.count);
+});
+watch(testFansubs, (fansubs) => {
+  if (selectedTestFansub.value && !fansubs.some((item) => item.value === selectedTestFansub.value)) {
+    selectedTestFansub.value = "";
+  }
+});
 const filteredTestItems = computed(() => {
   const items = Array.isArray(testResult.value?.items) ? testResult.value.items : []
   let allItems = items;
   const merged = testResult.value?.merged_by_type;
   if (!allItems.length && merged && typeof merged === "object") {
-    const resourceTypeNames = {
-      "115": "115网盘",
-      "123": "123云盘",
-      quark: "夸克网盘",
-      aliyun: "阿里云盘",
-      alipan: "阿里云盘",
-      guangya: "光鸭云盘",
-      tianyi: "天翼云盘",
-      magnet: "磁力链接",
-      ed2k: "电驴链接",
-    };
     allItems = Object.entries(merged).flatMap(([resourceType, rows]) => {
       if (!Array.isArray(rows)) return [];
       return rows.map((row) => {
@@ -672,37 +973,43 @@ const filteredTestItems = computed(() => {
           title,
           url: value.url || value.share_url || "",
           resource_type: value.resource_type || resourceType,
-          resource_type_name: value.resource_type_name || resourceTypeNames[resourceType] || resourceType,
+          resource_type_name: value.resource_type_name || value.resource_type || resourceType,
           size: value.size || value.size_human || 0,
           tags: Array.isArray(value.tags) ? value.tags : [],
-        };
-      });
-    });
+        }
+      })
+    })
   }
-  if (!selectedTestResourceType.value) return allItems;
-  return allItems.filter((item) => String(item?.resource_type || "unknown").toLowerCase() === selectedTestResourceType.value);
+  let result = allItems;
+  if (selectedTestResourceType.value) {
+    result = result.filter(
+      (item) => String(item?.resource_type || "unknown").toLowerCase() === selectedTestResourceType.value,
+    );
+  }
+  if (selectedTestFansub.value) {
+    result = result.filter((item) => String(item?.fansub || "").trim() === selectedTestFansub.value);
+  }
+  return result;
 })
-const sourceNames = {
-  hdhive: "HDHive",
-  pansou: "PanSou",
-  dian115: "Dian115",
-  juying: "聚影",
-  seedhub: "SeedHub",
-  mikan: "蜜柑",
-  pinglian: "盘链",
-  online_docs: "在线文档",
-  piratebay: "海盗湾",
-  uindex: "UIndex",
-}
-const autoSubscribeProviderNames = {
-  douban: "豆瓣榜单",
-  maoyan: "猫眼榜单",
-  netflix: "Netflix 榜单",
-  mikan: "Mikan 新番",
-  tmdb: "TMDB 榜单",
-  bangumi: "Bangumi 榜单",
-  anilist: "AniList 榜单",
-}
+
+const sourceNames = computed(() => {
+  const searchSec = sections.value.find((s) => s.value === "search");
+  const result = {}
+  ;(searchSec?.subtabs || []).forEach((t) => {
+    if (t.value && t.value !== "common") result[t.value] = t.title;
+  });
+  return result;
+});
+
+const autoSubscribeProviderNames = computed(() => {
+  const subSec = sections.value.find((s) => s.value === "subscribe");
+  const result = {}
+  ;(subSec?.subtabs || []).forEach((t) => {
+    if (t.value && t.value !== "global") result[t.value] = `${t.title}榜单`;
+  });
+  return result;
+});
+
 const autoSubscribeTestItems = computed(() => {
   const items = autoSubscribeTestResult.value?.data?.items || autoSubscribeTestResult.value?.items || [];
   return Array.isArray(items) ? items : [];
@@ -710,60 +1017,6 @@ const autoSubscribeTestItems = computed(() => {
 const autoSubscribeTestMessage = computed(() => {
   return autoSubscribeTestResult.value?.message || "测试完成";
 })
-const sourceTestConfigKeys = {
-  mikan: ["mikan_base_url", "mikan_result_limit", "mikan_request_interval", "mikan_timeout"],
-  hdhive: [
-    "hdhive_base_url",
-    "hdhive_query_mode",
-    "hdhive_api_key",
-    "hdhive_client_id",
-    "hdhive_redirect_uri",
-    "hdhive_response_mode",
-    "hdhive_auth_code",
-    "hdhive_access_token",
-    "hdhive_refresh_token",
-    "hdhive_token_expires_at",
-    "hdhive_username",
-    "hdhive_password",
-    "hdhive_candidate_limit",
-    "hdhive_request_interval",
-    "hdhive_unlocks_per_minute",
-    "hdhive_torrentclaw_enabled",
-    "hdhive_torrentclaw_subtitle_languages",
-  ],
-  pansou: [
-    "pansou_url",
-    "pansou_username",
-    "pansou_password",
-    "pansou_auth_enabled",
-    "pansou_channels",
-    "pansou_plugins",
-    "pansou_filter_include",
-    "pansou_filter_exclude",
-    "pansou_concurrency",
-    "pansou_result_limit",
-    "pansou_timeout",
-  ],
-  dian115: [
-    "dian115_email",
-    "dian115_password",
-    "dian115_candidate_limit",
-    "dian115_request_interval",
-    "dian115_unlocks_per_minute",
-  ],
-  juying: ["juying_username", "juying_password", "juying_result_limit", "juying_request_interval"],
-  seedhub: ["seedhub_result_limit", "seedhub_request_interval", "seedhub_timeout"],
-  pinglian: [
-    "pinglian_username",
-    "pinglian_password",
-    "pinglian_result_limit",
-    "pinglian_request_interval",
-    "pinglian_timeout",
-  ],
-  online_docs: ["online_docs"],
-  piratebay: ["piratebay_base_url", "piratebay_result_limit", "piratebay_request_interval", "piratebay_timeout"],
-  uindex: ["uindex_base_url", "uindex_result_limit", "uindex_request_interval", "uindex_timeout"],
-}
 const sourceTest = reactive({
   source: "",
   title: "",
@@ -781,6 +1034,9 @@ function applyOptions(data) {
   Object.entries(data.defaults || {}).forEach(([key, value]) => {
     if (!(key in config)) config[key] = value
   })
+  if ("sections" in data && Array.isArray(data.sections)) {
+    options.sections = data.sections;
+  }
   if ("subscribes" in data) {
     options.subscribes = Array.isArray(data.subscribes) ? data.subscribes : []
   }
@@ -799,6 +1055,12 @@ function applyOptions(data) {
   if ("cloud_drives" in data) {
     options.cloudDrives = Array.isArray(data.cloud_drives) ? data.cloud_drives : []
   }
+  if ("resource_types" in data) {
+    options.resourceTypes = Array.isArray(data.resource_types) ? data.resource_types : [];
+  }
+  if ("sources" in data) {
+    options.sources = Array.isArray(data.sources) ? data.sources : [];
+  }
   if ("account" in data) {
     options.account = data.account && typeof data.account === "object" ? data.account : {}
   }
@@ -812,21 +1074,18 @@ function applyOptions(data) {
   if ("pansou" in data) {
     options.pansou = data.pansou && typeof data.pansou === "object" ? data.pansou : {}
   }
-  const configuredSources = Array.isArray(config.search_source_order)
-    ? config.search_source_order.filter(Boolean)
-    : String(config.search_source_order || "")
-        .split(/[,，\n]+/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-  config.search_source_order = configuredSources
-  ;["pansou_channels", "pansou_plugins", "pansou_filter_include", "pansou_filter_exclude"].forEach((key) => {
-    if (Array.isArray(config[key])) return
-    config[key] = String(config[key] || "")
-      .split(/[,，\n]+/)
-      .map((value) => value.trim())
-      .filter(Boolean)
-  })
-  normalizeAutoSubscribeYears(config);
+  if ("driver_schemas" in data) {
+    options.driverSchemas = Array.isArray(data.driver_schemas) ? data.driver_schemas : [];
+  }
+  if ("search_schemas" in data) {
+    options.searchSchemas = Array.isArray(data.search_schemas) ? data.search_schemas : [];
+  }
+  if ("checkin_schemas" in data) {
+    options.checkinSchemas =
+      data.checkin_schemas && typeof data.checkin_schemas === "object"
+        ? data.checkin_schemas
+        : {providers: [], groups: []};
+  }
 }
 
 function notify(text, type = "success") {
@@ -962,27 +1221,31 @@ function previewFileStem(value) {
 }
 
 function canPreviewResource(item) {
-  const source = String(item?.source || "").toLowerCase()
+  if (!item) return false;
+  const resType = String(item?.resource_type || "").toLowerCase();
+  if (resType === "ed2k") return false;
+  if (item.can_preview !== undefined) return Boolean(item.can_preview);
   return Boolean(
-    item?.can_preview &&
-    (item?.url ||
-      (source === "juying" && item?.provider_data?.resource_id) ||
-      (source === "hdhive" && item?.resource_ref) ||
-      (item?.pending_resolution && ["seedhub", "pinglian"].includes(source))),
+    item.url ||
+    item.resource_ref ||
+    item.provider_data?.resource_id ||
+    item.pending_resolution,
   )
 }
 
 function previewResourceKey(item) {
+  if (!item) return "";
   const source = String(item?.source || "").toLowerCase()
   const providerData = item?.provider_data || {};
-  const resourceId = String(providerData.resource_id || "");
-  if (source === "juying" && resourceId) return `${source}:${resourceId}`
-  return String(
-    item?.url ||
-      `${source}:${item?.resource_type || ""}:${
-        item?.resource_ref || providerData.seed_id || providerData.path || providerData.resource_id || item?.id || ""
-      }`,
-  )
+  const identifier =
+    item.url ||
+    item.resource_ref ||
+    providerData.resource_id ||
+    providerData.seed_id ||
+    providerData.path ||
+    item.id ||
+    "";
+  return `${source}:${item.resource_type || ""}:${identifier}`;
 }
 
 async function requestResourceUrl(item) {
@@ -1047,6 +1310,9 @@ async function previewResource(item) {
   previewPendingResource.value = {
     pending_resolution: Boolean(item.pending_resolution),
     provider_data: {...(item.provider_data || {})},
+    // HDHaven 降级展示所需的元数据
+    episode_range: String(item.episode_range || item.remark || ""),
+    unlock_points: Number(item.unlock_points || 0),
   }
   previewHdhiveUnlocked.value = Boolean(item.is_unlocked)
   previewTargetSeason.value = item.target_season ?? null
@@ -1070,13 +1336,12 @@ async function previewResource(item) {
 }
 
 async function loadPreviewDirectory(parentId, breadcrumbs, requestId = ++previewRequestId) {
-  const pendingJuying = previewSource.value === "juying" && previewJuyingResourceId.value
-  const pendingHdhive = previewSource.value === "hdhive" && previewHdhiveResourceRef.value && !previewShareUrl.value;
-  const pendingSourceResource =
-    ["seedhub", "pinglian"].includes(previewSource.value) &&
-    previewPendingResource.value.pending_resolution &&
-    !previewShareUrl.value
-  if (!previewShareUrl.value && !pendingJuying && !pendingHdhive && !pendingSourceResource) return
+  const isPending =
+    !previewShareUrl.value &&
+    (Boolean(previewJuyingResourceId.value) ||
+      Boolean(previewHdhiveResourceRef.value) ||
+      Boolean(previewPendingResource.value.pending_resolution));
+  if (!previewShareUrl.value && !isPending) return;
   const resourceType = previewResourceType.value
   const shareUrl = previewShareUrl.value
   previewLoading.value = true
@@ -1094,8 +1359,9 @@ async function loadPreviewDirectory(parentId, breadcrumbs, requestId = ++preview
         target_season: previewTargetSeason.value,
         target_episodes: previewTargetEpisodes.value,
         ...previewPendingResource.value,
-        config:
-          pendingJuying || pendingHdhive || pendingSourceResource ? sourceTestConfig(previewSource.value) : undefined,
+        episode_range: previewPendingResource.value.episode_range || "",
+        unlock_points: previewPendingResource.value.unlock_points || 0,
+        config: isPending ? sourceTestConfig(previewSource.value) : undefined,
       }),
     )
     if (requestId !== previewRequestId || !previewVisible.value) return
@@ -1167,8 +1433,11 @@ async function unlockResource() {
 }
 
 function isPointUnlockResource(item) {
-  const source = String(item?.source || "").toLowerCase();
-  return ["hdhive", "dian115"].includes(source);
+  return Boolean(
+    item?.is_point_unlock ||
+    item?.need_unlock ||
+    item?.unlock_points !== undefined,
+  );
 }
 
 function testItemStatus(item) {
@@ -1197,18 +1466,7 @@ function tmdbCandidateSubtitle(item) {
 }
 
 function sourceTestConfig(source) {
-  const keys = [
-    "resource_type_order",
-    "search_proxy",
-    "search_proxy_username",
-    "search_proxy_password",
-    ...(sourceTestConfigKeys[source] || []),
-  ]
-  return Object.fromEntries(
-    keys
-      .filter((key) => key in config && config[key] !== undefined)
-      .map((key) => [key, JSON.parse(JSON.stringify(config[key]))]),
-  )
+  return JSON.parse(JSON.stringify(config));
 }
 
 function openQrCode(provider) {
@@ -1233,8 +1491,9 @@ async function handleQrSuccess(payload) {
   }
 }
 
-function openDirectoryPicker(fieldKey, provider) {
+function openDirectoryPicker(fieldKey, provider, isLocal = false) {
   directoryField.value = fieldKey
+  directoryMode.value = isLocal ? "local" : "cloud";
   directoryProvider.value = String(provider || config.cloud_drive || "115")
   directoryInitialPath.value = String(config[fieldKey] || "/").trim() || "/"
   directoryVisible.value = true
@@ -1249,7 +1508,7 @@ function optionScopeForTab(tab = activeTab.value) {
   return optionScopeByTab[String(tab || "basic")] || "base"
 }
 
-async function loadOptions(scope = "base", { force = false } = {}) {
+async function loadOptions(scope = "base", {force = false, refresh = false} = {}) {
   const normalizedScope = String(scope || "base")
     .trim()
     .toLowerCase()
@@ -1260,6 +1519,7 @@ async function loadOptions(scope = "base", { force = false } = {}) {
   const request = (async () => {
     if (normalizedScope === "base") options.rsshubLoading = true;
     const query = new URLSearchParams({ scope: normalizedScope })
+    if (refresh) query.set("refresh", "true");
     const response = unwrapResponse(await api.get(`plugin/CloudSubscribeFork/ui_options?${query}`))
     if (response.success === false) {
       throw new Error(response.message || "加载配置选项失败")
@@ -1277,9 +1537,29 @@ async function loadOptions(scope = "base", { force = false } = {}) {
   }
 }
 
+async function loadDynamicOptions(descriptor, {refresh = false} = {}) {
+  const scope = String(descriptor?.scope || "").trim().toLowerCase();
+  if (!scope) return;
+  options.dynamicOptionLoading[scope] = true;
+  options.dynamicOptionErrors[scope] = "";
+  try {
+    await loadOptions(scope, {force: refresh, refresh});
+  } catch (error) {
+    const message = error?.response?.data?.message || error.message || String(error);
+    options.dynamicOptionErrors[scope] = `加载失败：${message}`;
+  } finally {
+    options.dynamicOptionLoading[scope] = false;
+  }
+}
+
+function refreshDynamicOptions(descriptor) {
+  return loadDynamicOptions(descriptor, {refresh: true});
+}
+
 async function reloadVisibleOptionScopes() {
   loadedOptionScopes.clear()
-  const scopes = [...new Set(["base", optionScopeForTab()])]
+  const visibleScope = optionScopeForTab();
+  const scopes = [...new Set(["base", visibleScope])];
   await Promise.all(scopes.map((scope) => loadOptions(scope, { force: true })))
 }
 
@@ -1351,7 +1631,14 @@ async function save() {
 async function handleCheckinResult(result) {
   const providerName = result?.providerName || "签到服务"
   if (result?.success && result?.providerKey) {
-    await refreshAccount(`search:${result.providerKey}`, { silent: true })
+    const key = result.providerKey;
+    if (options.searchAccounts?.[key] && result.points_after !== undefined) {
+      const current = options.searchAccounts[key];
+      current.points = {
+        ...(current.points || {}),
+        available: result.points_after,
+      };
+    }
   }
   notify(
     result?.message || (result?.success ? `${providerName} 签到完成` : `${providerName} 签到失败`),
@@ -1443,13 +1730,14 @@ function handleHdhiveOAuthMessage(event) {
 }
 
 function openSourceTest(source) {
-  if (testingSource.value || !sourceNames[source]) return
+  if (testingSource.value || !sourceNames.value[source]) return;
   sourceTest.source = source
   tmdbCandidates.value = []
   tmdbSearched.value = false
   selectedTmdbId.value = 0
   testResult.value = {}
   selectedTestResourceType.value = "";
+  selectedTestFansub.value = "";
   testSubmitted.value = false
   testError.value = ""
   testElapsed.value = null
@@ -1469,6 +1757,7 @@ async function searchTmdbCandidates() {
   selectedTmdbId.value = 0
   testResult.value = {}
   selectedTestResourceType.value = "";
+  selectedTestFansub.value = "";
   testSubmitted.value = false
   testError.value = ""
   try {
@@ -1526,7 +1815,7 @@ async function testSource(candidate) {
     testElapsed.value = errorData.elapsed_seconds ?? testElapsed.value
     testError.value =
       status === 502
-        ? `${sourceNames[sourceTest.source] || "搜索渠道"} 测试请求被网关中断（HTTP 502），请检查渠道服务状态及反向代理超时`
+        ? `${sourceNames.value[sourceTest.source] || "搜索渠道"} 测试请求被网关中断（HTTP 502），请检查渠道服务状态及反向代理超时`
         : e?.response?.data?.message || e.message || String(e)
   } finally {
     testingSource.value = ""
@@ -1563,14 +1852,15 @@ onMounted(async () => {
   window.addEventListener("message", handleHdhiveOAuthMessage)
   emit("layout", { maxWidth: "62rem" })
   try {
-    await loadOptions("base")
+    await Promise.all([loadOptions("base"), loadOptions("search")]);
   } catch (e) {
     notify(`加载配置选项失败：${e.message || e}`, "warning")
   }
 })
 
 watch(activeTab, (tab) => {
-  loadOptions(optionScopeForTab(tab)).catch((error) => {
+  const scope = optionScopeForTab(tab);
+  loadOptions(scope).catch((error) => {
     notify(`加载配置选项失败：${error.message || error}`, "warning")
   })
 })
@@ -1612,10 +1902,10 @@ watch(
 )
 
 watch(
-  [() => config.cloud_drive, () => config.cross_transfer_enabled, () => options.cloudDrives],
+  [() => config.cloud_drive, () => config.cross_transfer_enabled, () => options.cloudDrives, () => options.resourceTypes],
   ([provider, crossTransfer, drives], [previousProvider, previousCrossTransfer, previousDrives]) => {
     if (provider === previousProvider && crossTransfer === previousCrossTransfer && drives === previousDrives) return
-    const supported = new Set(createResourceTypeItems(options.cloudDrives, config).map((item) => item.value))
+    const supported = new Set(createResourceTypeItems(options, config).map((item) => item.value));
     config.resource_type_order = (config.resource_type_order || []).filter((value) => supported.has(value))
   },
 )
@@ -1669,44 +1959,506 @@ watch(
   white-space: nowrap;
 }
 
-.config-body {
+.cloud-subscribe-config {
+  display: flex;
+  width: min(62rem, calc(100vw - 32px));
+  max-width: min(62rem, 100%);
+  min-width: 0;
+  height: min(800px, calc(100dvh - 56px));
+  max-height: min(800px, calc(100dvh - 56px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.v-overlay__content:has(.cloud-subscribe-config)) {
+  overflow: hidden !important;
+  border-radius: 8px !important;
+}
+
+:global(.v-overlay__content:has(.cloud-subscribe-config) > *) {
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden !important;
+}
+
+.config-shell {
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px !important;
+  border: 1px solid rgba(var(--v-border-color), 0.12) !important;
+  background-color: rgb(var(--v-theme-surface)) !important;
+}
+
+/* 毛玻璃主题深度适配：透光柔和优雅，避免纯黑死黑，与普通样式绝不混淆 */
+:global(html[data-theme="transparent"]) .config-shell,
+:global(html[data-theme="glass"]) .config-shell,
+:global(html[data-theme-preference="transparent"]) .config-shell,
+:global(html[class*="transparent-glass"]) .config-shell,
+:global(html[data-glass-appearance]) .config-shell,
+:global(.v-theme--transparent) .config-shell {
+  background-color: rgba(var(--v-theme-surface), var(--transparent-opacity-heavy, 0.78)) !important;
+  backdrop-filter: blur(var(--transparent-blur-heavy, 16px)) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(var(--transparent-blur-heavy, 16px)) saturate(140%) !important;
+  border: 1px solid rgba(var(--v-border-color), 0.16) !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35) !important;
+}
+
+.config-layout {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+/* 侧边栏：经典干练的 162px 宽度、清晰层次感左对齐排版 */
+.config-sidebar {
+  width: 162px !important;
+  min-width: 162px !important;
+  max-width: 162px !important;
+  flex: 0 0 162px !important;
+  flex-shrink: 0 !important;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(var(--v-theme-on-surface), 0.026) !important;
+  border-right: 1px solid rgba(var(--v-border-color), 0.12);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+:global(html[data-theme="transparent"]) .config-sidebar,
+:global(html[data-theme="glass"]) .config-sidebar,
+:global(html[data-theme-preference="transparent"]) .config-sidebar,
+:global(html[class*="transparent-glass"]) .config-sidebar,
+:global(html[data-glass-appearance]) .config-sidebar,
+:global(.v-theme--transparent) .config-sidebar {
+  background: rgba(var(--v-theme-on-surface), 0.035) !important;
+  border-right: 1px solid rgba(var(--v-border-color), 0.1) !important;
+}
+
+/* 顶部品牌微徽章与双行排版 */
+.sidebar-brand {
+  height: 52px;
+  min-height: 52px;
+  max-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.08);
+  box-sizing: border-box;
+}
+
+.sidebar-brand-main {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.sidebar-brand-badge {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-primary), 0.12);
+  border: 1px solid rgba(var(--v-theme-primary), 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+  overflow: hidden;
+}
+
+.sidebar-brand-title {
+  font-size: 0.835rem;
+  font-weight: 700;
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+
+.sidebar-brand-subtitle {
+  font-size: 0.58rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: rgba(var(--v-theme-on-surface), 0.42);
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
+/* 结构化分组与导航列表 */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 6px 10px;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+}
+
+.sidebar-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-group-title {
+  padding: 4px 10px 2px;
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(var(--v-theme-on-surface), 0.42);
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.sidebar-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 35px;
+  padding: 0 10px;
+  gap: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+  transition: all 0.16s cubic-bezier(0.4, 0, 0.2, 1);
+  box-sizing: border-box;
+}
+
+.sidebar-nav-icon {
+  margin-right: 0;
+  color: inherit;
+  opacity: 0.75;
+  flex-shrink: 0;
+  font-size: 16px !important;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.sidebar-nav-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.sidebar-nav-item:hover:not(.sidebar-nav-item--active) {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.sidebar-nav-item:hover:not(.sidebar-nav-item--active) .sidebar-nav-icon {
+  opacity: 0.95;
+  transform: scale(1.06);
+}
+
+/* 激活状态：微渐变高亮胶囊与左侧内嵌精致小标记 */
+.sidebar-nav-item--active {
+  background: linear-gradient(90deg, rgba(var(--v-theme-primary), 0.14) 0%, rgba(var(--v-theme-primary), 0.06) 100%) !important;
+  color: rgb(var(--v-theme-primary)) !important;
+  font-weight: 600;
+}
+
+.sidebar-nav-item--active .sidebar-nav-icon {
+  opacity: 1;
+  color: rgb(var(--v-theme-primary));
+}
+
+.sidebar-active-pill {
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.4);
+}
+
+/* 右侧主区域与内容架构 */
+.config-main {
+  flex: 1 1 0;
+  min-width: 0 !important;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.cloud-subscribe-config :deep(.v-field),
-.cloud-subscribe-config :deep(.v-selection-control) {
-  font-size: 0.875rem;
-}
-
-.cloud-subscribe-config :deep(.v-field) {
-  --v-input-control-height: 38px;
-}
-
-.config-tabs :deep(.v-tab) {
-  min-width: 132px;
-  text-transform: none;
-}
-
-.config-tabs {
+.config-main-header {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px 6px;
 }
 
-.config-content-scroll {
+:global(html[data-theme="transparent"]) .config-main-header,
+:global(html[data-theme="glass"]) .config-main-header,
+:global(html[data-theme-preference="transparent"]) .config-main-header,
+:global(html[class*="transparent-glass"]) .config-main-header,
+:global(html[data-glass-appearance]) .config-main-header,
+:global(.v-theme--transparent) .config-main-header {
+  background: transparent !important;
+}
+
+.config-main-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.config-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.config-header-btn {
+  font-size: 0.8125rem;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+}
+
+.config-header-btn:hover {
+  background-color: rgba(var(--v-theme-on-surface), 0.06) !important;
+  transform: translateY(-0.5px);
+}
+
+.config-main-body {
   flex: 1 1 0;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+.config-window-section {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 6px 24px 14px;
+}
+
+/* 主内容区切换平滑滑动淡入动画 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* 左下角全高状态看板卡片（占满下方空白，排版饱满高级） */
+.sidebar-footer {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 8px 8px 12px;
+  box-sizing: border-box;
+}
+
+.sidebar-status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px;
+  background: rgba(var(--v-theme-on-surface), 0.025);
+  border: 1px solid rgba(var(--v-border-color), 0.08);
+  border-radius: 9px;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.sidebar-status-panel:hover {
+  background: rgba(var(--v-theme-on-surface), 0.045);
+  border-color: rgba(var(--v-border-color), 0.16);
+}
+
+.status-panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.status-live-dot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+  animation: live-pulse 2s infinite ease-in-out;
+}
+
+@keyframes live-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
+  }
+}
+
+.status-live-text {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.75);
+}
+
+.status-version-tag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.status-info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 0;
+  border-top: 1px dashed rgba(var(--v-border-color), 0.1);
+  border-bottom: 1px dashed rgba(var(--v-border-color), 0.1);
+}
+
+.status-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+}
+
+.status-info-label {
+  color: rgba(var(--v-theme-on-surface), 0.45);
+}
+
+.status-info-value {
+  color: rgba(var(--v-theme-on-surface), 0.78);
+  font-weight: 500;
+}
+
+.status-panel-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.status-action-link {
+  display: flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  text-decoration: none;
+  padding: 3px 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.status-action-link:hover {
+  color: rgb(var(--v-theme-primary)) !important;
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+:global(html[data-theme="transparent"]) .sidebar-status-panel,
+:global(html[data-theme="glass"]) .sidebar-status-panel,
+:global(html[data-theme-preference="transparent"]) .sidebar-status-panel,
+:global(html[class*="transparent-glass"]) .sidebar-status-panel,
+:global(html[data-glass-appearance]) .sidebar-status-panel,
+:global(.v-theme--transparent) .sidebar-status-panel {
+  background: rgba(var(--v-theme-surface), 0.38) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(10px) !important;
 }
 
 .config-actions {
   position: relative;
-  min-height: 68px;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 24px;
+  border-top: 1px solid rgba(var(--v-border-color), 0.06);
+  background-color: rgb(var(--v-theme-surface));
+  flex-shrink: 0;
+}
+
+:global(html[data-theme="transparent"]) .config-actions,
+:global(html[data-theme="glass"]) .config-actions,
+:global(html[data-theme-preference="transparent"]) .config-actions,
+:global(html[class*="transparent-glass"]) .config-actions,
+:global(html[data-glass-appearance]) .config-actions,
+:global(.v-theme--transparent) .config-actions {
+  background-color: transparent !important;
+  border-top-color: rgba(var(--v-border-color), 0.1) !important;
+}
+
+.actions-spacer {
+  flex: 1 1 auto;
 }
 
 .save-progress {
@@ -1726,8 +2478,19 @@ watch(
   min-width: 132px;
   height: 42px;
   font-weight: 600;
-  letter-spacing: 0;
-  box-shadow: 0 3px 8px rgba(var(--v-theme-primary), 0.24) !important;
+  letter-spacing: 0.01em;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(var(--v-theme-primary), 0.28) !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.save-config-button:hover {
+  box-shadow: 0 4px 14px rgba(var(--v-theme-primary), 0.38) !important;
+  transform: translateY(-1px);
+}
+
+.save-config-button:active {
+  transform: translateY(0);
 }
 
 .source-test-card {
@@ -2082,23 +2845,7 @@ watch(
   overflow: hidden;
 }
 
-.config-window-section {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-}
-
-@media (min-width: 601px) {
-  .config-window-section {
-    padding: 12px 14px 20px;
-  }
-}
-
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   :global(.v-overlay__content:has(.cloud-subscribe-config)) {
     width: 100vw !important;
     max-width: 100vw !important;
@@ -2115,59 +2862,129 @@ watch(
   }
 
   .config-shell {
-    width: 100%;
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
     border-radius: 0 !important;
+    border: none !important;
   }
 
-  .config-body,
-  .config-content-scroll {
-    height: 0;
+  .config-layout {
+    flex-direction: column !important;
   }
 
-  .config-content-scroll {
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    scroll-behavior: auto;
+  .config-sidebar {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: auto !important;
+    border-right: none !important;
+    border-bottom: 1px solid rgba(var(--v-border-color), 0.08) !important;
+    background: transparent !important;
+    overflow: hidden !important;
   }
 
-  .config-header {
-    padding-left: 10px !important;
-    padding-right: 10px !important;
+  /* 移动端彻底隐藏左下角元数据卡片 */
+  .sidebar-footer {
+    display: none !important;
   }
 
-  .config-header-action {
-    flex: 0 0 34px;
-    min-width: 34px !important;
-    width: 34px;
-    padding: 0 !important;
+  .sidebar-brand {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 10px 12px 6px !important;
+    border-bottom: none !important;
+    margin-bottom: 0 !important;
   }
 
-  .config-header-action :deep(.v-btn__content) {
+  .sidebar-brand-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
+  .sidebar-brand-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sidebar-brand-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .sidebar-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .mobile-header-btn {
+    font-size: 0.78125rem !important;
+    padding: 0 6px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    color: rgba(var(--v-theme-on-surface), 0.75) !important;
+    border-radius: 6px !important;
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    padding: 2px 10px 8px;
+    gap: 6px;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .sidebar-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .config-header-action :deep(.v-btn__prepend) {
-    margin: 0;
-  }
-
-  .config-actions {
-    min-height: 64px;
-    padding-inline: 12px !important;
-  }
-
-  .save-state {
+  .sidebar-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    height: 32px;
+    padding: 0 10px;
     font-size: 0.8125rem;
+    border-radius: 6px;
   }
 
-  .config-tabs :deep(.v-tab) {
-    min-width: 112px;
+  /* 移动端横向 Tab 栏严禁显示 > 指示箭头与侧边指示条 */
+  .sidebar-active-indicator,
+  .sidebar-active-pill {
+    display: none !important;
+  }
+
+  .sidebar-brand-subtitle {
+    display: none !important;
+  }
+
+  .sidebar-nav-item--active::before {
+    display: none !important;
+  }
+
+  .sidebar-nav-icon {
+    margin-right: 5px;
+    font-size: 15px !important;
+  }
+
+  /* 移动端已将返回和关闭置于顶部 Brand 栏右侧，隐藏第三行冗余的 main-header */
+  .config-main-header {
+    display: none !important;
   }
 
   .config-window-section {
-    padding: 10px 12px 20px;
+    padding: 8px 12px 16px;
+  }
+
+  .config-actions {
+    min-height: 60px;
+    padding-inline: 12px !important;
   }
 }
 </style>

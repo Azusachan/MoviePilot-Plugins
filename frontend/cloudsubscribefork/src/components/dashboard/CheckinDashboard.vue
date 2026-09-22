@@ -59,7 +59,7 @@
             <div v-for="channel in channels" :key="channel.provider" class="checkin-channel">
               <div class="checkin-channel-head">
                 <v-avatar size="28" variant="tonal" color="primary">
-                  <v-icon :icon="providerIcon(channel.provider)" size="16" />
+                  <v-icon :icon="channel.icon || 'mdi-calendar-check-outline'" size="16" />
                 </v-avatar>
                 <div class="checkin-channel-copy">
                   <strong>{{ channel.provider_name }}</strong>
@@ -177,16 +177,6 @@ function statusColor(tone) {
       pending: "secondary",
       disabled: "secondary",
     }[tone] || "secondary"
-  )
-}
-
-function providerIcon(provider) {
-  return (
-    {
-      hdhive: "mdi-hexagon-multiple-outline",
-      dian115: "mdi-cloud-search",
-      juying: "mdi-movie-check-outline",
-    }[provider] || "mdi-calendar-check-outline"
   )
 }
 

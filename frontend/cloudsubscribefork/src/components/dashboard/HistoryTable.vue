@@ -640,6 +640,7 @@
 <script setup>
 import {computed, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
+import {getResourceTypeName, getSourceName, getTypeColor} from "../../composables/resourceUtils";
 
 const props = defineProps({
   items: {type: Array, default: () => []},
@@ -683,18 +684,6 @@ const filtersVisible = ref(false);
 const searchVisible = ref(false);
 let lastQuerySignature = "";
 
-const sourceNames = {
-  hdhive: "HDHive",
-  pansou: "PanSou",
-  dian115: "Dian115",
-  juying: "聚影",
-  seedhub: "SeedHub",
-  mikan: "蜜柑",
-  pinglian: "盘链",
-  online_docs: "在线文档",
-  manual: "手动添加",
-  unknown: "未知",
-}
 const statusOptions = ["处理中", "下载中", "成功", "失败"];
 const taskTypeOptions = [
   {title: "跨盘", value: "cross_transfer"},
@@ -861,8 +850,7 @@ function normalizeSource(value) {
 }
 
 function sourceLabel(value) {
-  const normalized = normalizeSource(value);
-  return sourceNames[normalized] || normalized;
+  return getSourceName(normalizeSource(value));
 }
 
 function resourceType(item) {
@@ -874,27 +862,11 @@ function resourceType(item) {
 }
 
 function resourceTypeLabel(value) {
-  const normalized = resourceType(value);
-  return (
-    {
-      115: "115网盘",
-      123: "123网盘",
-      quark: "夸克网盘",
-      guangya: "光鸭网盘",
-      tianyi: "天翼云盘",
-      alipan: "阿里云盘",
-      aliyun: "阿里云盘",
-      cloud: "网盘路径",
-      ed2k: "ED2K",
-      magnet: "Magnet",
-      unknown: "未知",
-    }[normalized] || normalized.toUpperCase()
-  )
+  return getResourceTypeName(resourceType(value));
 }
 
 function resourceTypeColor(value) {
-  const normalized = resourceType(value);
-  return normalized === "ed2k" ? "warning" : normalized === "magnet" ? "purple" : "info";
+  return getTypeColor(resourceType(value));
 }
 
 function mediaDetailLink(item) {
@@ -1035,7 +1007,6 @@ function deleteTitle(record) {
   return record?.finalize_key ? "删除此条后处理记录" : "删除此条历史记录";
 }
 
-const pad = (value) => String(Number(value || 0)).padStart(2, "0");
 </script>
 
 <style scoped>

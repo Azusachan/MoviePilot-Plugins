@@ -435,7 +435,7 @@ class ShareService(OwnerDelegator):
             logger.error(f"无法获取或创建目标目录: {save_path}")
             return False
 
-        logger.info(f"转存分享到目录 ID: {parent_id} ({save_path})")
+        logger.debug(f"转存分享到目录 ID: {parent_id} ({save_path})")
 
         # 执行转存 (file_id=0 表示转存所有内容)
         return self._do_transfer(
@@ -461,23 +461,6 @@ class ShareService(OwnerDelegator):
             )
         if not self.client:
             return False
-        if target_name:
-            existing, _ = self.rename_files_by_sha1_batch(
-                save_path,
-                {
-                    str(file_id): {
-                        "sha1": source_sha1,
-                        "target_name": target_name,
-                    }
-                },
-                [str(file_id)],
-                log_unresolved=False,
-            )
-            if str(file_id) in existing:
-                logger.debug(
-                    f"115 暂存目录已存在目标文件，跳过重复转存：{target_name}"
-                )
-                return True
         info = self.extract_share_info(share_url)
         share_code = info.get("share_code")
         receive_code = info.get("receive_code")
@@ -493,21 +476,32 @@ class ShareService(OwnerDelegator):
             parent_id=parent_id, save_path=save_path
         )
         if success is None:
-            if target_name and self.rename_file_by_sha1(
-                    save_path, source_sha1, target_name
+            if target_name and (
+                self.find_file(save_path, target_name)
+                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
             ):
                 return True
-            source_hash = self._normalize_hash(source_sha1)
-            if target_name and len(source_hash) == 40:
-                logger.info(
-                    f"115返回文件已存在，目标文件尚未可见，"
-                    f"交由既有后处理复核：{target_name}"
-                )
+            resolved = self._transfer_via_alternative_dir(
+                share_code=share_code,
+                receive_code=receive_code,
+                unresolved_ids=[file_id],
+                parent_id=parent_id,
+                save_path=save_path,
+                rename_items={file_id: {"target_name": target_name, "sha1": source_sha1}} if target_name else None,
+            )
+            if resolved:
+                return True
+            return False
+        if not success:
+            if target_name and (
+                self.find_file(save_path, target_name)
+                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
+            ):
                 return True
             return False
         if success and target_name:
             if not self.rename_file_by_sha1(save_path, source_sha1, target_name):
-                logger.info(f"转存已完成，文件重命名进入后处理队列：{target_name}")
+                logger.debug(f"转存已完成，文件重命名进入后处理队列：{target_name}")
         return success
 
     def transfer_files_batch(
@@ -620,9 +614,10 @@ class ShareService(OwnerDelegator):
             # 使用逗号分隔多个文件 ID
             file_id_str = ",".join(page_ids)
 
-            logger.debug(
-                f"处理第 {page_num}/{total_pages} 页，包含 {len(page_ids)} 个文件"
-            )
+            if total_pages > 1:
+                logger.debug(
+                    f"处理第 {page_num}/{total_pages} 页，包含 {len(page_ids)} 个文件"
+                )
 
             success = self._do_transfer(
                 share_code=share_code,
@@ -639,14 +634,20 @@ class ShareService(OwnerDelegator):
                 ready, unresolved = self.rename_files_by_sha1_batch(
                     save_path, rename_items or {}, page_ids
                 )
-                # 4200045 只表示本次接收目标已存在，禁止再次调用 share_receive
-                # 创建独立目录并执行重命名、移动、删除。未即时可见的文件由
-                # 既有后处理按 SHA1 在暂存目录和最终目录中继续复核。
-                success_ids.extend(page_ids)
-                logger.warning(
-                    f"第 {page_num} 页返回文件已存在，目录复核后确认 "
-                    f"{len(ready)} 个，待后处理复核 {len(unresolved)} 个"
-                )
+                success_ids.extend(ready)
+                if unresolved:
+                    alt_resolved = self._transfer_via_alternative_dir(
+                        share_code=share_code,
+                        receive_code=receive_code,
+                        unresolved_ids=unresolved,
+                        parent_id=parent_id,
+                        save_path=save_path,
+                        rename_items=rename_items,
+                    )
+                    success_ids.extend(alt_resolved)
+                    still_failed = [fid for fid in unresolved if fid not in alt_resolved]
+                    if still_failed:
+                        failed_ids.extend(still_failed)
             else:
                 logger.warning(
                     f"第 {page_num} 页批量转存失败，停止逐文件重试以避免放大风控"
@@ -662,6 +663,79 @@ class ShareService(OwnerDelegator):
 
         logger.debug(f"批量转存完成: 成功 {len(success_ids)} 个，失败 {len(failed_ids)} 个")
         return success_ids, failed_ids
+
+    def _transfer_via_alternative_dir(
+            self,
+            share_code: str,
+            receive_code: str,
+            unresolved_ids: List[str],
+            parent_id: int,
+            save_path: str,
+            rename_items: Dict[str, Dict[str, str]] = None,
+    ) -> List[str]:
+        """当目标目录返回4200045（重复接收）且文件未在目标目录找到时，
+        通过创建临时切换子目录重新接收分享，并将转存文件无缝迁回目标目录。
+        """
+        if not unresolved_ids:
+            return []
+        alt_dir_name = f"transfer_{share_code}"
+        alt_save_path = f"{save_path.rstrip('/')}/{alt_dir_name}"
+        alt_parent_id = self.get_pid_by_path(alt_save_path, mkdir=True)
+        if alt_parent_id == -1:
+            logger.error(f"115 无法创建切换转存目录：{alt_save_path}")
+            return []
+        try:
+            alt_success = self._do_transfer(
+                share_code=share_code,
+                receive_code=receive_code,
+                file_id=",".join(unresolved_ids),
+                parent_id=alt_parent_id,
+                save_path=alt_save_path,
+            )
+            if alt_success is not True:
+                try:
+                    self._delete_items([alt_parent_id])
+                except Exception:
+                    pass
+                return []
+
+            # 获取转存到临时目录中的所有文件并迁移
+            alt_files = self.list_files_by_cid(alt_parent_id) or []
+            alt_fids = [
+                str(f.get("fid") or f.get("file_id") or f.get("id"))
+                for f in alt_files
+                if not f.get("is_dir") and (f.get("fid") or f.get("file_id") or f.get("id"))
+            ]
+            if alt_fids:
+                self._move_items(alt_fids, parent_id)
+                logger.debug(
+                    f"115 切换目录转存成功，已将 {len(alt_fids)} 个文件迁移至目标目录 {save_path}"
+                )
+
+            # 清理临时目录自身
+            try:
+                self._delete_items([alt_parent_id])
+            except Exception as clean_err:
+                logger.debug(f"清理临时切换转存目录失败: {clean_err}")
+
+            # 在目标目录复核已迁入的文件
+            ready, still_unresolved = self.rename_files_by_sha1_batch(
+                save_path, rename_items or {}, unresolved_ids
+            )
+            resolved_ids = list(ready)
+            # 若移动的文件数满足数量，即使个别文件未被 SHA1 立即映射，也视为成功（交由后处理自愈定位）
+            if len(alt_fids) >= len(unresolved_ids):
+                for uid in still_unresolved:
+                    if uid not in resolved_ids:
+                        resolved_ids.append(uid)
+            return resolved_ids
+        except Exception as error:
+            logger.error(f"115 切换目录转存发生异常：{error}")
+            try:
+                self._delete_items([alt_parent_id])
+            except Exception:
+                pass
+            return []
 
     def _do_transfer(
             self,
@@ -707,7 +781,7 @@ class ShareService(OwnerDelegator):
 
                 if resp.get("state"):
                     if file_id == "0":
-                        logger.info(f"115 转存完成：{save_path}")
+                        logger.debug(f"115 转存完成：{save_path}")
                     else:
                         file_count = len([item for item in str(file_id).split(",") if item])
                         logger.debug(f"115 文件转存完成：{file_count} 个，目录 {save_path}")
@@ -718,7 +792,7 @@ class ShareService(OwnerDelegator):
 
                     # 检查是否是重复文件
                     if "重复" in error_msg or "已存在" in error_msg:
-                        logger.warning(
+                        logger.debug(
                             f"115返回文件已存在，等待目标目录复核: {file_id}，"
                             f"错误码: {error_code}"
                         )
@@ -728,7 +802,7 @@ class ShareService(OwnerDelegator):
                     if error_code in (990001, 990002, 990009):  # 常见的限流错误码
                         if attempt < max_retries:
                             wait_time = min(30.0, 1.0 * (2 ** attempt))
-                            logger.warning(f"遇到限流，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
+                            logger.debug(f"遇到限流，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
                             time.sleep(wait_time)
                             continue
 
@@ -739,7 +813,7 @@ class ShareService(OwnerDelegator):
                 last_error = e
                 if attempt < max_retries:
                     wait_time = min(30.0, 0.75 * (2 ** attempt))
-                    logger.warning(f"转存异常: {e}, {wait_time:.1f}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
+                    logger.debug(f"转存异常: {e}, {wait_time:.1f}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")
                     time.sleep(wait_time)
                 else:
                     logger.error(f"转存过程中发生异常: {e}")
