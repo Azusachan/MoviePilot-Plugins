@@ -99,7 +99,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.5"
+    plugin_version = "1.5.6"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -184,9 +184,7 @@ class CloudSubscribe(_PluginBase):
     _enable_cloud_upgrade: bool = False
     _enable_pt_upgrade: bool = False
     _upgrade_mode: str = "largest"
-    _local_resource_path: str = ""  # 容器内本地或挂载媒体根路径
-    _cloud_transfer_path: str = "/"
-    _cloud_media_path: str = "/"
+    _local_resource_path: str = ""
     _strm_generate_enabled: bool = True
     _nfo_scrape_enabled: bool = False
     _image_scrape_enabled: bool = False
@@ -392,12 +390,6 @@ class CloudSubscribe(_PluginBase):
         logger.warning(f"未知消息通知类型：{configured}，已回退为插件")
         return NotificationType.Plugin
 
-    @staticmethod
-    def _config_cloud_path(value: Any) -> str:
-        path = str(value or "/").strip()
-        if "://" in path:
-            return "/"
-        return f"/{path.strip('/')}" if path.strip("/") else "/"
 
     def init_plugin(self, config: dict = None):
         """宿主加载或重载插件时初始化完整运行环境。"""
@@ -536,7 +528,7 @@ class CloudSubscribe(_PluginBase):
                 setattr(self, f"_{key}", val)
             self._apply_base_config(config)
             self._apply_notification_config(config)
-            self._apply_drive_config(config)
+            self._cloud_drive_key = str(config.get("cloud_drive", "115") or "115").strip().lower()
             self._apply_search_config(config)
             self._apply_sync_config(config)
 
@@ -675,24 +667,6 @@ class CloudSubscribe(_PluginBase):
         self._checkin_cron = str(config.get("checkin_cron") or "0 8 * * *").strip()
         self._checkin_auto_retry = bool(config.get("checkin_auto_retry", True))
         self._checkin_retry_count = max(1, min(10, int(config.get("checkin_retry_count", 2) or 2)))
-
-    def _apply_drive_config(self, config: Dict[str, Any]) -> None:
-        self._cloud_drive_key = str(config.get("cloud_drive", "115") or "115").strip().lower()
-        key = self._cloud_drive_key
-        transfer_path = (
-            config.get(f"p{key}_transfer_path")
-            or config.get(f"{key}_transfer_path")
-            or config.get("cloud_transfer_path")
-            or "/"
-        )
-        media_path = (
-            config.get(f"p{key}_media_path")
-            or config.get(f"{key}_media_path")
-            or config.get("cloud_media_path")
-            or "/"
-        )
-        self._cloud_transfer_path = self._config_cloud_path(transfer_path)
-        self._cloud_media_path = self._config_cloud_path(media_path)
 
     def _apply_search_config(self, config: Dict[str, Any]) -> None:
         registered_sources = {d.id for d in SearchSourceRegistry.get_definitions()}

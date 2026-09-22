@@ -138,6 +138,7 @@ class SyncHandler:
             cloud_transfer_path: Optional[str] = None,
             cloud_media_root: Optional[str] = None,
             cloud_transfer_paths: Optional[Mapping[str, str]] = None,
+            cloud_media_paths: Optional[Mapping[str, str]] = None,
             **kwargs,
     ):
         """
@@ -151,6 +152,7 @@ class SyncHandler:
         :param cloud_transfer_path: 当前网盘转存暂存路径（可选）
         :param cloud_media_root: 当前网盘媒体库分类根目录（可选）
         :param cloud_transfer_paths: 各网盘提供方的转存暂存路径映射（可选）
+        :param cloud_media_paths: 各网盘提供方的媒体库路径映射（可选）
         """
         self._plugin = plugin
 
@@ -333,24 +335,43 @@ class SyncHandler:
         )
         self._local_resource_path = str(_get_val("local_resource_path", "") or "").strip()
 
-        raw_transfer_path = cloud_transfer_path or _get_val("cloud_transfer_path", "/")
-        self._cloud_transfer_path = (
-                str(raw_transfer_path or "/").strip().rstrip("/") or "/"
-        )
-        raw_media_root = cloud_media_root or _get_val("cloud_media_root", _get_val("cloud_media_path", "/"))
-        self._CLOUD_MEDIA_ROOT = self._normalize_cloud_path(raw_media_root)
-
-        paths = cloud_transfer_paths or _get_val("cloud_transfer_paths")
-        if paths is None and plugin is not None:
-            paths = self._configured_transfer_paths(plugin)
+        paths = cloud_transfer_paths if cloud_transfer_paths is not None else self._configured_transfer_paths(plugin)
         self._cloud_transfer_paths = {
             str(key).strip().lower(): self._normalize_cloud_path(value)
             for key, value in dict(paths or {}).items()
             if str(key).strip()
         }
+
+        media_paths = cloud_media_paths if cloud_media_paths is not None else self._configured_media_paths(plugin)
+        self._cloud_media_paths = {
+            str(key).strip().lower(): self._normalize_cloud_path(value)
+            for key, value in dict(media_paths or {}).items()
+            if str(key).strip()
+        }
+
+        # 优先从各网盘专属路径映射中取当前网盘路径，兼容显式参数传入
+        drive_key = getattr(self._cloud_drive, "key", "") if self._cloud_drive else ""
+        raw_transfer_path = (
+                cloud_transfer_path
+                or (self._cloud_transfer_paths.get(drive_key) if drive_key else None)
+                or "/"
+        )
+        self._cloud_transfer_path = (
+                str(raw_transfer_path or "/").strip().rstrip("/") or "/"
+        )
+        raw_media_root = (
+                cloud_media_root
+                or (self._cloud_media_paths.get(drive_key) if drive_key else None)
+                or "/"
+        )
+        self._CLOUD_MEDIA_ROOT = self._normalize_cloud_path(raw_media_root)
+
         if self._cloud_drive:
             self._cloud_transfer_paths.setdefault(
                 self._cloud_drive.key, self._cloud_transfer_path
+            )
+            self._cloud_media_paths.setdefault(
+                self._cloud_drive.key, self._CLOUD_MEDIA_ROOT
             )
 
         self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", True))
@@ -711,6 +732,11 @@ class SyncHandler:
                 logger.debug(
                     f"开始处理转存批次 {batch_index}/{batch_count}："
                     f"文件={len(batch_items)}"
+                )
+                self._set_task_phase(
+                    subscribe,
+                    f"正在转存第 {batch_index}/{batch_count} 批剧集",
+                    90 + int((batch_index / batch_count) * 4),
                 )
             batch_results = self._transfer_episode_batch(
                 batch_items,
@@ -1602,7 +1628,7 @@ class SyncHandler:
         )
         target_dir = ""
         target_name = ""
-        if prefix != "magnet" and mediainfo:
+        if getattr(self, "_organize_after_transfer", True) and prefix != "magnet" and mediainfo:
             try:
                 if mediainfo.type == MediaType.TV:
                     target_ep = target_episodes[0] if target_episodes and len(target_episodes) == 1 else None
@@ -2120,14 +2146,19 @@ class SyncHandler:
         result: Dict[str, str] = {}
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
+            organize_enabled = getattr(self, "_organize_after_transfer", True)
             for item in items:
                 share_url = item["share_url"]
-                cloud_dir = item["cloud_dir"]
-                file_name = item["file_name"]
                 staging_dir = str(
-                    item.get("staging_dir") or cloud_dir
+                    item.get("staging_dir") or item.get("cloud_dir") or "/"
                 ).rstrip("/") or "/"
-                staging_name = str(item.get("staging_name") or file_name)
+                staging_name = str(item.get("staging_name") or item.get("file_name") or "")
+                if not organize_enabled:
+                    cloud_dir = staging_dir
+                    file_name = staging_name
+                else:
+                    cloud_dir = item["cloud_dir"]
+                    file_name = item["file_name"]
                 source_hash, source_identity = self._finalize_source_identity(
                     item.get("source_sha1") or "",
                     staging_dir,
@@ -2191,9 +2222,10 @@ class SyncHandler:
         generated = 0
         queued_items: List[Dict[str, Any]] = []
         ready_items: List[Dict[str, Any]] = []
+        organize_enabled = getattr(self, "_organize_after_transfer", True)
         for item in items:
             result_key = str(item["result_key"])
-            if item.get("staging_dir"):
+            if not organize_enabled or item.get("staging_dir"):
                 queued_items.append(item)
                 continue
             cloud_dir = item["cloud_dir"]
@@ -2214,7 +2246,8 @@ class SyncHandler:
                 generated += 1
             else:
                 queued_items.append(item)
-        self._scrape_metadata_batch(ready_items, mediainfo, season=season)
+        if organize_enabled:
+            self._scrape_metadata_batch(ready_items, mediainfo, season=season)
         pending_keys = self._queue_file_finalize_batch(
             queued_items,
             mediainfo,
@@ -2386,13 +2419,26 @@ class SyncHandler:
     @staticmethod
     def _configured_transfer_paths(plugin: Any) -> Dict[str, str]:
         """按驱动自描述读取各网盘的转存路径，新增网盘无需改动此处。"""
-        return {
-            definition_cls.id: getattr(
-                plugin, f"_{definition_cls.get_transfer_path_key()}", "/"
-            )
-            for definition_cls in get_driver_definitions()
-            if definition_cls.get_transfer_path_key()
-        }
+        paths = {}
+        for definition_cls in get_driver_definitions():
+            key = definition_cls.get_transfer_path_key()
+            if not key:
+                continue
+            val = getattr(plugin, f"_{key}", None) or "/"
+            paths[definition_cls.id] = val
+        return paths
+
+    @staticmethod
+    def _configured_media_paths(plugin: Any) -> Dict[str, str]:
+        """按驱动自描述读取各网盘的媒体库目录，新增网盘无需改动此处。"""
+        paths = {}
+        for definition_cls in get_driver_definitions():
+            key = definition_cls.get_media_path_key()
+            if not key:
+                continue
+            val = getattr(plugin, f"_{key}", None) or "/"
+            paths[definition_cls.id] = val
+        return paths
 
     def _cross_transfer_staging_path(self, provider_key: str) -> str:
         base_path = self._cloud_transfer_paths.get(

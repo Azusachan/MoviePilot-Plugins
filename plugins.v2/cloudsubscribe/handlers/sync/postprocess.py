@@ -13,10 +13,125 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from ...core import OwnerDelegator
+from .utils import extract_ed2k_filename
+from ...core import CloudDriveCapability, OwnerDelegator
 from ...search.subs_filter import anime_file_candidates
 from ...utils import MediaFileParser
-from .utils import extract_ed2k_filename
+
+
+class DirectoryFileIndex(dict):
+    """支持文件名直接访问与动态网盘哈希（如 sha1, md5, sha256）及剧集季集 O(1) 快速反查的目录文件索引对象。"""
+
+    def __init__(
+            self,
+            files: Optional[List[Any]] = None,
+            algorithms: Optional[Set[str]] = None,
+    ):
+        super().__init__()
+        self.by_hash: Dict[str, Any] = {}
+        self.by_season_episode: Dict[Tuple[int, int], Any] = {}
+        self.algorithms = frozenset(str(a).lower() for a in (algorithms or {"sha1", "md5"}))
+        if files:
+            for file_obj in files:
+                self.add_file(file_obj)
+
+    @property
+    def by_sha1(self) -> Dict[str, Any]:
+        return self.by_hash
+
+    def add_file(self, file_obj: Any) -> None:
+        name = getattr(file_obj, "name", None) or (file_obj.get("name") if isinstance(file_obj, dict) else None)
+        if name:
+            self[name] = file_obj
+            se = MediaFileParser.extract_season_episode(name)
+            if se and se not in self.by_season_episode:
+                self.by_season_episode[se] = file_obj
+        for algo in self.algorithms:
+            val = getattr(file_obj, algo, None) or (file_obj.get(algo) if isinstance(file_obj, dict) else None)
+            if val:
+                self.by_hash[str(val).strip().upper()] = file_obj
+
+    def remove_file(self, file_obj: Any) -> None:
+        name = getattr(file_obj, "name", None) or (file_obj.get("name") if isinstance(file_obj, dict) else None)
+        if name and name in self:
+            del self[name]
+            se = MediaFileParser.extract_season_episode(name)
+            if se and self.by_season_episode.get(se) == file_obj:
+                self.by_season_episode.pop(se, None)
+        for algo in self.algorithms:
+            val = getattr(file_obj, algo, None) or (file_obj.get(algo) if isinstance(file_obj, dict) else None)
+            if val:
+                self.by_hash.pop(str(val).strip().upper(), None)
+
+    def get_by_hash(self, file_hash: str) -> Optional[Any]:
+        if not file_hash:
+            return None
+        return self.by_hash.get(str(file_hash).strip().upper())
+
+    def get_by_sha1(self, sha1: str) -> Optional[Any]:
+        return self.get_by_hash(sha1)
+
+    def get_by_season_episode(self, season: int, episode: int) -> Optional[Any]:
+        return self.by_season_episode.get((season, episode))
+
+
+class PostprocessBatchContext:
+    """后处理单次批量执行会话上下文。"""
+
+    def __init__(
+            self,
+            pending: Dict[str, Dict[str, Any]],
+            pending_snapshot: Dict[str, Dict[str, Any]],
+            due_keys: List[str],
+            now: float,
+            monitor_token: str,
+            task_map: Dict[str, Any],
+            tasks_valid: bool,
+            subscribe_cache: Dict[int, Any],
+    ):
+        self.pending = pending
+        self.pending_snapshot = pending_snapshot
+        self.due_keys = due_keys
+        self.now = now
+        self.monitor_token = monitor_token
+        self.task_map = task_map
+        self.tasks_valid = tasks_valid
+        self.subscribe_cache = subscribe_cache
+
+        self.completed: int = 0
+        self.failed: int = 0
+        self.committed_keys: Set[str] = set()
+
+        self.directory_snapshots: Dict[str, Tuple[bool, DirectoryFileIndex]] = {}
+        self.media_context_cache: Dict[Tuple[Any, ...], Tuple[Any, Dict[str, Any]]] = {}
+        self.prepared_files: Dict[str, Any] = {}
+        self.moved_files: Dict[str, Any] = {}
+        self.upgrade_delete_batch: Dict[str, Dict[str, Any]] = {}
+        self.subscription_batches: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        self.finalized_details: List[Dict[str, Any]] = []
+        self.notification_contexts: List[Tuple[Dict[str, Any], str]] = []
+
+    def sync_rename(self, dir_path: str, old_file: Any, new_file: Any) -> None:
+        """重命名成功后直接在内存索引中同步更新，避免向网盘重新发请求。"""
+        normalized_dir = str(dir_path or "").rstrip("/")
+        if normalized_dir in self.directory_snapshots:
+            valid, index = self.directory_snapshots[normalized_dir]
+            if valid and isinstance(index, DirectoryFileIndex):
+                index.remove_file(old_file)
+                index.add_file(new_file)
+
+    def sync_move(self, src_dir: str, dst_dir: str, file_obj: Any) -> None:
+        """移动成功后跨目录同步内存索引，免除双方目录的网络二次扫描。"""
+        src_norm = str(src_dir or "").rstrip("/")
+        dst_norm = str(dst_dir or "").rstrip("/")
+        if src_norm in self.directory_snapshots:
+            valid, index = self.directory_snapshots[src_norm]
+            if valid and isinstance(index, DirectoryFileIndex):
+                index.remove_file(file_obj)
+        if dst_norm in self.directory_snapshots:
+            valid, index = self.directory_snapshots[dst_norm]
+            if valid and isinstance(index, DirectoryFileIndex):
+                index.add_file(file_obj)
 
 
 class PostprocessService(OwnerDelegator):
@@ -41,26 +156,40 @@ class PostprocessService(OwnerDelegator):
         "请检查网盘文件与媒体目录状态"
     )
 
+    def _supported_hash_algorithms(self) -> frozenset[str]:
+        """动态获取当前目标网盘支持的文件哈希校验算法集合。"""
+        cloud_drive = getattr(self, "_cloud_drive", None)
+        if cloud_drive and cloud_drive.supports(CloudDriveCapability.RAPID_UPLOAD):
+            try:
+                rapid = cloud_drive.require(CloudDriveCapability.RAPID_UPLOAD)
+                algorithms = getattr(rapid, "algorithms", None)
+                if algorithms:
+                    return frozenset(str(a).lower() for a in algorithms)
+            except Exception:
+                pass
+        return frozenset({"sha1", "md5"})
+
     def _cloud_directory_snapshot(
             self,
             cloud_dir: str,
-            cache: Optional[Dict[str, Tuple[bool, Dict[str, Any]]]] = None,
-    ) -> Tuple[bool, Dict[str, Any]]:
-        """获取并缓存网盘目录下的文件索引。"""
+            cache: Optional[Dict[str, Tuple[bool, DirectoryFileIndex]]] = None,
+    ) -> Tuple[bool, DirectoryFileIndex]:
+        """获取并缓存网盘目录下的文件双索引。"""
         normalized_dir = str(cloud_dir or "").rstrip("/")
         if cache is not None and normalized_dir in cache:
             return cache[normalized_dir]
         lookup = self._cloud_directories.resolve_directory(normalized_dir)
+        algorithms = self._supported_hash_algorithms()
         if not lookup.checked:
-            result = (False, {})
+            result = (False, DirectoryFileIndex(algorithms=algorithms))
         elif lookup.directory_id is None:
-            result = (True, {})
+            result = (True, DirectoryFileIndex(algorithms=algorithms))
         else:
             listing = self._cloud_directories.list_directory(lookup.directory_id)
             if not listing.checked:
-                result = (False, {})
+                result = (False, DirectoryFileIndex(algorithms=algorithms))
             else:
-                result = (True, {item.name: item for item in listing.files if item.name})
+                result = (True, DirectoryFileIndex(listing.files, algorithms=algorithms))
         if cache is not None:
             cache[normalized_dir] = result
         return result
@@ -170,35 +299,6 @@ class PostprocessService(OwnerDelegator):
             short_id = uuid.uuid4().hex[:10]
         return f"{source.stem}-{short_id}{source.suffix}"
 
-    def _activate_persisted_pending_tasks(
-            self, pending: Dict[str, Dict[str, Any]], now: float
-    ) -> int:
-        """恢复历史已落盘但未激活的后处理任务。"""
-        inactive_keys = {
-            key for key, item in pending.items()
-            if not bool(item.get("history_ready", True))
-        }
-        if not inactive_keys:
-            return 0
-        history = self._get_data("history") or []
-        persisted_keys = {
-            str(record.get("finalize_key") or "")
-            for record in history
-            if isinstance(record, dict) and record.get("finalize_key")
-        }
-        activated_keys = inactive_keys & persisted_keys
-        for key in activated_keys:
-            pending[key]["history_ready"] = True
-            pending[key]["next_check_at"] = min(
-                float(pending[key].get("next_check_at") or now), now
-            )
-        if activated_keys:
-            self._save_offline_pending(pending)
-            logger.info(
-                f"已恢复 {len(activated_keys)} 个未激活的115文件后处理任务"
-            )
-        return len(activated_keys)
-
     @staticmethod
     def _due_pending_keys(
             pending: Dict[str, Dict[str, Any]],
@@ -211,7 +311,6 @@ class PostprocessService(OwnerDelegator):
             key
             for key, item in pending.items()
             if (not selected or key in selected)
-               and bool(item.get("history_ready", True))
                and now >= float(item.get("_monitor_until") or 0)
                and (force or now >= float(item.get("next_check_at") or 0))
         ]
@@ -278,9 +377,9 @@ class PostprocessService(OwnerDelegator):
             return []
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
-            self._activate_persisted_pending_tasks(pending, time.time())
+        now = time.time()
         due_keys = self._due_pending_keys(
-            pending, time.time(), force=force, pending_keys=pending_keys
+            pending, now, force=force, pending_keys=pending_keys
         )
         groups: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
         for pending_key in due_keys:
@@ -464,32 +563,41 @@ class PostprocessService(OwnerDelegator):
         logger.debug(f"洗版新文件已就绪，旧文件删除待重试：{old_dir}/{backup_name}")
         return False
 
-    def monitor_offline_strm_tasks(
+    def _prepare_postprocess_context(
             self,
             force: bool = False,
             pending_keys: Optional[Set[str]] = None,
             offline_tasks: Optional[List[Dict[str, Any]]] = None,
             offline_tasks_valid: Optional[bool] = None,
-    ) -> Dict[str, int]:
-        """检查离线下载和网盘文件后处理；手动刷新可立即重试指定任务。"""
+    ) -> Optional[PostprocessBatchContext]:
+        """初始化后处理批次会话上下文，完成到期任务筛选与租约锁定。"""
         if (
                 not self._get_data
                 or not self._cloud_directories
                 or not self._cloud_query
                 or not self._cloud_mutations
         ):
-            return {"checked": 0, "completed": 0, "failed": 0, "pending": 0}
+            return None
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             if not pending:
-                return {"checked": 0, "completed": 0, "failed": 0, "pending": 0}
+                return None
 
             now = time.time()
             due_keys = self._due_pending_keys(
                 pending, now, force=force, pending_keys=pending_keys
             )
             if not due_keys:
-                return {"checked": 0, "completed": 0, "failed": 0, "pending": len(pending)}
+                return PostprocessBatchContext(
+                    pending=pending,
+                    pending_snapshot=copy.deepcopy(pending),
+                    due_keys=[],
+                    now=now,
+                    monitor_token="",
+                    task_map={},
+                    tasks_valid=False,
+                    subscribe_cache={},
+                )
 
             monitor_token = uuid.uuid4().hex
             for key in due_keys:
@@ -498,14 +606,7 @@ class PostprocessService(OwnerDelegator):
                 item["_monitor_until"] = now + self._OFFLINE_MONITOR_LEASE_SECONDS
             self._save_offline_pending(pending)
             pending_snapshot = copy.deepcopy(pending)
-        completed = 0
-        failed = 0
-        finalized_details: List[Dict[str, Any]] = []
-        notification_contexts: List[Tuple[Dict[str, Any], str]] = []
-        subscription_batches: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-        media_context_cache: Dict[
-            Tuple[Any, ...], Tuple[Any, Dict[str, Any]]
-        ] = {}
+
         subscribe_ids = {
             int((pending.get(key) or {}).get("subscribe_id") or 0)
             for key in due_keys
@@ -526,900 +627,1090 @@ class PostprocessService(OwnerDelegator):
             except Exception as error:
                 logger.debug(f"批量读取后处理订阅失败，将按需查询：{error}")
 
-        def queue_subscription_completion(
-                item: Dict[str, Any], media, media_data: Dict[str, Any]
-        ) -> None:
-            if item.get("transient_target"):
-                return
-            episode_values = (
-                    item.get("success_episodes")
-                    or item.get("notification_episodes")
-                    or item.get("target_episodes")
-                    or ([item.get("episode")] if item.get("episode") else [])
+        needs_offline = any(
+            str((pending.get(key) or {}).get("task_type") or "share")
+            in {"ed2k", "magnet", "offline"}
+            for key in due_keys
+        )
+        tasks = offline_tasks
+        if needs_offline and tasks is None and self._offline_tasks:
+            snapshot = self._offline_tasks.get_offline_task_list_snapshot(
+                force=True,
             )
-            episodes = set()
-            for value in episode_values:
+            tasks = snapshot.get("tasks") or []
+            offline_tasks_valid = bool(snapshot.get("refresh_ok"))
+        tasks_valid = bool(offline_tasks_valid)
+        task_map = {
+            str(task.get("id") or "").upper(): task
+            for task in (tasks or [])
+            if task.get("id")
+        }
+
+        return PostprocessBatchContext(
+            pending=pending,
+            pending_snapshot=pending_snapshot,
+            due_keys=due_keys,
+            now=now,
+            monitor_token=monitor_token,
+            task_map=task_map,
+            tasks_valid=tasks_valid,
+            subscribe_cache=subscribe_cache,
+        )
+
+    @staticmethod
+    def _queue_subscription_completion(
+            item: Dict[str, Any],
+            media: Any,
+            media_data: Dict[str, Any],
+            ctx: PostprocessBatchContext,
+    ) -> None:
+        """记录已完成的订阅集数，供批次结束时聚合更新订阅进度。"""
+        if item.get("transient_target"):
+            return
+        episode_values = (
+                item.get("success_episodes")
+                or item.get("notification_episodes")
+                or item.get("target_episodes")
+                or ([item.get("episode")] if item.get("episode") else [])
+        )
+        episodes = set()
+        for value in episode_values:
+            try:
+                episode = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+            if episode > 0:
+                episodes.add(episode)
+        if not media or not episodes:
+            return
+        key = (
+            int(item.get("subscribe_id") or 0),
+            int(getattr(media, "tmdb_id", 0) or 0),
+            int(item.get("season") or 0),
+            str(item.get("task_type") or "share").strip().lower(),
+        )
+        batch = ctx.subscription_batches.setdefault(key, {
+            "item": copy.deepcopy(item),
+            "mediainfo": media,
+            "media_data": dict(media_data or {}),
+            "episodes": set(),
+        })
+        batch["episodes"].update(episodes)
+
+    def _extract_item_hash(self, item: Dict[str, Any]) -> str:
+        """根据当前目标网盘动态支持的文件算法，从待办项中提取匹配的文件哈希。"""
+        for algo in self._supported_hash_algorithms():
+            val = item.get(f"source_{algo}") or item.get(algo)
+            if val:
+                return str(val).strip().upper()
+        for fallback in ("source_sha1", "sha1", "source_md5", "md5"):
+            val = item.get(fallback)
+            if val:
+                return str(val).strip().upper()
+        return ""
+
+    def _locate_cloud_file(
+            self,
+            dir_path: str,
+            candidate_names: List[str],
+            target_hash: str,
+            ctx: PostprocessBatchContext,
+            item: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Any]:
+        """在指定网盘目录下快速定位目标物理文件（精确名 O(1) 优先，哈希 O(1) 次之，模糊名与剧集集数容错兜底）。"""
+        if not dir_path:
+            return None
+        valid, file_index = self._cloud_directory_snapshot(dir_path, ctx.directory_snapshots)
+        if not valid or not file_index:
+            return None
+
+        # 1. 精确名称查找 (O(1))
+        for name in candidate_names:
+            if name and name in file_index:
+                return file_index[name]
+
+        # 2. 哈希查找 (O(1))
+        clean_hash = str(target_hash or "").strip().upper()
+        if clean_hash and hasattr(file_index, "get_by_hash"):
+            found = file_index.get_by_hash(clean_hash)
+            if found:
+                return found
+
+        # 3. 边界前后缀与网盘重名副本容错匹配 (如 URL 截断名、特殊编码名或 115 自动生成的 "(1)"、"_1" 副本)
+        for candidate_name in candidate_names:
+            if not candidate_name:
+                continue
+            cand_stem = Path(candidate_name).stem.lower()
+            cand_ext = Path(candidate_name).suffix.lower()
+            for fname, fobj in file_index.items():
+                if candidate_name.endswith(fname) or fname.endswith(candidate_name):
+                    return fobj
+                fname_stem = Path(fname).stem.lower()
+                fname_ext = Path(fname).suffix.lower()
+                if cand_stem and fname_stem and (fname_stem.startswith(cand_stem) or cand_stem.startswith(fname_stem)):
+                    if not cand_ext or not fname_ext or cand_ext == fname_ext:
+                        return fobj
+
+        # 4. 剧集季集 O(1) 索引智能定位 (避免重复对所有文件循环正则解析)
+        if item:
+            target_season = item.get("season")
+            target_eps = item.get("success_episodes") or item.get("notification_episodes")
+            target_ep = target_eps[0] if isinstance(target_eps, list) and target_eps else item.get("episode")
+            if target_season is None or target_ep is None:
+                for cand in candidate_names:
+                    if cand:
+                        se = MediaFileParser.extract_season_episode(cand)
+                        if se:
+                            if target_season is None:
+                                target_season = se[0]
+                            if target_ep is None:
+                                target_ep = se[1]
+                            break
+            if target_season is not None and target_ep is not None:
                 try:
-                    episode = int(value or 0)
-                except (TypeError, ValueError):
-                    continue
-                if episode > 0:
-                    episodes.add(episode)
-            if not media or not episodes:
+                    t_season_int = int(target_season)
+                    t_ep_int = int(target_ep)
+                    if hasattr(file_index, "get_by_season_episode"):
+                        found = file_index.get_by_season_episode(t_season_int, t_ep_int)
+                        if found:
+                            return found
+                except (ValueError, TypeError):
+                    pass
+
+        return None
+
+    def _has_existing_cloud_file(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> bool:
+        """检查任务对应的物理文件是否已在暂存目录或最终媒体目录就位，命中时复用对象避免二次定位。"""
+        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+        if bool(item.get("moved_at") or (task and task.get("completed"))):
+            return True
+        cached_file = ctx.moved_files.get(pending_key) or ctx.prepared_files.get(pending_key)
+        if cached_file:
+            return True
+        staging_dir = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
+        final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
+        task_name = str((task or {}).get("name") or "").strip()
+        candidate_names = [
+            str(item.get("file_name") or ""),
+            str(item.get("staging_name") or ""),
+            task_name,
+            extract_ed2k_filename(str(item.get("share_url") or "")),
+        ]
+        target_hash = self._extract_item_hash(item)
+        found = self._locate_cloud_file(staging_dir, candidate_names, target_hash, ctx, item=item)
+        if found:
+            ctx.prepared_files[pending_key] = found
+            return True
+        if final_dir != staging_dir:
+            found = self._locate_cloud_file(final_dir, candidate_names, target_hash, ctx, item=item)
+            if found:
+                ctx.moved_files[pending_key] = found
+                item["moved_at"] = ctx.now
+                item["staging_dir"] = final_dir
+                return True
+        return False
+
+    def _commit_single_item(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            strm_path: Optional[Path],
+            media: Any,
+            media_data: Dict[str, Any],
+            ctx: PostprocessBatchContext,
+    ) -> None:
+        """单项后处理完成后立即提交历史终态并将通知入队，避免中途停止丢失已完成项。"""
+        self._update_postprocess_progress(
+            item, pending_key, "commit", "更新历史和订阅进度"
+        )
+        if item.get("upgrade") and str(
+                item.get("upgrade_mode") or self._upgrade_mode
+        ) != "coexist":
+            self._delete_upgrade_old_strm(
+                item, replacement_path=strm_path
+            )
+        self._queue_subscription_completion(item, media, media_data, ctx)
+        detail = self._notify_pending_file_finalized(
+            item,
+            pending_key,
+            strm_path,
+            mediainfo=media,
+            media_data=media_data,
+            finish_subscription=media is None,
+            subscribe_cache=ctx.subscribe_cache,
+        )
+        self._mark_offline_history_status(pending_key, "成功")
+        if detail:
+            ctx.finalized_details.append(detail)
+            ctx.notification_contexts.append((item, pending_key))
+        if not strm_path:
+            logger.debug(f"文件后处理完成：{item.get('file_name') or pending_key}")
+        ctx.pending.pop(pending_key, None)
+        ctx.committed_keys.add(pending_key)
+        task_id = self._postprocess_task_id(item)
+        if task_id and self._postprocess_task_update:
+            self._postprocess_task_update(
+                task_id,
+                _pending_key=pending_key,
+                file_completed=True,
+                postprocess_active=False,
+                postprocess_detail="文件处理完成",
+            )
+        ctx.completed += 1
+
+    def _abort_single_item(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            reason: str,
+            ctx: PostprocessBatchContext,
+    ) -> None:
+        """单项后处理定位或执行失败后，彻底结算该项，更新历史并通知前端停止该项。"""
+        logger.warning(
+            f"文件后处理失败并停止：{item.get('file_name') or pending_key}，原因：{reason}"
+        )
+        self._mark_offline_history_status(pending_key, "失败", reason)
+        ctx.pending.pop(pending_key, None)
+        ctx.committed_keys.add(pending_key)
+        ctx.failed += 1
+        task_id = self._postprocess_task_id(item)
+        if task_id and self._postprocess_task_update:
+            self._postprocess_task_update(
+                task_id,
+                _pending_key=pending_key,
+                file_completed=True,
+                item_failed=True,
+                postprocess_active=False,
+                postprocess_detail=f"定位失败：{reason}",
+            )
+
+    def _finalize_ready_item(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            strm_path: Optional[Path],
+            media: Any,
+            media_data: Dict[str, Any],
+            ctx: PostprocessBatchContext,
+    ) -> None:
+        """处理就绪项的洗版旧文件删除并最终提交。"""
+        is_replacement = item.get("upgrade") and str(
+            item.get("upgrade_mode") or self._upgrade_mode
+        ) != "coexist"
+        if is_replacement and self._cloud_batch_mutations:
+            backup_id = self._upgrade_old_file_id(
+                item, lambda d: self._cloud_directory_snapshot(d, ctx.directory_snapshots)
+            )
+            if backup_id:
+                ctx.upgrade_delete_batch[pending_key] = {
+                    "item": item,
+                    "file_id": backup_id,
+                    "strm_path": strm_path,
+                    "media": media,
+                    "media_data": media_data,
+                }
                 return
-            key = (
-                int(item.get("subscribe_id") or 0),
-                int(getattr(media, "tmdb_id", 0) or 0),
-                int(item.get("season") or 0),
-                str(item.get("task_type") or "share").strip().lower(),
-            )
-            batch = subscription_batches.setdefault(key, {
-                "item": copy.deepcopy(item),
-                "mediainfo": media,
-                "media_data": dict(media_data or {}),
-                "episodes": set(),
-            })
-            batch["episodes"].update(episodes)
+        if is_replacement and not self._delete_upgrade_old_file(
+                item, lambda d: self._cloud_directory_snapshot(d, ctx.directory_snapshots)
+        ):
+            if self._finalize_failure(item, pending_key):
+                return
+            self._schedule_finalize_retry(item, ctx.now)
+            return
+        self._commit_single_item(
+            item, pending_key, strm_path, media, media_data, ctx
+        )
 
-        if due_keys:
-
-            needs_offline = any(
-                str((pending.get(key) or {}).get("task_type") or "share")
-                in {"ed2k", "magnet", "offline"}
-                for key in due_keys
+    def _finalize_after_metadata(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            file_name: str,
+            strm_path: Optional[Path],
+            media: Any,
+            media_data: Dict[str, Any],
+            ctx: PostprocessBatchContext,
+    ) -> None:
+        """元数据刮削后推进最终确认。"""
+        if (
+                getattr(self, "_organize_after_transfer", True)
+                and media
+                and self._metadata_scraper
+                and self._local_resource_path
+                and (self._nfo_scrape_enabled or self._image_scrape_enabled)
+        ):
+            self._update_postprocess_progress(
+                item, pending_key, "metadata", "刮削当前文件元数据"
             )
-            tasks = offline_tasks
-            if needs_offline and tasks is None and self._offline_tasks:
-                snapshot = self._offline_tasks.get_offline_task_list_snapshot(
-                    force=True,
-                )
-                tasks = snapshot.get("tasks") or []
-                offline_tasks_valid = bool(snapshot.get("refresh_ok"))
-            tasks_valid = bool(offline_tasks_valid)
-            task_map = {
-                str(task.get("id") or "").upper(): task
-                for task in (tasks or [])
-                if task.get("id")
+            self._scrape_metadata_batch([{
+                "cloud_dir": item["cloud_dir"],
+                "file_name": file_name,
+                "notification_episodes": (
+                    [item.get("episode")] if item.get("episode") else []
+                ),
+            }], media, season=item.get("season"))
+        self._finalize_ready_item(
+            item, pending_key, strm_path, media, media_data, ctx
+        )
+
+    def _execute_batch_cloud_mutations(self, ctx: PostprocessBatchContext) -> None:
+        """统一执行洗版旧文件批量避让、新文件批量重命名与批量移动。"""
+        if not self._cloud_batch_mutations:
+            return
+
+        # 1. 洗版旧文件批量备份避让
+        upgrade_backup_groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for pending_key in ctx.due_keys:
+            item = ctx.pending.get(pending_key) or {}
+            task_type = str(item.get("task_type") or "share")
+            task = ctx.task_map.get(
+                str(item.get("task_id") or pending_key).upper()
+            )
+            if (
+                    task_type == "magnet"
+                    or (task_type in {"ed2k", "offline"} and not bool(
+                task and task.get("completed")
+            ))
+                    or not item.get("upgrade")
+                    or str(item.get("upgrade_mode") or self._upgrade_mode) == "coexist"
+                    or item.get("upgrade_old_backed_up")
+            ):
+                continue
+            old_dir = str(
+                item.get("upgrade_old_cloud_dir")
+                or item.get("cloud_dir") or "/"
+            ).rstrip("/") or "/"
+            old_name = str(item.get("upgrade_old_file_name") or "").strip()
+            old_id = str(item.get("upgrade_old_file_id") or "").strip()
+            directory_valid, old_index = self._cloud_directory_snapshot(
+                old_dir, ctx.directory_snapshots
+            )
+            if not directory_valid:
+                continue
+            old_file = next(
+                (
+                    value for value in old_index.values()
+                    if old_id and str(getattr(value, "id", "")) == old_id
+                ),
+                None,
+            ) or old_index.get(old_name)
+            if not old_file:
+                continue
+            backup_name = self._upgrade_backup_name(
+                old_name, item.get("task_id") or pending_key
+            )
+            upgrade_backup_groups.setdefault(old_dir, {})[pending_key] = {
+                "item": old_file,
+                "target_name": backup_name,
             }
-            directory_snapshots: Dict[str, Tuple[bool, Dict[str, Any]]] = {}
-            def update_progress(
-                    item: Dict[str, Any],
-                    pending_key: str,
-                    step: str,
-                    detail: str = "",
-            ) -> None:
-                self._update_postprocess_progress(
-                    item,
-                    pending_key,
-                    step,
-                    detail,
-                )
+            item["upgrade_backup_name"] = backup_name
 
-            def directory_snapshot(cloud_dir: str) -> Tuple[bool, Dict[str, Any]]:
-                return self._cloud_directory_snapshot(cloud_dir, directory_snapshots)
-
-            upgrade_delete_batch: Dict[str, Dict[str, Any]] = {}
-
-            def finish_finalized_item(
-                    item: Dict[str, Any],
-                    pending_key: str,
-                    strm_path,
-                    media,
-                    media_data: Dict[str, Any],
-            ) -> None:
-                nonlocal completed
-                update_progress(
-                    item, pending_key, "commit", "更新历史和订阅进度"
-                )
-                if item.get("upgrade") and str(
-                        item.get("upgrade_mode") or self._upgrade_mode
-                ) != "coexist":
-                    self._delete_upgrade_old_strm(
-                        item, replacement_path=strm_path
-                    )
-                queue_subscription_completion(item, media, media_data)
-                detail = self._notify_pending_file_finalized(
-                    item,
-                    pending_key,
-                    strm_path,
-                    mediainfo=media,
-                    media_data=media_data,
-                    finish_subscription=media is None,
-                    subscribe_cache=subscribe_cache,
-                )
-                # 单项后处理完成后立即提交历史终态并将通知入队，不能等本轮
-                # pending 扫描结束，否则中途停止会丢失已完成项的通知。
-                self._mark_offline_history_status(pending_key, "成功")
-                if detail:
-                    finalized_details.append(detail)
-                    notification_contexts.append((item, pending_key))
-                logger.debug(
-                    f"文件后处理完成"
-                    f"{'并生成 STRM' if strm_path else ''}："
-                    f"{strm_path or item.get('file_name') or pending_key}"
-                )
-                pending.pop(pending_key, None)
-                with self._offline_pending_lock:
-                    current_persisted = self._get_data(self._OFFLINE_PENDING_KEY) or {}
-                    if pending_key in current_persisted:
-                        current_persisted.pop(pending_key, None)
-                        self._save_offline_pending(current_persisted)
-                        self._notify_offline_pending_changed(len(current_persisted))
-                task_id = self._postprocess_task_id(item)
-                if task_id and self._postprocess_task_update:
-                    self._postprocess_task_update(
-                        task_id,
-                        _pending_key=pending_key,
-                        file_completed=True,
-                        postprocess_active=False,
-                        postprocess_detail="文件处理完成",
-                    )
-                completed += 1
-
-            def finalize_ready_item(
-                    item: Dict[str, Any],
-                    pending_key: str,
-                    strm_path,
-                    media,
-                    media_data: Dict[str, Any],
-            ) -> None:
-                is_replacement = item.get("upgrade") and str(
-                    item.get("upgrade_mode") or self._upgrade_mode
-                ) != "coexist"
-                if is_replacement and self._cloud_batch_mutations:
-                    backup_id = self._upgrade_old_file_id(item, directory_snapshot)
-                    if backup_id:
-                        upgrade_delete_batch[pending_key] = {
-                            "item": item,
-                            "file_id": backup_id,
-                            "strm_path": strm_path,
-                            "media": media,
-                            "media_data": media_data,
-                        }
-                        return
-                if is_replacement and not self._delete_upgrade_old_file(
-                        item, directory_snapshot
-                ):
-                    if self._finalize_failure(item, pending_key):
-                        return
-                    self._schedule_finalize_retry(item, now)
-                    return
-                finish_finalized_item(
-                    item, pending_key, strm_path, media, media_data
-                )
-
-            prepared_files: Dict[str, Any] = {}
-            moved_files: Dict[str, Any] = {}
-            if self._cloud_batch_mutations:
-                # 洗版先批量避让旧文件，再让新文件进入统一重命名、移动批次。
-                # 单项失败仍由后续逐项流程恢复旧文件并安排重试。
-                upgrade_backup_groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
-                for pending_key in due_keys:
-                    item = pending.get(pending_key) or {}
-                    task_type = str(item.get("task_type") or "share")
-                    task = task_map.get(
-                        str(item.get("task_id") or pending_key).upper()
-                    )
-                    if (
-                            task_type == "magnet"
-                            or (task_type in {"ed2k", "offline"} and not bool(
-                        task and task.get("completed")
-                    ))
-                            or not item.get("upgrade")
-                            or str(item.get("upgrade_mode") or self._upgrade_mode)
-                            == "coexist"
-                            or item.get("upgrade_old_backed_up")
-                    ):
-                        continue
-                    old_dir = str(
-                        item.get("upgrade_old_cloud_dir")
-                        or item.get("cloud_dir") or "/"
-                    ).rstrip("/") or "/"
-                    old_name = str(item.get("upgrade_old_file_name") or "").strip()
-                    old_id = str(item.get("upgrade_old_file_id") or "").strip()
-                    directory_valid, old_index = directory_snapshot(old_dir)
-                    if not directory_valid:
-                        continue
-                    old_file = next(
-                        (
-                            value for value in old_index.values()
-                            if old_id and str(getattr(value, "id", "")) == old_id
-                        ),
-                        None,
-                    ) or old_index.get(old_name)
-                    if not old_file:
-                        continue
-                    backup_name = self._upgrade_backup_name(
-                        old_name, item.get("task_id") or pending_key
-                    )
-                    upgrade_backup_groups.setdefault(old_dir, {})[pending_key] = {
-                        "item": old_file,
-                        "target_name": backup_name,
-                    }
-                    item["upgrade_backup_name"] = backup_name
-
-                for old_dir, rename_items in upgrade_backup_groups.items():
-                    renamed = self._cloud_batch_mutations.rename_files(
-                        old_dir, rename_items
-                    )
-                    for pending_key, backup_file in renamed.items():
-                        item = pending.get(pending_key)
-                        if not item:
-                            continue
-                        item["upgrade_old_backed_up"] = True
-                        item["upgrade_old_file_id"] = str(
-                            getattr(backup_file, "id", "")
-                            or item.get("upgrade_old_file_id") or ""
-                        )
-                    if renamed:
-                        directory_snapshots.pop(old_dir, None)
-
-                rename_groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
-                for pending_key in due_keys:
-                    item = pending.get(pending_key) or {}
-                    task_type = str(item.get("task_type") or "share").strip().lower()
-                    share_url = str(item.get("share_url") or "").strip()
-                    # 核对“已存在文件”的恢复分支：如果复用了离线 pending 结构，但 URL 不是离线协议，还原原始任务类型
-                    if task_type in {"ed2k", "offline"} and share_url and not (
-                            share_url.lower().startswith("ed2k://") or share_url.lower().startswith("magnet:?")
-                    ):
-                        item["task_type"] = "share"
-                        task_type = "share"
-                    is_replacement = item.get("upgrade") and str(
-                        item.get("upgrade_mode") or self._upgrade_mode
-                    ) != "coexist"
-                    if (
-                            task_type in {"magnet", "ed2k", "offline"}
-                            or item.get("moved_at")
-                            or (is_replacement and not item.get("upgrade_old_backed_up"))
-                    ):
-                        continue
-                    task = task_map.get(
-                        str(item.get("task_id") or pending_key).upper()
-                    )
-                    if task_type in {"ed2k", "offline"}:
-                        if not bool(task and task.get("completed")):
-                            staging_dir_chk = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
-                            chk_valid, chk_index = directory_snapshot(staging_dir_chk)
-                            chk_sname = str(item.get("staging_name") or item.get("file_name") or "")
-                            chk_fname = str(item.get("file_name") or "")
-                            if not (chk_valid and (chk_index.get(chk_sname) or chk_index.get(chk_fname))):
-                                continue
-                    staging_dir = str(
-                        item.get("staging_dir") or item.get("cloud_dir") or "/"
-                    ).rstrip("/") or "/"
-                    directory_valid, file_index = directory_snapshot(staging_dir)
-                    if not directory_valid:
-                        continue
-                    staging_name = str(
-                        item.get("staging_name") or item.get("file_name") or ""
-                    )
-                    task_name = str((task or {}).get("name") or "").strip()
-                    source_file = file_index.get(staging_name) or file_index.get(task_name)
-                    source_sha1 = str(item.get("source_sha1") or "").upper()
-                    if not source_file and len(source_sha1) == 40:
-                        source_file = next(
-                            (
-                                candidate for candidate in file_index.values()
-                                if str(candidate.sha1 or "").upper() == source_sha1
-                            ),
-                            None,
-                        )
-                    if source_file:
-                        rename_groups.setdefault(staging_dir, {})[pending_key] = {
-                            "item": source_file,
-                            "target_name": str(item.get("file_name") or pending_key),
-                        }
-
-                for staging_dir, rename_items in rename_groups.items():
-                    first_key = next(iter(rename_items), "")
-                    first_item = pending.get(first_key) or {}
-                    if first_item:
-                        update_progress(
-                            first_item,
-                            first_key,
-                            "organize",
-                            f"批量重命名 {len(rename_items)} 个文件",
-                        )
-                    renamed = self._cloud_batch_mutations.rename_files(
-                        staging_dir, rename_items
-                    )
-                    for pending_key, target_file in renamed.items():
-                        item = pending.get(pending_key)
-                        if not item:
-                            continue
-                        item["staging_name"] = item["file_name"]
-                        prepared_files[pending_key] = target_file
-
-                move_groups: Dict[str, Dict[str, Any]] = {}
-                for pending_key, target_file in prepared_files.items():
-                    item = pending.get(pending_key) or {}
-                    staging_dir = str(item.get("staging_dir") or "/").rstrip("/") or "/"
-                    final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
-                    if staging_dir == final_dir:
-                        item["moved_at"] = now
-                        moved_files[pending_key] = target_file
-                        continue
-                    move_groups.setdefault(final_dir, {})[pending_key] = target_file
-
-                for final_dir, move_items in move_groups.items():
-                    first_key = next(iter(move_items), "")
-                    first_item = pending.get(first_key) or {}
-                    if first_item:
-                        update_progress(
-                            first_item,
-                            first_key,
-                            "organize",
-                            f"批量移动 {len(move_items)} 个文件",
-                        )
-                    moved = self._cloud_batch_mutations.move_files(
-                        move_items, final_dir
-                    )
-                    for pending_key, target_file in moved.items():
-                        item = pending.get(pending_key)
-                        if not item:
-                            continue
-                        item["moved_at"] = now
-                        moved_files[pending_key] = target_file
-
-            def finalize_after_metadata(
-                    item: Dict[str, Any],
-                    pending_key: str,
-                    file_name: str,
-                    strm_path,
-                    media,
-                    media_data: Dict[str, Any],
-            ) -> None:
-                if (
-                        media
-                        and getattr(self, "_organize_after_transfer", True)
-                        and self._metadata_scraper
-                        and self._local_resource_path
-                        and (self._nfo_scrape_enabled or self._image_scrape_enabled)
-                ):
-                    update_progress(
-                        item, pending_key, "metadata", "刮削当前文件元数据"
-                    )
-                    self._scrape_metadata_batch([{
-                        "cloud_dir": item["cloud_dir"],
-                        "file_name": file_name,
-                        "notification_episodes": (
-                            [item.get("episode")] if item.get("episode") else []
-                        ),
-                    }], media, season=item.get("season"))
-                finalize_ready_item(
-                    item, pending_key, strm_path, media, media_data
-                )
-
-            for pending_key in due_keys:
-                item = pending.get(pending_key)
+        for old_dir, rename_items in upgrade_backup_groups.items():
+            renamed = self._cloud_batch_mutations.rename_files(
+                old_dir, rename_items
+            )
+            for pending_key, backup_file in renamed.items():
+                item = ctx.pending.get(pending_key)
                 if not item:
                     continue
-                if item.get("finalize_dead"):
-                    fail_count = int(item.get("fail_count") or 0)
-                    reason = self._FINALIZE_DEAD_REASON.format(fail_count)
-                    logger.error(
-                        "{}：{}".format(
-                            reason,
-                            str(item.get("file_name") or pending_key),
-                        )
-                    )
-                    self._mark_offline_history_status(pending_key, "失败", reason)
-                    self._notify_finalize_dead(item, pending_key)
-                    pending.pop(pending_key, None)
-                    failed += 1
+                item["upgrade_old_backed_up"] = True
+                item["upgrade_old_file_id"] = str(
+                    getattr(backup_file, "id", "")
+                    or item.get("upgrade_old_file_id") or ""
+                )
+                old_item_info = rename_items.get(pending_key)
+                if old_item_info:
+                    ctx.sync_rename(old_dir, old_item_info["item"], backup_file)
+
+        organize_enabled = getattr(self, "_organize_after_transfer", True)
+
+        # 2. 批量重命名
+        rename_groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for pending_key in ctx.due_keys:
+            item = ctx.pending.get(pending_key) or {}
+            task_type = str(item.get("task_type") or "share").strip().lower()
+            is_replacement = item.get("upgrade") and str(
+                item.get("upgrade_mode") or self._upgrade_mode
+            ) != "coexist"
+            if (
+                    task_type in {"magnet", "ed2k", "offline"}
+                    or item.get("moved_at")
+                    or (is_replacement and not item.get("upgrade_old_backed_up"))
+            ):
+                continue
+            task = ctx.task_map.get(
+                str(item.get("task_id") or pending_key).upper()
+            )
+            staging_dir = str(
+                item.get("staging_dir") or item.get("cloud_dir") or "/"
+            ).rstrip("/") or "/"
+            directory_valid, file_index = self._cloud_directory_snapshot(
+                staging_dir, ctx.directory_snapshots
+            )
+            if not directory_valid:
+                continue
+            file_name = str(item.get("file_name") or pending_key)
+            staging_name = str(
+                item.get("staging_name") or item.get("file_name") or ""
+            )
+            task_name = str((task or {}).get("name") or "").strip()
+
+            # 1. 暂存目录已存在目标文件名的，说明已重命名就绪，直接进入待移动队列
+            if file_name and file_name in file_index:
+                ctx.prepared_files[pending_key] = file_index[file_name]
+                continue
+
+            # 2. 定位待重命名源文件（支持哈希、暂存名、任务名、容错与季集定位）
+            target_hash = self._extract_item_hash(item)
+            source_file = self._locate_cloud_file(
+                staging_dir,
+                [staging_name, task_name],
+                target_hash,
+                ctx,
+                item=item,
+            )
+
+            if source_file:
+                if not organize_enabled or getattr(source_file, "name", "") == file_name:
+                    ctx.prepared_files[pending_key] = source_file
                     continue
-                task_type = str(item.get("task_type") or "share")
-                file_name = str(item.get("file_name") or pending_key)
-                created_at = float(item.get("created_at") or now)
-                target_file = None
-                update_progress(
-                    item, pending_key, "locate", "检查下载和文件就绪状态"
+                rename_groups.setdefault(staging_dir, {})[pending_key] = {
+                    "item": source_file,
+                    "target_name": file_name,
+                }
+
+        for staging_dir, rename_items in rename_groups.items():
+            first_key = next(iter(rename_items), "")
+            first_item = ctx.pending.get(first_key) or {}
+            if first_item:
+                self._update_postprocess_progress(
+                    first_item,
+                    first_key,
+                    "organize",
+                    f"批量重命名 {len(rename_items)} 个文件",
                 )
-                if task_type == "magnet":
-                    task = task_map.get(str(item.get("task_id") or "").upper())
-                    task_done = bool(task and task.get("completed"))
-                    if task and bool(task.get("failed")):
-                        reason = "Magnet 离线下载失败"
-                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                        self._cleanup_failed_offline_task(item, reason)
-                        self._mark_offline_history_status(pending_key, "失败", reason)
-                        pending.pop(pending_key, None)
-                        failed += 1
-                        continue
-                    if not task_done:
-                        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-                        if now - created_at >= self._OFFLINE_TIMEOUT:
-                            reason = f"Magnet 离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                            self._cleanup_failed_offline_task(item, reason)
-                            self._mark_offline_history_status(pending_key, "失败", reason)
-                            pending.pop(pending_key, None)
-                            failed += 1
-                        else:
-                            self._schedule_finalize_retry(item, now)
-                        continue
-                    update_progress(
-                        item, pending_key, "organize", "整理 Magnet 下载文件"
-                    )
-                    finalized = self._finalize_magnet_package(
-                        item, pending_key, subscribe_cache=subscribe_cache
-                    )
-                    if finalized is None:
-                        if self._finalize_failure(item, pending_key):
-                            continue
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                    pending.pop(pending_key, None)
-                    with self._offline_pending_lock:
-                        current_persisted = self._get_data(self._OFFLINE_PENDING_KEY) or {}
-                        if pending_key in current_persisted:
-                            current_persisted.pop(pending_key, None)
-                            self._save_offline_pending(current_persisted)
-                            self._notify_offline_pending_changed(len(current_persisted))
-                    task_id = self._postprocess_task_id(item)
-                    if task_id and self._postprocess_task_update:
-                        self._postprocess_task_update(
-                            task_id,
-                            _pending_key=pending_key,
-                            file_completed=True,
-                            postprocess_active=False,
-                            postprocess_detail="Magnet 任务完成",
-                        )
-                    if finalized:
-                        # Magnet 一个离线任务可能匹配多个真实文件；该任务的
-                        # 历史已在 _finalize_magnet_package 中持久化，立即入队。
-                        update_progress(
-                            item, pending_key, "commit", "登记文件和通知结果"
-                        )
-                        finalized_details.extend(finalized)
-                        notification_contexts.append((item, pending_key))
-                        completed += len(finalized)
-                    else:
-                        self._add_offline_blacklist(item.get("share_url") or item.get("task_id"),
-                                                    "Magnet 下载完成但未匹配到目标媒体文件")
-                        failed += 1
+            renamed = self._cloud_batch_mutations.rename_files(
+                staging_dir, rename_items
+            )
+            for pending_key, target_file in renamed.items():
+                item = ctx.pending.get(pending_key)
+                if not item:
                     continue
-                if task_type in {"ed2k", "offline"}:
-                    share_url = str(item.get("share_url") or "").strip()
-                    if share_url and not share_url.lower().startswith("ed2k://"):
-                        item["task_type"] = "share"
-                        task_type = "share"
-                    else:
-                        task = task_map.get(str(item.get("task_id") or pending_key).upper())
-                        task_done = bool(
-                            item.get("moved_at") or (task and task.get("completed"))
-                        )
-                        if task and bool(task.get("failed")):
-                            reason = "离线下载失败"
-                            logger.error(f"{reason}：{file_name}")
-                            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                            self._mark_offline_history_status(pending_key, "失败", reason)
-                            pending.pop(pending_key, None)
-                            failed += 1
-                            continue
-                        if not task_done:
-                            staging_dir_chk = str(item.get("staging_dir") or item.get("cloud_dir") or "/").rstrip("/") or "/"
-                            final_dir_chk = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
-                            s_valid, s_index = directory_snapshot(staging_dir_chk)
-                            f_valid, f_index = directory_snapshot(final_dir_chk) if final_dir_chk != staging_dir_chk else (False, {})
-                            source_sha1 = str(item.get("source_sha1") or "").upper()
-                            staging_name_chk = str(item.get("staging_name") or file_name)
-                            if (
-                                (s_valid and (s_index.get(staging_name_chk) or s_index.get(file_name) or (source_sha1 and any(str(getattr(f, "sha1", "")).upper() == source_sha1 for f in s_index.values()))))
-                                or (f_valid and (f_index.get(file_name) or (source_sha1 and any(str(getattr(f, "sha1", "")).upper() == source_sha1 for f in f_index.values()))))
-                            ):
-                                task_done = True
-                                logger.debug(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
-                        if not task_done and task is not None:
-                            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-                            if now - created_at >= self._OFFLINE_TIMEOUT:
-                                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                                logger.error(f"{reason}：{file_name}")
-                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                                self._mark_offline_history_status(pending_key, "失败", reason)
-                                pending.pop(pending_key, None)
-                                failed += 1
-                                continue
-                            self._schedule_finalize_retry(item, now)
-                            continue
-                        if not task_done and task is None and tasks_valid:
-                            staging_dir = str(
-                                item.get("staging_dir") or item.get("cloud_dir") or "/"
-                            )
-                            directory_valid, file_index = directory_snapshot(staging_dir)
-                            if directory_valid and not file_index:
-                                reason = "离线任务及目标文件均不存在"
-                                logger.debug(f"{reason}：{file_name}")
-                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                                self._mark_offline_history_status(pending_key, "失败", reason)
-                                pending.pop(pending_key, None)
-                                failed += 1
-                                continue
-                        if not task_done:
-                            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-                            if now - created_at >= self._OFFLINE_TIMEOUT:
-                                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                                logger.error(f"{reason}：{file_name}")
-                                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                                self._mark_offline_history_status(pending_key, "失败", reason)
-                                pending.pop(pending_key, None)
-                                failed += 1
-                                continue
-                            self._schedule_finalize_retry(item, now)
-                            continue
-                        item.setdefault("download_completed_at", now)
+                item["staging_name"] = item["file_name"]
+                ctx.prepared_files[pending_key] = target_file
+                orig_info = rename_items.get(pending_key)
+                if orig_info:
+                    ctx.sync_rename(staging_dir, orig_info["item"], target_file)
 
-                already_moved = bool(item.get("moved_at"))
-                staging_dir = str(
-                    item.get("cloud_dir") if already_moved
-                    else item.get("staging_dir") or item.get("cloud_dir") or "/"
-                ).rstrip("/") or "/"
-                staging_name = (
-                    file_name if already_moved
-                    else str(item.get("staging_name") or file_name)
-                )
-                if not already_moved and task_type in {"ed2k", "offline"} and getattr(self, "_organize_after_transfer",
-                                                                                      True):
-                    current_final = str(item.get("cloud_dir") or "").rstrip("/") or "/"
-                    if current_final == staging_dir:
-                        try:
-                            calc_media, _ = self._restore_pending_media_context(item, pending_key)
-                            sub_id = int(item.get("subscribe_id") or 0)
-                            calc_sub = subscribe_cache.get(sub_id) if sub_id in subscribe_cache else None
-                            if not calc_sub and sub_id:
-                                with SessionFactory() as db:
-                                    calc_sub = SubscribeOper(db=db).get(sub_id)
-                            if calc_media:
-                                season_val = max(1, int(item.get(
-                                    "season") or 1)) if calc_media.type == MediaType.TV else None
-                                ep_list = [int(v) for v in (item.get("target_episodes") or []) if int(v) > 0]
-                                ep_val = ep_list[0] if ep_list else (
-                                    int(item.get("episode")) if item.get("episode") else None)
-                                dyn_dir, dyn_name = self._platform_target(
-                                    self._CLOUD_MEDIA_ROOT, calc_sub, calc_media,
-                                    staging_name, season=season_val, episode=ep_val
-                                )
-                                if dyn_dir:
-                                    item["cloud_dir"] = dyn_dir
-                                    source_suffix = Path(staging_name).suffix
-                                    if source_suffix and not dyn_name.endswith(source_suffix):
-                                        dyn_name = f"{Path(dyn_name).stem}{source_suffix}"
-                                    item["file_name"] = dyn_name
-                                    file_name = dyn_name
-                        except Exception as dyn_err:
-                            logger.debug(f"动态计算离线文件目标媒体路径异常：{dyn_err}")
-
-                update_progress(
-                    item,
-                    pending_key,
-                    "locate",
-                    f"在 {staging_dir} 定位 {staging_name}",
-                )
-                target_file = moved_files.get(pending_key) or prepared_files.get(pending_key)
-                if target_file:
-                    file_index = {}
-                else:
-                    directory_valid, file_index = directory_snapshot(staging_dir)
-                    if not directory_valid:
-                        if self._finalize_failure(item, pending_key):
-                            continue
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                task_name = (
-                    str((task or {}).get("name") or "").strip()
-                    if task_type in {"ed2k", "offline"}
-                    else ""
-                )
-                ed2k_url_name = extract_ed2k_filename(str(item.get("share_url") or ""))
-                res_file_list = (item.get("resource") or {}).get("file_list")
-                res_file_name = str(res_file_list[0]).strip() if isinstance(res_file_list,
-                                                                            list) and res_file_list else ""
-                target_file = (
-                        target_file
-                        or file_index.get(staging_name)
-                        or file_index.get(task_name)
-                        or (file_index.get(ed2k_url_name) if ed2k_url_name else None)
-                        or (file_index.get(res_file_name) if res_file_name else None)
-                )
-                if not target_file:
-                    for fname, fobj in file_index.items():
-                        if (staging_name and staging_name.endswith(fname)) or (
-                                ed2k_url_name and fname == ed2k_url_name):
-                            target_file = fobj
-                            break
-                source_sha1 = str(item.get("source_sha1") or "").upper()
-                if not target_file and source_sha1:
-                    target_file = next(
-                        (
-                            candidate for candidate in file_index.values()
-                            if str(candidate.sha1 or "").upper() == source_sha1
-                        ),
-                        None,
-                    )
-                if not target_file and not already_moved:
-                    final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
-                    if final_dir != staging_dir:
-                        final_valid, final_index = directory_snapshot(final_dir)
-                        if final_valid:
-                            final_candidate = final_index.get(file_name)
-                            candidate_sha1 = str(
-                                getattr(final_candidate, "sha1", "") or ""
-                            ).upper()
-                            if (
-                                    final_candidate
-                                    and source_sha1
-                                    and candidate_sha1 != source_sha1
-                            ):
-                                final_candidate = None
-                            if not final_candidate and source_sha1:
-                                final_candidate = next(
-                                    (
-                                        candidate for candidate in final_index.values()
-                                        if str(candidate.sha1 or "").upper() == source_sha1
-                                    ),
-                                    None,
-                                )
-                            if final_candidate:
-                                target_file = final_candidate
-                                item["moved_at"] = now
-                                already_moved = True
-                                staging_dir = final_dir
-                                logger.info(
-                                    f"后处理在最终目录找到已移动文件，继续生成STRM："
-                                    f"{final_dir}/{file_name}"
-                                )
-                if not target_file:
-                    ready_at = float(item.get("download_completed_at") or created_at)
-                    if now - ready_at >= self._FILE_FINALIZE_TIMEOUT:
-                        reason = "网盘文件已保存但30分钟内仍无法在转存路径定位"
-                        self._mark_offline_history_status(pending_key, "失败", reason)
-                        pending.pop(pending_key, None)
-                        failed += 1
-                    else:
-                        self._schedule_finalize_retry(item, now)
-                    continue
-
-                if item.get("upgrade") and str(
-                        item.get("upgrade_mode") or self._upgrade_mode
-                ) != "coexist":
-                    update_progress(
-                        item, pending_key, "organize", "替换旧版本文件"
-                    )
-                    replaced_file = self._replace_upgrade_file(
-                        item=item,
-                        pending_key=pending_key,
-                        target_file=target_file,
-                        staging_dir=staging_dir,
-                        file_name=file_name,
-                        now=now,
-                        directory_snapshot=directory_snapshot,
-                    )
-                    if not replaced_file:
-                        continue
-                    target_file = replaced_file
-                    already_moved = True
-
-                if not already_moved and not getattr(self, "_organize_after_transfer", True):
-                    # "转存后整理"关闭：文件停在转存目录即视为完成。
+        # 3. 批量移动
+        move_groups: Dict[str, Dict[str, Any]] = {}
+        organize_enabled = getattr(self, "_organize_after_transfer", True)
+        for pending_key, target_file in ctx.prepared_files.items():
+            item = ctx.pending.get(pending_key) or {}
+            staging_dir = str(item.get("staging_dir") or "/").rstrip("/") or "/"
+            final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
+            if staging_dir == final_dir or not organize_enabled:
+                # 整理关闭时：将 cloud_dir 修正为转存路径，文件保留在原位
+                if not organize_enabled and staging_dir != final_dir:
                     item["cloud_dir"] = staging_dir
-                    item["moved_at"] = now
-                    already_moved = True
+                    item["file_name"] = getattr(target_file, "name", item.get("file_name") or "")
                     logger.debug(
-                        f"转存后整理已关闭，保留在转存目录：{staging_dir}/{Path(staging_name).name}"
+                        f"转存后整理已关闭，保留在转存目录（批量阶段）：{staging_dir}/{getattr(target_file, 'name', '')}"
                     )
+                item["moved_at"] = ctx.now
+                ctx.moved_files[pending_key] = target_file
+                continue
+            move_groups.setdefault(final_dir, {})[pending_key] = target_file
 
-                if not already_moved:
-                    update_progress(
-                        item, pending_key, "organize", "重命名并移动到媒体目录"
-                    )
-                    if target_file.name != file_name:
-                        source_suffix = Path(target_file.name).suffix
+        for final_dir, move_items in move_groups.items():
+            first_key = next(iter(move_items), "")
+            first_item = ctx.pending.get(first_key) or {}
+            if first_item:
+                self._update_postprocess_progress(
+                    first_item,
+                    first_key,
+                    "organize",
+                    f"批量移动 {len(move_items)} 个文件",
+                )
+            moved = self._cloud_batch_mutations.move_files(
+                move_items, final_dir
+            )
+            for pending_key, target_file in moved.items():
+                item = ctx.pending.get(pending_key)
+                if not item:
+                    continue
+                item["moved_at"] = ctx.now
+                ctx.moved_files[pending_key] = target_file
+                ctx.sync_move(item.get("staging_dir") or "/", final_dir, target_file)
+
+    def _should_skip_for_stop(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> bool:
+        """任务收到停止请求时，核验网盘中是否已有现成文件，保护已有物理文件不被遗弃。"""
+        if not self._stop_requested():
+            return False
+        if not self._has_existing_cloud_file(item, pending_key, ctx):
+            logger.info(f"任务停止：目标文件尚未就绪，安全跳过并终止：{item.get('file_name') or pending_key}")
+            self._abort_single_item(item, pending_key, "任务已被用户主动停止，终止后处理", ctx)
+            return True
+        return False
+
+    def _handle_finalize_dead_item(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> None:
+        """处理达到连续失败上限的死任务。"""
+        fail_count = int(item.get("fail_count") or 0)
+        reason = self._FINALIZE_DEAD_REASON.format(fail_count)
+        self._notify_finalize_dead(item, pending_key)
+        self._abort_single_item(item, pending_key, reason, ctx)
+
+    def _handle_magnet_due_item(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> None:
+        """处理单个 Magnet 离线任务的等待轮询或下载完成整理。"""
+        created_at = float(item.get("created_at") or ctx.now)
+        self._update_postprocess_progress(
+            item, pending_key, "locate", "检查下载和文件就绪状态"
+        )
+        task = ctx.task_map.get(str(item.get("task_id") or "").upper())
+        task_done = bool(task and task.get("completed"))
+        if task and bool(task.get("failed")):
+            reason = "Magnet 离线下载失败"
+            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+            self._cleanup_failed_offline_task(item, reason)
+            self._abort_single_item(item, pending_key, reason, ctx)
+            return
+        if not task_done:
+            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
+            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
+                reason = f"Magnet 离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                self._cleanup_failed_offline_task(item, reason)
+                self._abort_single_item(item, pending_key, reason, ctx)
+            else:
+                self._schedule_finalize_retry(item, ctx.now)
+                retry_at = float(item.get("next_check_at") or ctx.now)
+                retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
+                self._update_postprocess_progress(
+                    item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
+                )
+            return
+
+        self._update_postprocess_progress(
+            item, pending_key, "organize", "整理 Magnet 下载文件"
+        )
+        finalized = self._finalize_magnet_package(
+            item, pending_key, subscribe_cache=ctx.subscribe_cache
+        )
+        if finalized is None:
+            if not self._finalize_failure(item, pending_key):
+                self._schedule_finalize_retry(item, ctx.now)
+            return
+        ctx.pending.pop(pending_key, None)
+        ctx.committed_keys.add(pending_key)
+        task_id = self._postprocess_task_id(item)
+        if task_id and self._postprocess_task_update:
+            self._postprocess_task_update(
+                task_id,
+                _pending_key=pending_key,
+                file_completed=True,
+                postprocess_active=False,
+                postprocess_detail="Magnet 任务完成",
+            )
+        if finalized:
+            self._update_postprocess_progress(
+                item, pending_key, "commit", "登记文件和通知结果"
+            )
+            ctx.finalized_details.extend(finalized)
+            ctx.notification_contexts.append((item, pending_key))
+            ctx.completed += len(finalized)
+        else:
+            self._add_offline_blacklist(
+                item.get("share_url") or item.get("task_id"),
+                "Magnet 下载完成但未匹配到目标媒体文件",
+            )
+            ctx.failed += 1
+
+    def _poll_offline_download_due_item(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> bool:
+        """检查 ED2K/Offline 离线下载状态。若未完成或失败返回 True，表示中断后续单文件整理。"""
+        file_name = str(item.get("file_name") or pending_key)
+        created_at = float(item.get("created_at") or ctx.now)
+        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+        task_done = bool(item.get("moved_at") or (task and task.get("completed")))
+
+        if task and bool(task.get("failed")):
+            reason = "离线下载失败"
+            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+            self._abort_single_item(item, pending_key, reason, ctx)
+            return True
+
+        if not task_done:
+            if self._has_existing_cloud_file(item, pending_key, ctx):
+                task_done = True
+                logger.debug(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
+
+        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
+        if not task_done and task is not None:
+            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
+                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                self._abort_single_item(item, pending_key, reason, ctx)
+                return True
+            self._schedule_finalize_retry(item, ctx.now)
+            retry_at = float(item.get("next_check_at") or ctx.now)
+            retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
+            self._update_postprocess_progress(
+                item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
+            )
+            return True
+
+        if not task_done and task is None and ctx.tasks_valid:
+            staging_dir = str(
+                item.get("staging_dir") or item.get("cloud_dir") or "/"
+            )
+            directory_valid, file_index = self._cloud_directory_snapshot(
+                staging_dir, ctx.directory_snapshots
+            )
+            if directory_valid and not file_index:
+                reason = "离线任务及目标文件均不存在"
+                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                self._abort_single_item(item, pending_key, reason, ctx)
+                return True
+
+        if not task_done:
+            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
+                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+                self._abort_single_item(item, pending_key, reason, ctx)
+                return True
+            self._schedule_finalize_retry(item, ctx.now)
+            retry_at = float(item.get("next_check_at") or ctx.now)
+            retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
+            self._update_postprocess_progress(
+                item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
+            )
+            return True
+
+        item.setdefault("download_completed_at", ctx.now)
+        return False
+
+    def _organize_and_finalize_single_item(
+            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
+    ) -> None:
+        """执行单文件的物理定位、自愈匹配、重命名/移动、洗版替换、字幕与 STRM 生成。"""
+        task_type = str(item.get("task_type") or "share").strip().lower()
+        file_name = str(item.get("file_name") or pending_key)
+        created_at = float(item.get("created_at") or ctx.now)
+
+        already_moved = bool(item.get("moved_at"))
+        staging_dir = str(
+            item.get("cloud_dir") if already_moved
+            else item.get("staging_dir") or item.get("cloud_dir") or "/"
+        ).rstrip("/") or "/"
+        staging_name = (
+            file_name if already_moved
+            else str(item.get("staging_name") or file_name)
+        )
+
+        if not already_moved and task_type in {"ed2k", "offline"} and getattr(self, "_organize_after_transfer", True):
+            current_final = str(item.get("cloud_dir") or "").rstrip("/") or "/"
+            if current_final == staging_dir:
+                try:
+                    calc_media, _ = self._restore_pending_media_context(item, pending_key)
+                    sub_id = int(item.get("subscribe_id") or 0)
+                    calc_sub = ctx.subscribe_cache.get(sub_id)
+                    if calc_media:
+                        season_val = max(1, int(item.get("season") or 1)) if calc_media.type == MediaType.TV else None
+                        ep_list = [int(v) for v in (item.get("target_episodes") or []) if int(v) > 0]
+                        ep_val = ep_list[0] if ep_list else (
+                            int(item.get("episode")) if item.get("episode") else None
+                        )
+                        dyn_dir, dyn_name = self._platform_target(
+                            self._CLOUD_MEDIA_ROOT, calc_sub, calc_media,
+                            staging_name, season=season_val, episode=ep_val
+                        )
+                        if dyn_dir:
+                            item["cloud_dir"] = dyn_dir
+                            source_suffix = Path(staging_name).suffix
+                            if source_suffix and not dyn_name.endswith(source_suffix):
+                                dyn_name = f"{Path(dyn_name).stem}{source_suffix}"
+                            item["file_name"] = dyn_name
+                            file_name = dyn_name
+                except Exception as dyn_err:
+                    logger.debug(f"动态计算离线文件目标媒体路径异常：{dyn_err}")
+
+        target_file = ctx.moved_files.get(pending_key) or ctx.prepared_files.get(pending_key)
+        target_hash = self._extract_item_hash(item)
+
+        # 仅在尚未就绪物理文件时才执行网盘检索与状态广播，避免重复检查与多余推送
+        if not target_file:
+            self._update_postprocess_progress(
+                item, pending_key, "locate", f"在 {staging_dir} 定位 {staging_name}"
+            )
+            task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+            task_name = str((task or {}).get("name") or "").strip() if task_type in {"ed2k", "offline"} else ""
+            ed2k_url_name = extract_ed2k_filename(str(item.get("share_url") or ""))
+            res_file_list = (item.get("resource") or {}).get("file_list")
+            res_file_name = str(res_file_list[0]).strip() if isinstance(res_file_list, list) and res_file_list else ""
+            candidate_names = [file_name, staging_name, task_name, ed2k_url_name, res_file_name]
+            target_file = self._locate_cloud_file(staging_dir, candidate_names, target_hash, ctx, item=item)
+            if target_file:
+                ctx.prepared_files[pending_key] = target_file
+
+        if not target_file and not already_moved:
+            final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
+            if final_dir != staging_dir:
+                final_candidates = [file_name, staging_name, task_name, ed2k_url_name, res_file_name]
+                final_target = self._locate_cloud_file(final_dir, final_candidates, target_hash, ctx, item=item)
+                if final_target:
+                    target_file = final_target
+                    item["moved_at"] = ctx.now
+                    already_moved = True
+                    staging_dir = final_dir
+                    ctx.moved_files[pending_key] = final_target
+                    if getattr(final_target, "name", "") != file_name:
+                        source_suffix = Path(final_target.name).suffix
                         if source_suffix and not file_name.endswith(source_suffix):
                             file_name = f"{Path(file_name).stem}{source_suffix}"
                             item["file_name"] = file_name
-                        staging_valid, staging_index = directory_snapshot(staging_dir)
-                        if staging_valid and file_name in staging_index and str(staging_index[file_name].id) == str(
-                                target_file.id):
-                            target_file = staging_index[file_name]
-                        elif not self._cloud_mutations.rename_file(
-                                staging_dir, target_file, file_name
-                        ):
-                            self._schedule_finalize_retry(item, now)
-                            continue
-                        item["staging_name"] = file_name
-                        target_file = self._cloud_query.get_cached_file(
-                            staging_dir, file_name
-                        )
-                        if not target_file:
-                            self._schedule_finalize_retry(item, now)
-                            continue
-                    final_dir = str(item["cloud_dir"]).rstrip("/") or "/"
-                    if staging_dir != final_dir:
-                        # 移动前先核对目标媒体库目录，若已存在同名且尺寸/特征一致的文件，直接自愈复用，避免 move 报错无限重试卡死
-                        final_valid, final_index = directory_snapshot(final_dir)
-                        existing_in_final = final_index.get(file_name) if final_valid else None
-                        source_size = int(item.get("file_size") or getattr(target_file, "size", 0) or 0)
-                        existing_size = int(getattr(existing_in_final, "size", 0) or 0)
-                        source_sha1 = str(item.get("source_sha1") or getattr(target_file, "sha1", "") or "").upper()
-                        existing_sha1 = str(getattr(existing_in_final, "sha1", "") or "").upper()
-                        matched_existing = bool(
-                            existing_in_final and (
-                                    (source_sha1 and existing_sha1 and source_sha1 == existing_sha1)
-                                    or (source_size > 0 and existing_size > 0 and abs(
-                                source_size - existing_size) <= 1024)
-                                    or (existing_size > 0 and not source_size)
-                                    or str(existing_in_final.id) == str(target_file.id)
+                        if self._cloud_mutations.rename_file(final_dir, final_target, file_name):
+                            renamed_target = self._cloud_query.get_cached_file(final_dir, file_name)
+                            if renamed_target:
+                                ctx.sync_rename(final_dir, target_file, renamed_target)
+                                target_file = renamed_target
+                                ctx.moved_files[pending_key] = renamed_target
+                    logger.info(
+                        f"后处理在最终目录找到文件并就绪，继续生成STRM："
+                        f"{final_dir}/{getattr(target_file, 'name', file_name)}"
+                    )
+
+        if not target_file:
+            fail_count = int(item.get("fail_count") or 0) + 1
+            item["fail_count"] = fail_count
+            is_offline_downloading = (
+                    task_type in {"ed2k", "magnet", "offline"}
+                    and not bool(item.get("download_completed_at"))
+            )
+            # 若是普通转存/整理或已完成下载的离线任务，最多允许重试 1 次（给网盘极短暂的元数据刷新时间）；
+            # 只有正在下载中的离线任务才允许重试更多次
+            max_failures = self._FINALIZE_MAX_FAILURES if is_offline_downloading else 2
+            ready_at = float(item.get("download_completed_at") or created_at)
+            timeout_seconds = self._OFFLINE_TIMEOUT if is_offline_downloading else 120.0
+
+            if fail_count >= max_failures or (ctx.now - ready_at >= timeout_seconds):
+                reason = (
+                    f"网盘文件定位失败（在转存路径 {staging_dir} 及目标路径均未找到匹配文件，已尝试 {fail_count} 次）"
+                )
+                self._abort_single_item(item, pending_key, reason, ctx)
+            else:
+                self._schedule_finalize_retry(item, ctx.now)
+            return
+
+        if item.get("upgrade") and str(
+                item.get("upgrade_mode") or self._upgrade_mode
+        ) != "coexist":
+            self._update_postprocess_progress(
+                item, pending_key, "organize", "替换旧版本文件"
+            )
+            replaced_file = self._replace_upgrade_file(
+                item=item,
+                pending_key=pending_key,
+                target_file=target_file,
+                staging_dir=staging_dir,
+                file_name=file_name,
+                now=ctx.now,
+                directory_snapshot=lambda d: self._cloud_directory_snapshot(d, ctx.directory_snapshots),
+            )
+            if not replaced_file:
+                return
+            target_file = replaced_file
+            already_moved = True
+
+        if not already_moved and not getattr(self, "_organize_after_transfer", True):
+            item["cloud_dir"] = staging_dir
+            item["file_name"] = getattr(target_file, "name", staging_name)
+            item["moved_at"] = ctx.now
+            already_moved = True
+            logger.debug(
+                f"转存后整理已关闭，保留在转存目录：{staging_dir}/{item['file_name']}"
+            )
+
+        if not already_moved:
+            self._update_postprocess_progress(
+                item, pending_key, "organize", "重命名并移动到媒体目录"
+            )
+            if target_file.name != file_name:
+                source_suffix = Path(target_file.name).suffix
+                if source_suffix and not file_name.endswith(source_suffix):
+                    file_name = f"{Path(file_name).stem}{source_suffix}"
+                    item["file_name"] = file_name
+                staging_valid, staging_index = self._cloud_directory_snapshot(
+                    staging_dir, ctx.directory_snapshots
+                )
+                if staging_valid and file_name in staging_index and str(staging_index[file_name].id) == str(
+                        target_file.id):
+                    target_file = staging_index[file_name]
+                else:
+                    orig_target = target_file
+                    if not self._cloud_mutations.rename_file(
+                            staging_dir, target_file, file_name
+                    ):
+                        if self._finalize_failure(item, pending_key):
+                            self._abort_single_item(
+                                item, pending_key, f"网盘文件重命名失败，已重试 {item.get('fail_count', 0)} 次", ctx
                             )
-                        )
-                        if matched_existing:
-                            logger.debug(
-                                f"媒体目录已存在目标文件，自愈复用并跳过移动：{final_dir}/{file_name}"
-                            )
-                            if str(existing_in_final.id) != str(target_file.id):
-                                try:
-                                    self._cloud_mutations.delete_file(target_file.id)
-                                except Exception as clean_err:
-                                    logger.debug(f"清理暂存区多余副本失败：{clean_err}")
-                            moved_file = existing_in_final
                         else:
-                            moved_file = self._cloud_mutations.move_file(
-                                target_file, item["cloud_dir"], file_name
+                            self._schedule_finalize_retry(item, ctx.now)
+                        return
+                    item["staging_name"] = file_name
+                    target_file = self._cloud_query.get_cached_file(
+                        staging_dir, file_name
+                    )
+                    if not target_file:
+                        if self._finalize_failure(item, pending_key):
+                            self._abort_single_item(
+                                item, pending_key, f"重命名后定位失败，已重试 {item.get('fail_count', 0)} 次", ctx
                             )
+                        else:
+                            self._schedule_finalize_retry(item, ctx.now)
+                        return
+                    ctx.sync_rename(staging_dir, orig_target, target_file)
+
+            final_dir = str(item["cloud_dir"]).rstrip("/") or "/"
+            if staging_dir != final_dir:
+                final_valid, final_index = self._cloud_directory_snapshot(
+                    final_dir, ctx.directory_snapshots
+                )
+                existing_in_final = final_index.get(file_name) if final_valid else None
+                source_size = int(item.get("file_size") or getattr(target_file, "size", 0) or 0)
+                existing_size = int(getattr(existing_in_final, "size", 0) or 0)
+                matched_hash = False
+                for algo in self._supported_hash_algorithms():
+                    source_val = str(getattr(target_file, algo, "") or item.get(f"source_{algo}") or item.get(
+                        algo) or "").strip().upper()
+                    existing_val = str(getattr(existing_in_final, algo, "") or "").strip().upper()
+                    if source_val and existing_val and source_val == existing_val:
+                        matched_hash = True
+                        break
+                matched_existing = bool(
+                    existing_in_final and (
+                            matched_hash
+                            or (source_size > 0 and existing_size > 0 and abs(source_size - existing_size) <= 1024)
+                            or (existing_size > 0 and not source_size)
+                            or str(existing_in_final.id) == str(target_file.id)
+                    )
+                )
+                if matched_existing:
+                    logger.debug(
+                        f"媒体目录已存在目标文件，自愈复用并跳过移动：{final_dir}/{file_name}"
+                    )
+                    if str(existing_in_final.id) != str(target_file.id):
+                        try:
+                            self._cloud_mutations.delete_file(target_file.id)
+                        except Exception as clean_err:
+                            logger.debug(f"清理暂存区多余副本失败：{clean_err}")
+                    moved_file = existing_in_final
+                else:
+                    moved_file = self._cloud_mutations.move_file(
+                        target_file, item["cloud_dir"], file_name
+                    )
+            else:
+                moved_file = target_file
+            if not moved_file:
+                final_valid, final_index = self._cloud_directory_snapshot(
+                    final_dir, ctx.directory_snapshots
+                )
+                if final_valid and file_name in final_index:
+                    moved_file = final_index[file_name]
+                    logger.debug(
+                        f"移动操作返回失败但在目标目录找到文件，自愈恢复：{final_dir}/{file_name}"
+                    )
+                else:
+                    if self._finalize_failure(item, pending_key):
+                        self._abort_single_item(
+                            item, pending_key, f"移动到媒体目录失败，已重试 {item.get('fail_count', 0)} 次", ctx
+                        )
                     else:
-                        moved_file = target_file
-                    if not moved_file:
-                        # 移动失败后兜底检查：复核目标目录是否已存在目标文件（可能已被前序请求或异步动作完成）
-                        final_valid, final_index = directory_snapshot(final_dir)
-                        if final_valid and file_name in final_index:
-                            moved_file = final_index[file_name]
-                            logger.debug(
-                                f"移动操作返回失败但在目标目录找到文件，自愈恢复：{final_dir}/{file_name}"
-                            )
-                        else:
-                            self._schedule_finalize_retry(item, now)
-                            continue
-                    target_file = moved_file
-                    item["moved_at"] = now
+                        self._schedule_finalize_retry(item, ctx.now)
+                    return
+            ctx.sync_move(staging_dir, final_dir, moved_file)
+            target_file = moved_file
+            item["moved_at"] = ctx.now
 
-                context_key = self._media_context_key(item)
-                cached_context = (
-                    media_context_cache.get(context_key) if context_key else None
+        context_key = self._media_context_key(item)
+        cached_context = (
+            ctx.media_context_cache.get(context_key) if context_key else None
+        )
+        if cached_context:
+            media, media_data = cached_context
+            item["mediainfo"] = media_data
+        else:
+            media, media_data = self._restore_pending_media_context(
+                item, pending_key
+            )
+            resolved_key = context_key or self._media_context_key(item)
+            if resolved_key and media:
+                ctx.media_context_cache[resolved_key] = (media, media_data)
+
+        if not getattr(self, "_organize_after_transfer", True):
+            # 整理已关闭：跳过元数据刮削、跳过 STRM 生成与字幕整理，直接就绪终态
+            self._finalize_ready_item(
+                item, pending_key, None, media, media_data, ctx
+            )
+            return
+
+        if (
+                not self._strm_generate_enabled
+                or not self._strm_generator
+                or not self._local_resource_path
+        ):
+            if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
+                self._update_postprocess_progress(
+                    item, pending_key, "subtitle", "检查并整理伴随字幕"
                 )
-                if cached_context:
-                    media, media_data = cached_context
-                    item["mediainfo"] = media_data
-                else:
-                    media, media_data = self._restore_pending_media_context(
-                        item, pending_key
-                    )
-                    resolved_key = context_key or self._media_context_key(item)
-                    if resolved_key and media:
-                        media_context_cache[resolved_key] = (media, media_data)
-                if (
-                        not self._strm_generate_enabled
-                        or not self._strm_generator
-                        or not self._local_resource_path
-                        or not getattr(self, "_organize_after_transfer", True)
+                if not self._finalize_subtitle_files(
+                        item, lambda d: self._cloud_directory_snapshot(d, ctx.directory_snapshots)
                 ):
-                    if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
-                        update_progress(
-                            item, pending_key, "subtitle", "检查并整理伴随字幕"
-                        )
-                        if not self._finalize_subtitle_files(
-                                item, directory_snapshot
-                        ):
-                            logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
-                    finalize_after_metadata(
-                        item, pending_key, file_name, None, media, media_data
-                    )
+                    logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
+            self._finalize_after_metadata(
+                item, pending_key, file_name, None, media, media_data, ctx
+            )
+            return
+
+        self._update_postprocess_progress(
+            item, pending_key, "strm", "生成并校验 STRM 文件"
+        )
+        strm_path = self._generate_strm(
+            item["cloud_dir"], file_name, target_file=target_file
+        )
+        if strm_path and not self._strm_file_ready(strm_path):
+            logger.error(f"STRM 生成后文件不存在或为空：{strm_path}")
+            strm_path = None
+        if strm_path:
+            if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
+                self._update_postprocess_progress(
+                    item, pending_key, "subtitle", "检查并整理伴随字幕"
+                )
+                if not self._finalize_subtitle_files(
+                        item, lambda d: self._cloud_directory_snapshot(d, ctx.directory_snapshots), strm_path=strm_path
+                ):
+                    logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
+            if not self._strm_file_ready(strm_path):
+                logger.error(f"洗版后 STRM 文件不存在或为空：{strm_path}")
+                self._schedule_finalize_retry(item, ctx.now)
+                return
+            self._finalize_after_metadata(
+                item, pending_key, file_name, strm_path, media, media_data, ctx
+            )
+            return
+
+        ready_at = float(item.get("download_completed_at") or created_at)
+        if ctx.now - ready_at >= self._FILE_FINALIZE_TIMEOUT:
+            reason = "文件已下载但30分钟内仍无法生成 STRM"
+            self._mark_offline_history_status(pending_key, "失败", reason)
+            ctx.pending.pop(pending_key, None)
+            ctx.committed_keys.add(pending_key)
+            ctx.failed += 1
+        else:
+            self._schedule_finalize_retry(item, ctx.now)
+
+    def _process_due_items(self, ctx: PostprocessBatchContext) -> None:
+        """按序调度处理所有到期的后处理任务。"""
+        for pending_key in ctx.due_keys:
+            item = ctx.pending.get(pending_key)
+            if not item:
+                continue
+            if self._should_skip_for_stop(item, pending_key, ctx):
+                continue
+            if item.get("finalize_dead"):
+                self._handle_finalize_dead_item(item, pending_key, ctx)
+                continue
+
+            task_type = str(item.get("task_type") or "share").strip().lower()
+            if task_type == "magnet":
+                self._handle_magnet_due_item(item, pending_key, ctx)
+                continue
+
+            if task_type in {"ed2k", "offline"}:
+                should_halt = self._poll_offline_download_due_item(item, pending_key, ctx)
+                if should_halt:
                     continue
 
-                update_progress(
-                    item, pending_key, "strm", "生成并校验 STRM 文件"
-                )
-                strm_path = self._generate_strm(
-                    item["cloud_dir"], file_name, target_file=target_file
-                )
-                if strm_path and not self._strm_file_ready(strm_path):
-                    logger.error(f"STRM 生成后文件不存在或为空：{strm_path}")
-                    strm_path = None
-                if strm_path:
-                    if item.get("subtitles") and getattr(self, "_organize_subtitles", True):
-                        update_progress(
-                            item, pending_key, "subtitle", "检查并整理伴随字幕"
-                        )
-                        if not self._finalize_subtitle_files(
-                                item, directory_snapshot, strm_path=strm_path
-                        ):
-                            logger.debug(f"伴随字幕整理未完成，跳过字幕继续处理视频主文件：{file_name}")
-                    if not self._strm_file_ready(strm_path):
-                        logger.error(f"洗版后 STRM 文件不存在或为空：{strm_path}")
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                    finalize_after_metadata(
-                        item,
-                        pending_key,
-                        file_name,
-                        strm_path,
-                        media,
-                        media_data,
-                    )
+            self._organize_and_finalize_single_item(item, pending_key, ctx)
+
+    def _flush_batch_postprocess(self, ctx: PostprocessBatchContext) -> None:
+        """批次后处理收尾：批量回收洗版旧文件、批量提交订阅集数、发送批次聚合通知。"""
+        if ctx.upgrade_delete_batch:
+            delete_ids = list(dict.fromkeys(
+                value["file_id"] for value in ctx.upgrade_delete_batch.values()
+            ))
+            deleted_ids = {
+                str(file_id) for file_id in
+                self._cloud_batch_mutations.delete_files(delete_ids)
+            }
+            for pending_key, value in ctx.upgrade_delete_batch.items():
+                item = value["item"]
+                if str(value["file_id"]) not in deleted_ids:
+                    self._schedule_finalize_retry(item, ctx.now)
                     continue
-
-                ready_at = float(item.get("download_completed_at") or created_at)
-                if now - ready_at >= self._FILE_FINALIZE_TIMEOUT:
-                    reason = "文件已下载但30分钟内仍无法生成 STRM"
-                    self._mark_offline_history_status(pending_key, "失败", reason)
-                    pending.pop(pending_key, None)
-                    failed += 1
-                else:
-                    self._schedule_finalize_retry(item, now)
-
-            if upgrade_delete_batch:
-                delete_ids = list(dict.fromkeys(
-                    value["file_id"] for value in upgrade_delete_batch.values()
-                ))
-                deleted_ids = {
-                    str(file_id) for file_id in
-                    self._cloud_batch_mutations.delete_files(delete_ids)
-                }
-                for pending_key, value in upgrade_delete_batch.items():
-                    item = value["item"]
-                    if str(value["file_id"]) not in deleted_ids:
-                        self._schedule_finalize_retry(item, now)
-                        continue
-                    item["upgrade_old_deleted"] = True
-                    finish_finalized_item(
-                        item,
-                        pending_key,
-                        value["strm_path"],
-                        value["media"],
-                        value["media_data"],
-                    )
-                success_count = len(deleted_ids & set(map(str, delete_ids)))
-                total_count = len(delete_ids)
-                logger.info(
-                    f"洗版旧文件批量回收完成：成功 {success_count}/{total_count} 个"
+                item["upgrade_old_deleted"] = True
+                self._commit_single_item(
+                    item,
+                    pending_key,
+                    value["strm_path"],
+                    value["media"],
+                    value["media_data"],
+                    ctx,
                 )
-                if success_count < total_count:
-                    logger.warning(
-                        f"洗版旧文件有 {total_count - success_count} 个回收失败，"
-                        "已保留后处理任务等待重试"
-                    )
-
-            for batch in subscription_batches.values():
-                completion_item = batch["item"]
-                completion_item["success_episodes"] = sorted(batch["episodes"])
-                completion_item["notification_episodes"] = sorted(
-                    batch["episodes"]
-                )
-                self._finish_pending_subscription(
-                    completion_item,
-                    batch["media_data"],
-                    mediainfo=batch["mediainfo"],
+            success_count = len(deleted_ids & set(map(str, delete_ids)))
+            total_count = len(delete_ids)
+            logger.info(
+                f"洗版旧文件批量回收完成：成功 {success_count}/{total_count} 个"
+            )
+            if success_count < total_count:
+                logger.warning(
+                    f"洗版旧文件有 {total_count - success_count} 个回收失败，"
+                    "已保留后处理任务等待重试"
                 )
 
-            if finalized_details:
-                if self._notify and notification_contexts:
-                    progress_item, progress_key = notification_contexts[-1]
-                    update_progress(
-                        progress_item,
-                        progress_key,
-                        "notify",
-                        f"汇总发送 {len(finalized_details)} 个文件的完成通知",
-                    )
-                self._send_finalized_batch(finalized_details)
+        for batch in ctx.subscription_batches.values():
+            completion_item = batch["item"]
+            completion_item["success_episodes"] = sorted(batch["episodes"])
+            completion_item["notification_episodes"] = sorted(
+                batch["episodes"]
+            )
+            self._finish_pending_subscription(
+                completion_item,
+                batch["media_data"],
+                mediainfo=batch["mediainfo"],
+            )
 
+        if ctx.finalized_details:
+            if self._notify and ctx.notification_contexts:
+                progress_item, progress_key = ctx.notification_contexts[-1]
+                self._update_postprocess_progress(
+                    progress_item,
+                    progress_key,
+                    "notify",
+                    f"汇总发送 {len(ctx.finalized_details)} 个文件的完成通知",
+                )
+            self._send_finalized_batch(ctx.finalized_details)
+
+    def _reconcile_pending_state(self, ctx: PostprocessBatchContext) -> Dict[str, int]:
+        """将批次处理结果协调写回持久化存储，并更新前端任务进度状态。"""
         with self._offline_pending_lock:
             current_pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
-            for pending_key in due_keys:
-                original_item = pending_snapshot.get(pending_key)
-                processed_item = pending.get(pending_key)
+            for pending_key in ctx.due_keys:
+                original_item = ctx.pending_snapshot.get(pending_key)
+                processed_item = ctx.pending.get(pending_key)
                 current_item = current_pending.get(pending_key)
                 if current_item is None or original_item is None:
                     continue
-                if current_item.get("_monitor_token") != monitor_token:
+                if current_item.get("_monitor_token") != ctx.monitor_token:
                     continue
                 generation = (
                     original_item.get("created_at"),
@@ -1449,27 +1740,69 @@ class PostprocessService(OwnerDelegator):
                         current_item.pop(field, None)
             self._save_offline_pending(current_pending)
             pending_count = len(current_pending)
+
         result = {
-            "checked": len(due_keys),
-            "completed": completed,
-            "failed": failed,
+            "checked": len(ctx.due_keys),
+            "completed": ctx.completed,
+            "failed": ctx.failed,
             "pending": pending_count,
         }
         task_items = {
             pending_key: item
-            for pending_key in due_keys
-            if (item := pending_snapshot.get(pending_key))
+            for pending_key in ctx.due_keys
+            if (item := ctx.pending_snapshot.get(pending_key))
                and self._postprocess_task_id(item)
         }
         if self._postprocess_task_update:
             for pending_key, item in task_items.items():
-                self._postprocess_task_update(
-                    self._postprocess_task_id(item),
-                    _pending_key=pending_key,
-                    postprocess_active=False,
-                    postprocess_detail="",
-                )
+                if pending_key in current_pending:
+                    waiting_item = current_pending.get(pending_key) or item
+                    is_offline = str(waiting_item.get("task_type") or "share") in {"magnet", "ed2k", "offline"}
+                    retry_at = float(waiting_item.get("next_check_at") or ctx.now)
+                    mins = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
+                    wait_detail = f"等待离线下载完成（将在 {mins} 分钟后复查）" if is_offline else f"等待文件就绪（将在 {mins} 分钟后复查）"
+                    self._postprocess_task_update(
+                        self._postprocess_task_id(waiting_item),
+                        _pending_key=pending_key,
+                        postprocess_active=True,
+                        postprocess_step="locate",
+                        postprocess_detail=wait_detail,
+                    )
+                else:
+                    self._postprocess_task_update(
+                        self._postprocess_task_id(item),
+                        _pending_key=pending_key,
+                        postprocess_active=False,
+                        postprocess_detail="",
+                    )
         self._notify_offline_pending_changed(result["pending"])
+        return result
+
+    def monitor_offline_strm_tasks(
+            self,
+            force: bool = False,
+            pending_keys: Optional[Set[str]] = None,
+            offline_tasks: Optional[List[Dict[str, Any]]] = None,
+            offline_tasks_valid: Optional[bool] = None,
+    ) -> Dict[str, int]:
+        """检查离线下载和网盘文件后处理；手动刷新可立即重试指定任务。"""
+        ctx = self._prepare_postprocess_context(
+            force=force,
+            pending_keys=pending_keys,
+            offline_tasks=offline_tasks,
+            offline_tasks_valid=offline_tasks_valid,
+        )
+        if not ctx:
+            return {"checked": 0, "completed": 0, "failed": 0, "pending": 0}
+        if not ctx.due_keys:
+            return {"checked": 0, "completed": 0, "failed": 0, "pending": len(ctx.pending)}
+
+        try:
+            self._execute_batch_cloud_mutations(ctx)
+            self._process_due_items(ctx)
+            self._flush_batch_postprocess(ctx)
+        finally:
+            result = self._reconcile_pending_state(ctx)
         return result
 
     def _finalize_magnet_package(
@@ -1484,16 +1817,13 @@ class PostprocessService(OwnerDelegator):
             self._cleanup_failed_offline_task(item, "媒体元数据不存在")
             return []
         subscribe_id = int(item.get("subscribe_id") or 0)
-        subscribe = (
-            subscribe_cache.get(subscribe_id)
-            if subscribe_cache is not None and subscribe_id in subscribe_cache
-            else None
-        )
-        if subscribe_id and (
-                subscribe_cache is None or subscribe_id not in subscribe_cache
-        ):
+        if subscribe_cache is not None:
+            subscribe = subscribe_cache.get(subscribe_id)
+        elif subscribe_id:
             with SessionFactory() as db:
                 subscribe = SubscribeOper(db=db).get(subscribe_id)
+        else:
+            subscribe = None
         if not subscribe and item.get("transient_target"):
             subscribe = SimpleNamespace(**(item.get("target_subscribe") or {}))
         if not subscribe:
@@ -1653,53 +1983,21 @@ class PostprocessService(OwnerDelegator):
                 )
             if not moved:
                 continue
-            self._scrape_metadata(
-                cloud_dir,
-                target_name,
-                mediainfo,
-                season=season,
-                episode=episode,
-            )
-            strm_path = None
-            if self._strm_generate_enabled and self._strm_generator and self._local_resource_path:
-                strm_path = self._generate_strm(
-                    cloud_dir, target_name, target_file=moved, lookup_target=False
-                )
-                if strm_path:
-                    if is_upgrade and mode != "coexist":
-                        if not self._delete_upgrade_old_file(
-                                replace_item, directory_snapshot
-                        ):
-                            logger.debug(
-                                f"Magnet 洗版旧文件删除失败：{target_name}"
-                            )
-                            continue
-                        self._delete_upgrade_old_strm(
-                            replace_item, replacement_path=strm_path
-                        )
-                    self._media_server_notifier.notify(
-                        path=strm_path, mediainfo=mediainfo, file_name=target_name
-                    )
-            elif self._local_resource_path:
-                if is_upgrade and mode != "coexist":
-                    if not self._delete_upgrade_old_file(
-                            replace_item, directory_snapshot
-                    ):
-                        logger.debug(
-                            f"Magnet 洗版旧文件删除失败：{target_name}"
-                        )
-                        continue
-                    self._delete_upgrade_old_strm(replace_item)
-                notify_path = self._resolve_resource_season_dir(
-                    self._local_resource_path,
-                    subscribe,
-                    mediainfo,
-                    max(1, int(season or 1)),
-                )
-                if notify_path:
-                    self._media_server_notifier.notify(
-                        path=notify_path, mediainfo=mediainfo, file_name=target_name
-                    )
+            if not self._finalize_magnet_single_output(
+                    cloud_dir=cloud_dir,
+                    target_name=target_name,
+                    target_file=moved,
+                    mediainfo=mediainfo,
+                    subscribe=subscribe,
+                    season=season,
+                    episode=episode,
+                    is_upgrade=is_upgrade,
+                    mode=mode,
+                    replace_item=replace_item if (is_upgrade and mode != "coexist") else None,
+                    directory_snapshot=directory_snapshot,
+            ):
+                continue
+
             if episode:
                 success_episodes.append(int(episode))
             else:
@@ -1735,6 +2033,87 @@ class PostprocessService(OwnerDelegator):
                 detail.update({"season": int(season or 1), "episodes": [int(episode)]})
             details.append(detail)
 
+        details = self._persist_magnet_finalized_outputs(
+            item=item,
+            pending_key=pending_key,
+            mediainfo=mediainfo,
+            media_data=media_data,
+            history_records=history_records,
+            details=details,
+            success_episodes=success_episodes,
+        )
+        if details:
+            logger.info(
+                f"Magnet 下载后文件匹配完成：移动 {len(history_records)} 个文件，"
+                f"未匹配内容保留在隔离目录"
+            )
+        return details
+
+    def _finalize_magnet_single_output(
+            self,
+            cloud_dir: str,
+            target_name: str,
+            target_file: Any,
+            mediainfo: Any,
+            subscribe: Any,
+            season: Optional[int],
+            episode: Optional[int],
+            is_upgrade: bool = False,
+            mode: str = "",
+            replace_item: Optional[Dict[str, Any]] = None,
+            directory_snapshot: Optional[Any] = None,
+    ) -> bool:
+        """完成 Magnet 单个匹配文件的元数据刮削、STRM 生成与媒体服务器通知。"""
+        self._scrape_metadata(
+            cloud_dir,
+            target_name,
+            mediainfo,
+            season=season,
+            episode=episode,
+        )
+        strm_path = None
+        if self._strm_generate_enabled and self._strm_generator and self._local_resource_path:
+            strm_path = self._generate_strm(
+                cloud_dir, target_name, target_file=target_file, lookup_target=False
+            )
+            if strm_path:
+                if is_upgrade and mode != "coexist" and replace_item and directory_snapshot:
+                    if not self._delete_upgrade_old_file(replace_item, directory_snapshot):
+                        logger.debug(f"Magnet 洗版旧文件删除失败：{target_name}")
+                        return False
+                    self._delete_upgrade_old_strm(replace_item, replacement_path=strm_path)
+                self._media_server_notifier.notify(
+                    path=strm_path, mediainfo=mediainfo, file_name=target_name
+                )
+        elif self._local_resource_path:
+            if is_upgrade and mode != "coexist" and replace_item and directory_snapshot:
+                if not self._delete_upgrade_old_file(replace_item, directory_snapshot):
+                    logger.debug(f"Magnet 洗版旧文件删除失败：{target_name}")
+                    return False
+                self._delete_upgrade_old_strm(replace_item)
+            notify_path = self._resolve_resource_season_dir(
+                self._local_resource_path,
+                subscribe,
+                mediainfo,
+                max(1, int(season or 1)),
+            )
+            if notify_path:
+                self._media_server_notifier.notify(
+                    path=notify_path, mediainfo=mediainfo, file_name=target_name
+                )
+        return True
+
+    def _persist_magnet_finalized_outputs(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            mediainfo: Any,
+            media_data: Optional[Dict[str, Any]],
+            history_records: List[Dict[str, Any]],
+            details: List[Dict[str, Any]],
+            success_episodes: List[int],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """统一持久化 Magnet 匹配或自愈产生的历史记录、订阅状态并返回详情。"""
         if not history_records:
             return None
         persisted_records = [
@@ -1752,15 +2131,13 @@ class PostprocessService(OwnerDelegator):
         item["success_episodes"] = (
             [] if item.get("transient_target") else success_episodes
         )
-        item["notification_episodes"] = success_episodes if mediainfo.type == MediaType.TV else []
-        if not item.get("transient_target"):
+        item["notification_episodes"] = (
+            success_episodes if mediainfo.type == MediaType.TV else []
+        )
+        if media_data is not None and not item.get("transient_target"):
             self._finish_pending_subscription(
                 item, media_data, mediainfo=mediainfo
             )
-        logger.info(
-            f"Magnet 下载后文件匹配完成：移动 {len(history_records)} 个文件，"
-            f"未匹配内容保留在隔离目录"
-        )
         return details
 
     def _try_recover_magnet_from_destination(
@@ -1827,32 +2204,15 @@ class PostprocessService(OwnerDelegator):
         resource = item.get("resource") or {}
 
         for ep, target_file, cloud_dir, final_name in recovered_files:
-            self._scrape_metadata(
-                cloud_dir,
-                final_name,
-                mediainfo,
+            self._finalize_magnet_single_output(
+                cloud_dir=cloud_dir,
+                target_name=final_name,
+                target_file=target_file,
+                mediainfo=mediainfo,
+                subscribe=subscribe,
                 season=season,
                 episode=ep,
             )
-            if self._strm_generate_enabled and self._strm_generator and self._local_resource_path:
-                strm_path = self._generate_strm(
-                    cloud_dir, final_name, target_file=target_file, lookup_target=False
-                )
-                if strm_path:
-                    self._media_server_notifier.notify(
-                        path=strm_path, mediainfo=mediainfo, file_name=final_name
-                    )
-            elif self._local_resource_path:
-                notify_path = self._resolve_resource_season_dir(
-                    self._local_resource_path,
-                    subscribe,
-                    mediainfo,
-                    max(1, int(season or 1)),
-                )
-                if notify_path:
-                    self._media_server_notifier.notify(
-                        path=notify_path, mediainfo=mediainfo, file_name=final_name
-                    )
             if ep:
                 success_episodes.append(int(ep))
             else:
@@ -1868,7 +2228,8 @@ class PostprocessService(OwnerDelegator):
                 status="成功",
                 share_url=share_url,
                 file_name=final_name,
-                source_file_name=final_name,
+                source_file_name=str(
+                    item.get("staging_name") or item.get("source_name") or item.get("source_file_name") or final_name),
                 cloud_dir=cloud_dir,
                 resource=resource,
                 file_size=getattr(target_file, "size", 0) or 0,
@@ -1889,26 +2250,15 @@ class PostprocessService(OwnerDelegator):
                 detail.update({"season": int(season or 1), "episodes": [int(ep)]})
             details.append(detail)
 
-        if not history_records:
-            return None
-
-        persisted_records = [
-            record for record in history_records
-            if not record.get("skip_history")
-        ]
-        with self._offline_pending_lock:
-            history = [
-                record for record in (self._get_data("history") or [])
-                if str(record.get("finalize_key") or "") != pending_key
-            ]
-            history.extend(persisted_records)
-            self._save_data("history", history)
-        self._record_platform_transfer_histories(persisted_records)
-        item["success_episodes"] = (
-            [] if item.get("transient_target") else success_episodes
+        return self._persist_magnet_finalized_outputs(
+            item=item,
+            pending_key=pending_key,
+            mediainfo=mediainfo,
+            media_data=None,
+            history_records=history_records,
+            details=details,
+            success_episodes=success_episodes,
         )
-        item["notification_episodes"] = success_episodes if mediainfo.type == MediaType.TV else []
-        return details
 
     def _schedule_finalize_retry(self, item: Dict[str, Any], now: float) -> None:
         check_index = min(
@@ -1927,15 +2277,22 @@ class PostprocessService(OwnerDelegator):
             f"{retry_minutes} 分钟后复查"
         )
 
-    def _finalize_failure(self, item: Dict[str, Any], pending_key: str) -> bool:
+    def _finalize_failure(
+            self, item: Dict[str, Any], pending_key: str, max_failures: Optional[int] = None
+    ) -> bool:
         """记录一次后处理实际失败（如重命名/移动/定位缺失）。
 
         达到连续失败上限后返回 True，并将任务标记为死任务（finalize_dead），
         由后续监控扫描彻底移出队列并记录失败历史与通知，终止无限重试。
         """
+        task_type = str(item.get("task_type") or "share").strip().lower()
+        is_offline = task_type in {"ed2k", "magnet", "offline"}
+        threshold = max_failures if max_failures is not None else (
+            self._FINALIZE_MAX_FAILURES if is_offline else 2
+        )
         fail_count = int(item.get("fail_count") or 0) + 1
         item["fail_count"] = fail_count
-        if fail_count < self._FINALIZE_MAX_FAILURES:
+        if fail_count < threshold:
             return False
         item["finalize_dead"] = True
         item["next_check_at"] = 0.0

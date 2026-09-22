@@ -168,23 +168,33 @@ class SyncRuntimeService(OwnerDelegator):
                 return
             pending_key = str(values.pop("_pending_key", "") or "").strip()
             file_completed = bool(values.pop("file_completed", False))
+            item_failed = bool(values.pop("item_failed", False))
             active = values.get("postprocess_active")
             active_key = str(task.get("_postprocess_active_key") or "")
-            if active is False and active_key and pending_key != active_key:
-                return
+
             file_keys = list(task.get("_postprocess_file_keys") or [])
             if pending_key and pending_key not in file_keys:
                 file_keys.append(pending_key)
             completed_keys = set(task.get("_postprocess_completed_keys") or [])
+            failed_keys = set(task.get("_postprocess_failed_keys") or [])
             if file_completed and pending_key:
                 completed_keys.add(pending_key)
+                if item_failed:
+                    failed_keys.add(pending_key)
             task["_postprocess_completed_keys"] = list(completed_keys)
+            task["_postprocess_failed_keys"] = list(failed_keys)
             completed_count = len(completed_keys)
+            failed_count = len(failed_keys)
             total_count = max(len(file_keys), int(task.get("postprocess_file_total") or len(file_keys)))
             values["postprocess_file_completed"] = completed_count
             values["postprocess_file_total"] = total_count
 
-            if pending_key and active is not False:
+            if active is False:
+                if not active_key or pending_key == active_key:
+                    task["_postprocess_active_key"] = ""
+                if total_count > 0:
+                    values["postprocess_progress"] = round(completed_count * 100 / max(1, total_count), 2)
+            elif pending_key:
                 values["status"] = (
                     "downloading"
                     if int(task.get("download_pending_count") or 0) > 0
@@ -202,10 +212,25 @@ class SyncRuntimeService(OwnerDelegator):
                 ) / max(1, total_count)
                 values["postprocess_progress"] = round(min(1.0, file_progress) * 100, 2)
                 values["progress"] = min(99, 95 + int(file_progress * 4))
-            elif active is False:
+
+            # 当所有文件均已结束（无论成功或定位失败结算），后处理任务必须正确停止
+            if total_count > 0 and completed_count >= total_count:
                 task["_postprocess_active_key"] = ""
-                if total_count > 0:
-                    values["postprocess_progress"] = round(completed_count * 100 / max(1, total_count), 2)
+                values["postprocess_active"] = False
+                values["postprocess_progress"] = 100.0
+                values["progress"] = 100
+                values["pending_count"] = 0
+                values["finished_at"] = time.time()
+                values["postprocess_step"] = ""
+                if failed_count >= total_count:
+                    values["status"] = "failed"
+                    values["phase"] = "文件定位失败，后处理已停止"
+                    values["message"] = values.get("postprocess_detail") or "网盘未定位到转存文件，任务停止"
+                else:
+                    values["status"] = "completed"
+                    values["phase"] = "文件后处理已结束"
+                    values["postprocess_detail"] = ""
+
             task["_postprocess_file_keys"] = file_keys
             if any(task.get(key) != value for key, value in values.items()):
                 task.update(values)
@@ -989,9 +1014,21 @@ class SyncRuntimeService(OwnerDelegator):
                 ):
                     return
             pending_keys = self._postprocessing_pending_keys(task_snapshot)
+            # 安全停止前核查
+            if self._sync_handler and pending_keys and hasattr(self._sync_handler, "monitor_offline_strm_tasks"):
+                try:
+                    self._sync_handler.monitor_offline_strm_tasks(force=True, pending_keys=pending_keys)
+                except Exception as monitor_err:
+                    logger.warning(f"安全停止前处理已有文件异常：{monitor_err}")
+            remaining_keys = self._postprocessing_pending_keys(task_snapshot)
             removed = self._sync_handler.stop_pending_finalize_tasks(
-                pending_keys
-            ) if self._sync_handler and pending_keys else 0
+                remaining_keys
+            ) if self._sync_handler and remaining_keys else 0
+            if self._sync_handler and hasattr(self._sync_handler, "finish_notification_batch"):
+                try:
+                    self._sync_handler.finish_notification_batch()
+                except Exception as notify_err:
+                    logger.debug(f"停止后处理时提交通知批次异常：{notify_err}")
             with self._sync_tasks_lock:
                 current = self._sync_tasks.get(task_id)
                 if (

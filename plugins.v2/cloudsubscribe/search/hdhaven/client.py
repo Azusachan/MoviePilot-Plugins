@@ -1,7 +1,8 @@
 """HDHaven 统一网络请求、鉴权会话与风控客户端。"""
 
 import threading
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin
 
 from app.log import logger
@@ -31,6 +32,7 @@ class HDHavenClient:
     """HDHaven 接口请求与用户鉴权客户端。"""
 
     DEFAULT_BASE_URL = "https://hdhaven.com"
+    _SESSION_DATA_KEY = "hdhaven_auth_session"
 
     def __init__(
             self,
@@ -39,6 +41,8 @@ class HDHavenClient:
             base_url: str = "",
             proxy: Any = None,
             request_interval: float = 1.0,
+            get_data_func: Optional[Callable] = None,
+            save_data_func: Optional[Callable] = None,
     ):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.username = str(username or "").strip()
@@ -46,6 +50,8 @@ class HDHavenClient:
         self.token = ""
         self.proxy = proxy
         self.request_interval = max(0.5, float(request_interval or 1.0))
+        self._get_data_func = get_data_func
+        self._save_data_func = save_data_func
 
         self._proxies = normalize_proxies(proxy)
         self._session = requests.Session()
@@ -83,6 +89,60 @@ class HDHavenClient:
             max_requests_per_window=30,
             request_window_seconds=60.0,
         )
+        self._restore_session()
+
+    def _restore_session(self) -> None:
+        """从数据库恢复登录 Cookie 和 Token。"""
+        if not self._get_data_func:
+            return
+        try:
+            data = self._get_data_func(self._SESSION_DATA_KEY) or {}
+            if (
+                    not isinstance(data, dict)
+                    or str(data.get("username") or "").strip() != self.username
+                    or str(data.get("base_url") or "").rstrip("/") != self.base_url
+            ):
+                return
+            cookies = data.get("cookies") or {}
+            now = time.time()
+            valid = False
+            for name, info in (cookies.items() if isinstance(cookies, dict) else {}):
+                value = str(info.get("value") or "") if isinstance(info, dict) else str(info or "")
+                expires = float(info.get("expires") or 0) if isinstance(info, dict) else 0
+                if expires > 0 and expires <= now:
+                    continue
+                if value:
+                    self._session.cookies.set(name, value)
+                    valid = True
+            if valid:
+                self.token = data.get("token") or "restored"
+                logger.debug("HDHaven 已恢复持久化登录状态")
+        except Exception as error:
+            logger.debug(f"HDHaven 恢复登录状态失败：{error}")
+
+    def _save_session(self, token: str = "") -> None:
+        """将登录 Cookie 和 Token 持久化到数据库。"""
+        if not self._save_data_func:
+            return
+        try:
+            cookies: Dict[str, Any] = {}
+            for cookie in self._session.cookies.jar:
+                cookies[cookie.name] = {
+                    "value": cookie.value,
+                    "expires": int(cookie.expires or 0),
+                }
+            self._save_data_func(
+                self._SESSION_DATA_KEY,
+                {
+                    "username": self.username,
+                    "base_url": self.base_url,
+                    "token": str(token or self.token or ""),
+                    "cookies": cookies,
+                    "updated_at": int(time.time()),
+                } if cookies else {},
+            )
+        except Exception as error:
+            logger.debug(f"HDHaven 持久化登录状态失败：{error}")
 
     @property
     def cooldown_remaining(self) -> float:
@@ -161,6 +221,7 @@ class HDHavenClient:
         token = session_cookie or str(user_info.get("id") or "logged_in")
         self.token = token
         self._session.headers.pop("Authorization", None)
+        self._save_session(token)
         logger.debug(f"HDHaven 登录成功：user={user_info.get('nickname') or user_info.get('id') or self.username}")
         return token
 

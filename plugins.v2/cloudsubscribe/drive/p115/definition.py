@@ -83,7 +83,7 @@ class P115DriverDefinition(DriverDefinition):
                         cols=12,
                     ),
                     FieldSpec(
-                        key="cloud_transfer_path",
+                        key="p115_transfer_path",
                         label="网盘转存路径",
                         type="cloud-directory",
                         placeholder="/",
@@ -92,7 +92,7 @@ class P115DriverDefinition(DriverDefinition):
                         cols=6,
                     ),
                     FieldSpec(
-                        key="cloud_media_path",
+                        key="p115_media_path",
                         label="媒体库目录",
                         type="cloud-directory",
                         placeholder="/",

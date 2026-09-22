@@ -170,10 +170,13 @@ class HDHiveSearchService(OwnerDelegator):
                     proxy=proxy,
                     request_interval=self._hdhive_request_interval,
                     should_stop=self._stop_requested,
+                    get_data_func=getattr(self, "get_data", None),
+                    save_data_func=getattr(self, "save_data", None),
                 )
                 self._hdhive_web_client = client
                 self._hdhive_web_client_owned = True
                 self._hdhive_web_resources = None
+
             resources = self._hdhive_web_resources
             if resources is None or not resources.matches_config(
                     client,

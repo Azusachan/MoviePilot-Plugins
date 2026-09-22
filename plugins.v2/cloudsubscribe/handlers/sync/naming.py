@@ -1,7 +1,7 @@
 """媒体文件命名、目标分类路径计算与资源扫描服务。"""
 
 import copy
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.context import MediaInfo
@@ -19,7 +19,17 @@ except Exception:
     except Exception:
         DirectoryHelper = None
 
-from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
+try:
+    from app.sdk.classification import classify_media
+except Exception:
+    classify_media = None
+
+try:
+    from app.modules.themoviedb.category import CategoryHelper
+except Exception:
+    CategoryHelper = None
+
+from ...core import CloudFile, OwnerDelegator
 from ...core.media import media_identity
 from ...utils import FileMatcher, MediaFileParser
 from .baseline import normalize_platform_cache_key
@@ -56,6 +66,13 @@ class SyncNamingService(OwnerDelegator):
         if platform_root_lock and platform_root_cache and cache_key in platform_root_cache:
             return platform_root_cache.get(cache_key)
 
+        category_name = self._resolve_classification_category(subscribe, mediainfo)
+        if category_name:
+            if not getattr(mediainfo, "category", None):
+                mediainfo.category = category_name
+            if not getattr(mediainfo, "library_category", None):
+                mediainfo.library_category = category_name
+
         directory = DirectoryHelper().get_dir(media=mediainfo, include_unsorted=False) if DirectoryHelper else None
         resolved = None
         if directory:
@@ -70,6 +87,13 @@ class SyncNamingService(OwnerDelegator):
             )
             if classified_root:
                 resolved = Path(classified_root)
+                # 关键守护：当目录启用了按类别建目录（library_category_folder），且媒体识别出二级分类时，
+                # 若 TransHandler 返回的路径末级未包含该二级分类，自动追加该分类，防止直接堆积在一级目录
+                if getattr(target_directory, "library_category_folder", True) and category_name:
+                    resolved_posix = resolved.as_posix().rstrip("/")
+                    cat_posix = category_name.strip("/")
+                    if not resolved_posix.endswith(cat_posix):
+                        resolved = resolved / cat_posix
         if resolved is None:
             media_type_value = getattr(
                 getattr(mediainfo, "type", None), "value", None
@@ -79,6 +103,8 @@ class SyncNamingService(OwnerDelegator):
                 MediaType.TV.value,
             }:
                 resolved = Path(str(root_path or "/")) / media_type_value
+                if category_name:
+                    resolved = resolved / category_name.strip("/")
 
         if platform_root_lock and platform_root_cache:
             with platform_root_lock:
@@ -160,9 +186,130 @@ class SyncNamingService(OwnerDelegator):
             parent_posix = "/" + parent_posix.lstrip("/")
         return parent_posix, full_path.name
 
-    @staticmethod
-    def _effective_mediainfo(subscribe, mediainfo: MediaInfo) -> MediaInfo:
-        """使用订阅卡片的展示信息生成整理专用媒体副本。"""
+    @classmethod
+    def _match_category_from_yaml(cls, mediainfo: MediaInfo) -> str:
+        """从 /config/category.yaml 读取并匹配分类规则兜底。"""
+        yaml_path = Path("/config/category.yaml")
+        if not yaml_path.exists():
+            return ""
+        try:
+            import yaml
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except Exception:
+            return ""
+        if not isinstance(data, dict):
+            return ""
+
+        media_type = getattr(mediainfo, "type", None)
+        type_key = "tv" if media_type == MediaType.TV else ("movie" if media_type == MediaType.MOVIE else None)
+        if not type_key or type_key not in data:
+            return ""
+
+        type_rules = data.get(type_key) or {}
+        if not isinstance(type_rules, dict):
+            return ""
+
+        origin_countries = [str(c).strip().upper() for c in (getattr(mediainfo, "origin_country", None) or [])]
+        prod_countries = [str(c).strip().upper() for c in (getattr(mediainfo, "production_countries", None) or [])]
+        all_countries = set(origin_countries + prod_countries)
+
+        original_language = str(getattr(mediainfo, "original_language", "") or "").strip().lower()
+
+        genre_ids = {str(gid) for gid in (getattr(mediainfo, "genre_ids", None) or [])}
+        for g in getattr(mediainfo, "genres", None) or []:
+            if isinstance(g, dict) and g.get("id"):
+                genre_ids.add(str(g["id"]))
+
+        for cat_name, conditions in type_rules.items():
+            if not conditions:
+                return str(cat_name).strip()
+            if not isinstance(conditions, dict):
+                continue
+            matched = True
+            if "genre_ids" in conditions:
+                expected_genres = {str(item).strip() for item in str(conditions["genre_ids"]).split(",") if
+                                   item.strip()}
+                if not (genre_ids & expected_genres):
+                    matched = False
+            country_cond = conditions.get("origin_country") or conditions.get("production_countries")
+            if country_cond and matched:
+                expected_countries = {str(item).strip().upper() for item in str(country_cond).split(",") if
+                                      item.strip()}
+                if not (all_countries & expected_countries):
+                    matched = False
+            if "original_language" in conditions and matched:
+                expected_langs = {str(item).strip().lower() for item in str(conditions["original_language"]).split(",")
+                                  if item.strip()}
+                if original_language not in expected_langs:
+                    matched = False
+            if matched:
+                return str(cat_name).strip()
+        return ""
+
+    @classmethod
+    def _resolve_classification_category(
+            cls,
+            subscribe,
+            mediainfo: MediaInfo,
+    ) -> str:
+        """多级解析当前媒体的二级分类：
+        1. 订阅显式指定的分类；
+        2. 媒体已有有效分类；
+        3. 宿主 v3 统一分类服务 (classify_media)；
+        4. 宿主门面 (CategoryHelper)；
+        5. 本地 /config/category.yaml 规则兜底。
+        """
+        sub_cat = getattr(subscribe, "media_category", None) or getattr(subscribe, "media_category_id", None)
+        if sub_cat and str(sub_cat).strip():
+            return str(sub_cat).strip()
+
+        invalid_categories = {"电影", "电视剧", "tv", "movie", "未知", "default", "none"}
+        for attr in ("library_category", "category"):
+            val = getattr(mediainfo, attr, None)
+            if val and str(val).strip() and str(val).strip().lower() not in invalid_categories:
+                return str(val).strip()
+
+        if classify_media:
+            try:
+                classified = classify_media(mediainfo)
+                for attr in ("library_category", "category"):
+                    val = getattr(classified, attr, None)
+                    if val and str(val).strip() and str(val).strip().lower() not in invalid_categories:
+                        return str(val).strip()
+            except Exception:
+                pass
+
+        if CategoryHelper:
+            try:
+                cat_helper = CategoryHelper()
+                tmdb_info = getattr(mediainfo, "tmdb_info", None)
+                if not tmdb_info and hasattr(mediainfo, "to_dict"):
+                    try:
+                        tmdb_info = mediainfo.to_dict()
+                    except Exception:
+                        tmdb_info = None
+                if tmdb_info and isinstance(tmdb_info, dict):
+                    media_type = getattr(mediainfo, "type", None)
+                    cat = ""
+                    if media_type == MediaType.TV:
+                        cat = cat_helper.get_tv_category(tmdb_info)
+                    elif media_type == MediaType.MOVIE:
+                        cat = cat_helper.get_movie_category(tmdb_info)
+                    if cat and str(cat).strip() and str(cat).strip().lower() not in invalid_categories:
+                        return str(cat).strip()
+            except Exception:
+                pass
+
+        cat_from_yaml = cls._match_category_from_yaml(mediainfo)
+        if cat_from_yaml and cat_from_yaml.lower() not in invalid_categories:
+            return cat_from_yaml
+
+        return ""
+
+    @classmethod
+    def _effective_mediainfo(cls, subscribe, mediainfo: MediaInfo) -> MediaInfo:
+        """使用订阅卡片的展示信息与平台分类生成整理专用媒体副本。"""
         effective_media = copy.deepcopy(mediainfo)
         subscribe_title = str(getattr(subscribe, "name", "") or "").strip()
         if subscribe_title:
@@ -170,9 +317,18 @@ class SyncNamingService(OwnerDelegator):
         subscribe_year = getattr(subscribe, "year", None)
         if subscribe_year:
             effective_media.year = subscribe_year
-        media_category = getattr(subscribe, "media_category", None)
-        if media_category:
-            effective_media.category = media_category
+
+        cat = cls._resolve_classification_category(subscribe, effective_media)
+        if cat:
+            effective_media.category = cat
+            effective_media.library_category = cat
+            if classify_media and getattr(effective_media, "classification", None) is None:
+                try:
+                    c = classify_media(effective_media)
+                    if getattr(c, "classification", None) is not None:
+                        effective_media.classification = c.classification
+                except Exception:
+                    pass
         return effective_media
 
     def _resolve_resource_season_dir(

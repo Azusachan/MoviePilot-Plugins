@@ -3,9 +3,8 @@
 import copy
 import hashlib
 import re
-import shutil
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -26,16 +25,13 @@ except ImportError:
     from app.application.mediaserver import MediaServerHelper
 from app.schemas.types import MediaType
 from sqlalchemy import func, or_
-from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
+from ...core import CloudFile, OwnerDelegator
 from ...core.history import history_group_key
 from ...drive.common import format_size, positive_int
 from ...core.media import (
     download_history_identity_payload,
-    get_download_history_last_by,
-    list_subscribes_by_tmdb_id,
     media_identity,
     media_server_tmdb_filters,
-    recognize_media,
     tmdb_id_of,
 )
 from ...search.types import normalize_resource_type, resource_type_from_url
@@ -850,23 +846,25 @@ class HistoryService(OwnerDelegator):
             media_data = media_data or restored_data
         else:
             media_data = media_data or self._serialize_mediainfo(mediainfo)
+        subscribe = None
+        subscribe_id = int(item.get("subscribe_id") or 0)
+        if subscribe_id:
+            if subscribe_cache is not None:
+                subscribe = subscribe_cache.get(subscribe_id)
+            else:
+                try:
+                    subscribe = SubscribeOper().get(subscribe_id)
+                except Exception as error:
+                    logger.debug(f"读取后处理订阅失败：{subscribe_id}，{error}")
+        sub_title = getattr(subscribe, "name", None) or item.get("name") or item.get("title")
+        target_subscribe = subscribe or SimpleNamespace(
+            name=sub_title or (mediainfo.title if mediainfo else ""),
+            year=item.get("year") or (mediainfo.year if mediainfo else ""),
+            media_category=None,
+        )
+
         notify_path = strm_path
         if not notify_path and mediainfo and self._local_resource_path:
-            subscribe = None
-            subscribe_id = int(item.get("subscribe_id") or 0)
-            if subscribe_id:
-                if subscribe_cache is not None and subscribe_id in subscribe_cache:
-                    subscribe = subscribe_cache[subscribe_id]
-                else:
-                    try:
-                        subscribe = SubscribeOper().get(subscribe_id)
-                    except Exception as error:
-                        logger.debug(f"读取后处理订阅失败：{subscribe_id}，{error}")
-            target_subscribe = subscribe or SimpleNamespace(
-                name=mediainfo.title,
-                year=mediainfo.year,
-                media_category=None,
-            )
             notify_path = self._resolve_resource_season_dir(
                 self._local_resource_path,
                 target_subscribe,
@@ -896,10 +894,17 @@ class HistoryService(OwnerDelegator):
             logger.warning("文件已完成，但缺少媒体信息，无法发送完成通知和Webhook")
             return None
         history_record = self._pending_history_record(pending_key) or {}
+        display_title = str(
+            getattr(subscribe, "name", None)
+            or (target_subscribe and getattr(target_subscribe, "name", None))
+            or item.get("name")
+            or item.get("title")
+            or mediainfo.title
+        ).strip()
         detail = {
             "type": "电视剧" if mediainfo.type == MediaType.TV else "电影",
-            "title": mediainfo.title,
-            "year": mediainfo.year,
+            "title": display_title,
+            "year": getattr(target_subscribe, "year", None) or mediainfo.year,
             "image": getattr(mediainfo, "get_poster_image", lambda: None)(),
             "file_name": item.get("file_name"),
             "notification_kind": (
@@ -1016,12 +1021,15 @@ class HistoryService(OwnerDelegator):
         )
 
     def _mark_offline_history_status(
-            self, pending_key: str, status: str, reason: str = ""
+            self, pending_key: str, status: str, reason: str = "",
+            updates: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._mark_offline_history_status_batch({pending_key}, status, reason)
+        batch_updates = {pending_key: updates} if updates else None
+        self._mark_offline_history_status_batch({pending_key}, status, reason, updates=batch_updates)
 
     def _mark_offline_history_status_batch(
-            self, pending_keys: Set[str], status: str, reason: str = ""
+            self, pending_keys: Set[str], status: str, reason: str = "",
+            updates: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """一次扫描并持久化多个离线任务对应的历史记录。"""
         if not self._get_data or not self._save_data:
@@ -1040,10 +1048,14 @@ class HistoryService(OwnerDelegator):
             for item in history:
                 link = str(item.get("share_url") or "").upper()
                 item_key = str(item.get("finalize_key") or "")
-                if (
-                        item_key not in normalized_keys
-                        and not any(value in link for value in uppercase_keys)
-                ):
+                matched_key = None
+                if item_key in normalized_keys:
+                    matched_key = item_key
+                elif any(value in link for value in uppercase_keys):
+                    matched_key = next((k for k in normalized_keys if k.upper() in link), None)
+                if not matched_key:
+                    continue
+                if status == "失败" and item.get("status") == "成功":
                     continue
                 item["status"] = status
                 item.pop("finalize_key", None)
@@ -1051,6 +1063,10 @@ class HistoryService(OwnerDelegator):
                     item["failure_reason"] = reason
                 else:
                     item.pop("failure_reason", None)
+                if updates and matched_key in updates and updates[matched_key]:
+                    for up_key, up_val in updates[matched_key].items():
+                        if up_val is not None:
+                            item[up_key] = copy.deepcopy(up_val)
                 if status == "成功":
                     platform_records.append(copy.deepcopy(item))
                 changed = True

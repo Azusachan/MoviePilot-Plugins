@@ -61,8 +61,8 @@ class Dian115SearchService(OwnerDelegator):
                     proxy=proxy,
                     request_interval=self._dian115_request_interval,
                     unlocks_per_minute=self._dian115_unlocks_per_minute,
-                    get_data_func=self._dian115_budget.get_data_func,
-                    save_data_func=self._dian115_budget.save_data_func,
+                    get_data_func=getattr(self, "get_data", None),
+                    save_data_func=getattr(self, "save_data", None),
                 )
                 self._dian115_client = client
                 self._dian115_resources = None

@@ -1,12 +1,9 @@
 """
 历史记录重试与现场补偿执行服务。
 """
-import copy
 import re
-import time
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
@@ -18,7 +15,6 @@ from app.schemas.types import MediaType
 from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
 from ...core.media import (
     list_subscribes_by_tmdb_id,
-    media_identity,
     recognize_media,
     tmdb_id_of,
 )
@@ -27,6 +23,7 @@ from ...core.media import (
 class HistoryRetryService(OwnerDelegator):
     """负责对历史失败或中断的记录进行就地重试与上下文还原。"""
 
+    @staticmethod
     def _find_share_file_for_history(files: List[dict], source_sha1: str, source_name: str) -> Optional[dict]:
         source_hash = re.sub(r"[^0-9A-Fa-f]", "", str(source_sha1 or "")).upper()
         source_name = str(source_name or "").strip()
@@ -261,6 +258,19 @@ class HistoryRetryService(OwnerDelegator):
         record["source_file_name"] = source_name
         record["source_sha1"] = source_sha1
         record["tmdb_id"] = mediainfo.tmdb_id
+        effective_title = str(
+            getattr(subscribe, "name", None)
+            or getattr(target_subscribe, "name", None)
+            or getattr(mediainfo, "title", None)
+            or record.get("title")
+            or ""
+        ).strip()
+        if effective_title:
+            record["title"] = effective_title
+        if getattr(target_subscribe, "year", None) or getattr(mediainfo, "year", None):
+            record["year"] = str(getattr(target_subscribe, "year", None) or mediainfo.year)
+        if getattr(mediainfo, "get_poster_image", None) and mediainfo.get_poster_image():
+            record["image"] = mediainfo.get_poster_image()
         record.pop("failure_reason", None)
         if cached_source and self._cross_transfer_manager:
             record.update(self._cross_transfer_manager.cache_info(
@@ -375,8 +385,8 @@ class HistoryRetryService(OwnerDelegator):
                 logger.warning(f"查询历史记录对应订阅失败：{title}，{error}")
 
         target_subscribe = subscribe or SimpleNamespace(
-            name=title,
-            year=record.get("year"),
+            name=title or (mediainfo and mediainfo.title),
+            year=record.get("year") or (mediainfo and mediainfo.year),
             media_category=None,
         )
         cloud_dir, target_name = self._platform_target(

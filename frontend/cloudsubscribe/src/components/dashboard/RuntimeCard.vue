@@ -62,7 +62,7 @@
               {{ formatSpeed(task.speed_bytes_per_second || task.upload_speed) }}
             </span>
             <span
-              v-else-if="hasDeterminatePostprocessProgress(task)"
+              v-else-if="hasDeterminateProgress(task)"
               class="task-transfer text-caption text-medium-emphasis">
               {{ Math.round(taskProgress(task)) }}%
             </span>
@@ -70,19 +70,16 @@
           <v-progress-linear
             :class="[
               'task-progress',
-              { 'task-progress--active': task.postprocess_active || ['downloading', 'transferring', 'postprocessing'].includes(task.status) },
+              {
+                'task-progress--active':
+                  task.postprocess_active ||
+                  ['downloading', 'transferring', 'postprocessing'].includes(task.status) ||
+                  Boolean(task.transfer_active),
+              },
             ]"
             :model-value="taskProgress(task)"
             :style="progressStyle(task)"
-            :indeterminate="
-              ['downloading', 'transferring'].includes(task.status)
-                ? true
-                : task.status === 'postprocessing'
-                  ? !hasDeterminatePostprocessProgress(task)
-                : !task.transfer_active &&
-                  !['pt_upgrade', 'cross_transfer'].includes(task.task_kind) &&
-                  ['running', 'stopping'].includes(task.status)
-            "
+            :indeterminate="isProgressIndeterminate(task)"
             :color="taskColor(task.status)"
             height="5"
             rounded />
@@ -297,15 +294,63 @@ function progressStyle(task) {
   }
 }
 
-function hasDeterminatePostprocessProgress(task) {
-  return task?.status === "postprocessing" && Boolean(task?.postprocess_active);
+function hasDeterminateProgress(task) {
+  if (!task) return false;
+  // 1. 跨盘或 PT 传输有字节数
+  if (
+    (task.transfer_active || ["pt_upgrade", "cross_transfer"].includes(task.task_kind)) &&
+    displayTotal(task) > 0
+  ) {
+    return true;
+  }
+  // 2. 转存中、下载中或后处理中：只要有步骤活跃、或有文件进度、或有非零百分比
+  if (["downloading", "transferring", "postprocessing"].includes(task.status)) {
+    return Boolean(
+      task.postprocess_active ||
+      Number(task.postprocess_progress || 0) > 0 ||
+      Number(task.postprocess_file_total || 0) > 0,
+    );
+  }
+  // 3. 运行中且具备阶段进度
+  if (["running"].includes(task.status) && Number(task.progress || 0) > 0) {
+    return true;
+  }
+  return false;
+}
+
+function isProgressIndeterminate(task) {
+  if (!task) return true;
+  if (["completed", "success", "failed", "stopped", "canceled"].includes(task.status)) {
+    return false;
+  }
+  if (hasDeterminateProgress(task)) {
+    return false;
+  }
+  return true;
 }
 
 function taskProgress(task) {
-  const value =
-    task?.status === "postprocessing"
-      ? Number(task?.postprocess_progress || 0)
-      : Number(task?.progress || 0)
+  if (!task) return 0;
+  if (
+    (task.transfer_active || ["pt_upgrade", "cross_transfer"].includes(task.task_kind)) &&
+    displayTotal(task) > 0
+  ) {
+    const total = displayTotal(task);
+    const transferred = displayTransferred(task);
+    return Math.max(0, Math.min(100, (transferred / total) * 100));
+  }
+  if (["downloading", "transferring", "postprocessing"].includes(task.status)) {
+    const postProgress = Number(task.postprocess_progress || 0);
+    if (postProgress > 0) {
+      return Math.max(0, Math.min(100, postProgress));
+    }
+    const total = Number(task.postprocess_file_total || 0);
+    if (total > 0) {
+      const completed = Number(task.postprocess_file_completed || 0);
+      return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+    }
+  }
+  const value = Number(task.progress || 0);
   return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 }
 

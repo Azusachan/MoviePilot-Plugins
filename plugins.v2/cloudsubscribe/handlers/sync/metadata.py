@@ -2,11 +2,9 @@
 TMDB 剧集解析、日历与订阅元数据识别修复服务。
 """
 import datetime
-import html
+import re
 from concurrent.futures import Future
 from html.parser import HTMLParser
-import re
-import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
@@ -22,7 +20,6 @@ from ...core import OwnerDelegator
 from ...core.media import (
     apply_media_identity,
     legacy_media_ids,
-    list_subscribes_by_tmdb_id,
     media_identity,
     recognize_media,
     search_medias,
@@ -633,7 +630,7 @@ class SyncMetadataService(OwnerDelegator):
         media_category = str(
             getattr(subscribe, "media_category", "") or ""
         ).strip()
-        if title and tmdb_id > 0:
+        if title and tmdb_id > 0 and media_category:
             try:
                 mediainfo = MediaInfo(
                     type=media_type,
@@ -671,8 +668,7 @@ class SyncMetadataService(OwnerDelegator):
                     except (AttributeError, TypeError, ValueError):
                         pass
                 logger.debug(
-                    f"复用订阅卡片媒体信息：{title}（TMDB={tmdb_id}），"
-                    "跳过 TMDB 详情查询"
+                    f"复用订阅卡片媒体信息：{title}（TMDB={tmdb_id}，分类={media_category}）"
                 )
                 return mediainfo
             except (TypeError, ValueError) as error:

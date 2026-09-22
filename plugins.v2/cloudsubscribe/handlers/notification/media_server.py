@@ -345,13 +345,16 @@ class MediaServerNotifier:
         return True
 
     def _schedule_flush_locked(self) -> None:
+        """在持有 _batch_lock 的情况下重置并启动批次提交定时器。"""
+        is_first_timer = self._batch_timer is None
         if self._batch_timer:
             self._batch_timer.cancel()
         wait_seconds = max(self.delay_seconds, self._BATCH_WINDOW_SECONDS)
         self._batch_timer = Timer(wait_seconds, self._flush_pending)
         self._batch_timer.daemon = True
         self._batch_timer.start()
-        logger.debug(f"入库通知批次已更新，静默 {wait_seconds} 秒后提交")
+        if is_first_timer:
+            logger.debug(f"入库通知批次已更新，静默 {wait_seconds} 秒后提交")
 
     @staticmethod
     def _normalize_path(path: str) -> str:
@@ -708,6 +711,17 @@ class MediaServerNotifier:
                 else:
                     import requests
                     response = requests.delete(url=url, params=params, timeout=15)
+                # Emby DELETE 成功返回 204 No Content，RequestUtils 对无响应体返回 None，视为成功
+                status_code = getattr(response, "status_code", None) if response else None
+                if status_code in {200, 204} or status_code is None:
+                    return True
+                if status_code == 400:
+                    logger.debug(
+                        f"Emby 单项 delete 返回 400，该条目可能不支持直接删除或已移除 (Item {item_id})，已跳过"
+                    )
+                    return False
+                logger.warning(f"Emby 单项 delete 失败 (Item {item_id})：HTTP {status_code}")
+                return False
             else:
                 url = f"{host}/emby/Items/{item_id}/Refresh"
                 response = RequestUtils(timeout=15).post_res(
@@ -721,16 +735,11 @@ class MediaServerNotifier:
                         "api_key": api_key,
                     },
                 )
-            status_code = getattr(response, "status_code", None) if response else None
-            if status_code in {200, 204}:
-                return True
-            if action == "delete" and status_code == 400:
-                logger.debug(
-                    f"Emby 单项 delete 返回 400，该条目可能不支持直接删除或已移除 (Item {item_id})，已跳过"
-                )
+                status_code = getattr(response, "status_code", None) if response else None
+                if status_code in {200, 204}:
+                    return True
+                logger.warning(f"Emby 单项 refresh 失败 (Item {item_id})：HTTP {status_code}")
                 return False
-            logger.warning(f"Emby 单项 {action} 失败 (Item {item_id})：HTTP {status_code}")
-            return False
         except Exception as error:
             logger.warning(f"Emby 单项 {action} 异常 (Item {item_id})：{error}")
             return False
