@@ -153,3 +153,33 @@ for fails in (False, True):
         else:
             assert result['completed'] == 1 and not pending
 print('115 path migration, scoped file lookup and postprocess recovery passed')
+
+from app.plugins.cloudsubscribefork.search.mikan.service import MikanSearchService
+from app.plugins.cloudsubscribefork.core.search import SearchQuery
+from app.db import SessionFactory
+from app.db.models.systemconfig import SystemConfig
+with SessionFactory() as fixture_db:
+    SystemConfig.__table__.create(fixture_db.get_bind(), checkfirst=True)
+searches = []
+class AliasClient:
+    def search_bangumis(self, keyword):
+        return []  # The related-Bangumi shortcut must not be required.
+    def search_html(self, keyword):
+        searches.append(keyword)
+        if keyword != '旧中文片名':
+            return []
+        return [dict(title=title, url='magnet:?xt=urn:btih:' + str(i) * 40)
+                for i, title in enumerate([
+                    '[桜都字幕组] 旧中文片名 [09][1080P][简繁内封]',
+                    '[桜都字幕组] 无关的别部作品 [09][1080P][简繁内封]',
+                    '旧中文片名 [09][1080P][简繁内封]',
+                ], 1)]
+media = SimpleNamespace(title='新中文片名', original_title='Original title',
+                        names=['旧中文片名'], source_meta={},
+                        category='日番', original_language='ja', genre_ids=[16])
+found = MikanSearchService(AliasClient()).search(SearchQuery(media, MediaType.TV, season=1))
+found = SearchHandler._prepare_source_results(
+    handler, found, 'mikan', media, MediaType.TV, None, 1, [9], True)
+assert searches[:2] == ['新中文片名', '旧中文片名'], searches
+assert [row['title'] for row in found] == ['[桜都字幕组] 旧中文片名 [09][1080P][简繁内封]'], found
+print('Mikan aliases searched and matched; unrelated titles and unnamed groups rejected')
