@@ -53,6 +53,29 @@ class BracketMatchingTests(unittest.TestCase):
     def test_plain_title_unchanged(self):
         self.assertEqual(policy.release_titles('[SweetSub] Example / 例子 - 08 [1080p][CHS]'), ['Example', '例子'])
 
+    def test_specials_are_explicit_and_season_scoped(self):
+        for title, expected in (('[SweetSub] Example OVA_01 [CHS]', [1]),
+                                ('[SweetSub] Example - EX01~EX02 [CHS]', [1, 2]),
+                                ('[SweetSub] Example S00E03 [CHS]', [3])):
+            self.assertEqual(policy.release_episodes(title, 0), expected)
+            self.assertTrue(policy.release_season_matches(title, 0))
+            self.assertFalse(policy.release_season_matches(title, 1))
+            self.assertIsNone(policy.fansub_priority(title))
+            self.assertIsNotNone(policy.fansub_priority(title, {'_target_season': 0}))
+        self.assertEqual(policy.release_episodes('[SweetSub] Example [01-11+OVA][CHS]', 0), [])
+        self.assertFalse(policy.release_season_matches('[SweetSub] Example - 01 [CHS]', 0))
+
+    def test_star_group_and_ova_real_file(self):
+        title = '六四位元字幕组★Example★OVA_01★1920x1080★AVC AAC MP4★繁体中文'
+        file = {'name': title + '.mp4'}
+        self.assertEqual(policy.anime_file_candidates([file], title, 0, [1]), {1: [file]})
+        self.assertEqual(policy.anime_file_candidates([file], title, 1, [1]), {1: []})
+
+    def test_actual_ova_torrent_file(self):
+        title = '六四位元字幕组★住在拔作岛上的我该如何是好 Nukitashi★OVA_01★1920x1080★AVC AAC MP4★繁体中文'
+        file = {'name': '[64bitsub][Nukitashi][OVA_01][BDRIP_1920x1080][AVC_AAC][CHT].mp4'}
+        self.assertEqual(policy.anime_file_candidates([file], title, 0, [1]), {1: [file]})
+
 
 class TimeoutTests(unittest.TestCase):
     def test_native_transport_limits_and_no_mutation_retry(self):

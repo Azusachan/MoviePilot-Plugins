@@ -1,6 +1,8 @@
 """
 历史记录重试与现场补偿执行服务。
 """
+
+from ...core.media import normalize_season
 import re
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -333,7 +335,7 @@ class HistoryRetryService(OwnerDelegator):
             if str(record.get("type") or "") == "电视剧"
             else MediaType.MOVIE
         )
-        season = int(record.get("season") or 1) if media_type == MediaType.TV else None
+        season = normalize_season(record.get("season")) if media_type == MediaType.TV else None
         episode = (
             int(record.get("episode") or 0) or None
             if media_type == MediaType.TV
@@ -376,7 +378,7 @@ class HistoryRetryService(OwnerDelegator):
                         if str(getattr(item, "type", "")) == media_type.value
                            and (
                                    media_type != MediaType.TV
-                                   or int(getattr(item, "season", 1) or 1) == season
+                                   or normalize_season(getattr(item, "season", 1)) == season
                            )
                     ),
                     None,

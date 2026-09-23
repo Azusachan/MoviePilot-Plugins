@@ -1,5 +1,7 @@
 """蜜柑计划（Mikan）搜索服务层、番剧过滤与快速订阅匹配逻辑。"""
 
+from ...core.media import normalize_season
+
 import time
 from threading import RLock
 from typing import Any, Dict, List, Optional
@@ -18,6 +20,7 @@ from ..subs_filter import (
     is_pack_release,
     release_episodes,
     release_matches,
+    release_season_matches,
 )
 from ...core.search import SearchQuery
 
@@ -75,11 +78,13 @@ class MikanSearchService:
                         subgroup_id=subgroup_id,
                         rss_url=rss_url,
                     )
-                    season_num = query.season or 1
+                    season_num = normalize_season(query.season)
                     results = []
                     for row in rows:
                         row_title = str(row.get("title") or "")
-                        episodes = release_episodes(row_title)
+                        if not release_season_matches(row_title, season_num):
+                            continue
+                        episodes = release_episodes(row_title, season_num)
                         results.append({
                             **row,
                             "season": season_num,
@@ -111,7 +116,9 @@ class MikanSearchService:
             if rss_rows:
                 for row in rss_rows:
                     row_title = str(row.get("title") or "")
-                    episodes = release_episodes(row_title)
+                    if not release_season_matches(row_title, season_num):
+                        continue
+                    episodes = release_episodes(row_title, season_num)
                     results.append({
                         **row,
                         "season": season_num,
@@ -140,7 +147,9 @@ class MikanSearchService:
                     )
                     for row in expanded_rows:
                         row_title = str(row.get("title") or "")
-                        episodes = release_episodes(row_title)
+                        if not release_season_matches(row_title, season_num):
+                            continue
+                        episodes = release_episodes(row_title, season_num)
                         results.append({
                             **row,
                             "season": season_num,
@@ -165,7 +174,7 @@ class MikanSearchService:
             normalized = normalize_magnets(rss_results, "mikan")
             before = len(normalized)
             normalized = filter_fansubs(
-                normalized, config=self._config, prefix="mikan", strict=strict_filter
+                normalized, config={**self._config, "_target_season": query.season}, prefix="mikan", strict=strict_filter
             )
             if is_list_mode:
                 logger.info(
@@ -204,7 +213,7 @@ class MikanSearchService:
             return []
 
         results = []
-        season_num = query.season or 1
+        season_num = normalize_season(query.season)
 
         # 3. 优先探测是否命中 Mikan 相关推荐番剧（Bangumi 精准关联）
         try:
@@ -235,7 +244,9 @@ class MikanSearchService:
             ]
             for row in matched:
                 row_title = str(row.get("title") or "")
-                episodes = release_episodes(row_title)
+                if not release_season_matches(row_title, season_num):
+                    continue
+                episodes = release_episodes(row_title, season_num)
                 results.append({
                     **row,
                     "season": season_num,
@@ -250,7 +261,7 @@ class MikanSearchService:
         normalized = normalize_magnets(results, "mikan")
         before = len(normalized)
         normalized = filter_fansubs(
-            normalized, config=self._config, prefix="mikan", strict=strict_filter
+            normalized, config={**self._config, "_target_season": query.season}, prefix="mikan", strict=strict_filter
         )
         if before != len(normalized):
             logger.debug(f"[MIKAN] 字幕过滤与排序（strict={strict_filter}）：{before} -> {len(normalized)}")

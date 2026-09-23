@@ -44,7 +44,7 @@ for source in ('pansou', 'mikan', 'animegarden'):
     rows = [{'title': title} for title in titles]
     accepted = SearchHandler._prepare_source_results(
         handler, rows, source, anime, MediaType.TV, None, 1, [8], True)
-    assert [row['title'] for row in accepted] == [titles[1], titles[0]], source
+    assert [row['title'] for row in accepted] == [titles[1], titles[0], titles[3]], source
 rows = [{'title': 'Fixture movie without fansub tags'}]
 assert SearchHandler._prepare_source_results(
     handler, rows, 'pansou', movie, MediaType.MOVIE, None, None, None, True) == rows
@@ -227,3 +227,52 @@ item = dict(task_type='magnet', download_completed=True, created_at=1)
 service._schedule_finalize_retry(item, 10000)
 assert item['next_check_at'] > 10000
 print('Unmatched downloads and cloud files are preserved for recovery')
+
+# PanSou automatic subscriptions must preserve configured offline types supported by the drive.
+from app.plugins.cloudsubscribefork.search.pansou.service import PanSouSearchService
+requests_seen = []
+pansou_owner = SimpleNamespace(
+    _pansou_client=SimpleNamespace(request_search=lambda **kw: requests_seen.append(kw) or {'results': []}),
+    _pansou_result_limit=30, _resource_type_order_config=['115', 'ed2k', 'magnet', 'quark'],
+    _cloud_drive_key='115', _cloud_drive_resource_types={'115', 'ed2k', 'magnet'},
+    _pansou_channels=[], _pansou_plugins=[], _pansou_filter={}, _pansou_refresh=False,
+    _pansou_concurrency=2,
+)
+PanSouSearchService(pansou_owner).search(SearchQuery(
+    SimpleNamespace(title='Fixture', year=2009), MediaType.TV, season=1,
+    subscribe=SimpleNamespace(id=7)))
+assert requests_seen[0]['cloud_types'] == ['115', 'ed2k', 'magnet'], requests_seen
+
+# S00 remains distinct in deduplication, queue keys and downstream metadata.
+from app.plugins.cloudsubscribefork.core.media import normalize_season
+from app.plugins.cloudsubscribefork.core.services.runtime import SyncRuntimeService
+from app.plugins.cloudsubscribefork.core.services.sync import SyncExecutionService
+for value, expected in [(0, 0), ('0', 0), (None, 1), (1, 1), (2, 2)]:
+    assert normalize_season(value) == expected
+special = SimpleNamespace(id=3, name='Fixture', type=MediaType.TV.value, tmdbid=42, season=0)
+normal = SimpleNamespace(id=2, name='Fixture', type=MediaType.TV.value, tmdbid=42, season=1)
+assert SyncRuntimeService._sync_media_key(special) != SyncRuntimeService._sync_media_key(normal)
+assert SyncExecutionService._media_key_from_subscribe(3, special)[-1] == 0
+
+class SpecialsClient:
+    def search_bangumis(self, title): return []
+    def search_html(self, title):
+        return [dict(title=title, url='magnet:?xt=urn:btih:' + str(i) * 40)
+                for i, title in enumerate([
+                    '[LoliHouse] Fixture - 09 [CHS]',
+                    '[ANi] Fixture - 11 [CHT]',
+                    '六四位元字幕组★Fixture★OVA_01★繁体中文',
+                    '六四位元字幕组★Fixture★OVA_04★繁体中文',
+                    '[SweetSub] Unrelated★OVA_01 [CHS]',
+                    'Fixture OVA_02 [CHS]',
+                ], 1)]
+
+media = SimpleNamespace(title='Fixture', names=[], source_meta={}, category='日番',
+                        original_language='ja', genre_ids=[16])
+for season, expected in [(0, [1, 4]), (1, [9, 11])]:
+    result = MikanSearchService(SpecialsClient()).search(SearchQuery(media, MediaType.TV, season=season))
+    result = SearchHandler._prepare_source_results(handler, result, 'mikan', media, MediaType.TV,
+                                                   None, season, expected, True)
+    assert sorted({e for item in result for e in item['episodes']}) == expected, result
+    assert all(item['season'] == season and str(season) in item['preview_episodes'] for item in result)
+print('PanSou offline types, S00 identity and unified subtitle filtering verified')

@@ -2,6 +2,8 @@
 同步处理模块
 负责核心的同步逻辑：处理电影订阅、处理电视剧订阅
 """
+
+from ...core.media import normalize_season
 import copy
 import hashlib
 import re
@@ -544,7 +546,7 @@ class SyncHandler:
         )
         if resolved_type == MediaType.MOVIE:
             return f"{identity}_movie"
-        season = max(1, int(getattr(subscribe, "season", 1) or 1))
+        season = normalize_season(getattr(subscribe, "season", 1))
         return f"{identity}_S{season}"
 
     def _optional_cloud_service(self, capability: CloudDriveCapability):
@@ -1432,11 +1434,11 @@ class SyncHandler:
             )
             return ""
         title_episodes = self._magnet_title_episodes(
-            resource, int(season or 1)
+            resource, normalize_season(season)
         )
         preview_episodes = (
                 title_episodes
-                or self._resource_preview_episodes(resource, int(season or 1))
+                or self._resource_preview_episodes(resource, normalize_season(season))
         )
         target_episode_set = {
             int(value) for value in (target_episodes or []) if int(value) > 0
@@ -1495,7 +1497,7 @@ class SyncHandler:
                     )
                     return ""
                 title_episodes = self._magnet_title_episodes(
-                    resource, int(season or 1)
+                    resource, normalize_season(season)
                 )
                 metadata_preview = metadata.get("preview_episodes") or {}
                 if metadata_preview:
@@ -1503,7 +1505,7 @@ class SyncHandler:
                 preview_episodes = (
                         title_episodes
                         or self._resource_preview_episodes(
-                    resource, int(season or 1)
+                    resource, normalize_season(season)
                 )
                 )
         if (
@@ -1545,7 +1547,7 @@ class SyncHandler:
             existing = pending.get(pending_key)
             if existing and existing.get("status") != "submitting":
                 return pending_key
-            if season and target_episodes and not upgrade:
+            if season is not None and target_episodes and not upgrade:
                 target_episodes[:] = self._unreserved_episodes(
                     pending,
                     subscribe_id=subscribe_id,
@@ -1967,7 +1969,7 @@ class SyncHandler:
                 }
             ),
             "season": (
-                max(1, int(season or current.get("season") or 1))
+                normalize_season(current.get("season") if season is None else season)
                 if getattr(mediainfo, "type", None) == MediaType.TV
                 else None
             ),
@@ -2316,7 +2318,7 @@ class SyncHandler:
                     subscribe = SubscribeOper(db=db).get(subscribe_id)
             if not subscribe and mediainfo.tmdb_id:
                 season = (
-                    max(1, int(item.get("season") or 1))
+                    normalize_season(item.get("season"))
                     if mediainfo.type == MediaType.TV else None
                 )
                 candidates = list_subscribes_by_tmdb_id(
@@ -2705,7 +2707,7 @@ class SyncHandler:
                 if sub_type != MediaType.TV.value:
                     continue
 
-                season = subscribe.season or 1
+                season = normalize_season(subscribe.season)
                 total_ep = subscribe.total_episode or 0
                 start_ep = subscribe.start_episode or 1
 

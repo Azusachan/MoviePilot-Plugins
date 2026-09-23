@@ -31,3 +31,10 @@ class FansubTests(unittest.TestCase):
         self.assertTrue(policy.is_japanese_anime(SimpleNamespace(category='动画/日番')))
         self.assertFalse(policy.is_japanese_anime(SimpleNamespace(original_language='en',genre_ids=[16])))
         self.assertFalse(policy.is_japanese_anime(SimpleNamespace(original_language='ja',genre_ids=[18])))
+
+    def test_known_subtitled_release_groups_are_fallback_not_excluded(self):
+        for title in ('[LoliHouse] Example [简繁内封字幕]', '[ANi] Example [CHT]',
+                      '六四位元字幕组★Example★OVA_01★繁体中文'):
+            self.assertEqual(policy.fansub_priority(title), 100)
+        self.assertIsNone(policy.fansub_priority('[LoliHouse] Example [无字幕]'))
+        self.assertIsNone(policy.fansub_priority('Example [CHS]'))

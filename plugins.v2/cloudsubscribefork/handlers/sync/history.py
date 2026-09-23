@@ -1,5 +1,7 @@
 """转存历史记录生命周期与重试。"""
 
+from ...core.media import normalize_season
+
 import copy
 import hashlib
 import re
@@ -817,7 +819,7 @@ class HistoryService(OwnerDelegator):
                 else [1]
             )
             if mediainfo.type == MediaType.TV:
-                item["season"] = max(1, int(context.get("season") or 1))
+                item["season"] = normalize_season(context.get("season"))
                 item["notification_episodes"] = [episode] if episode else []
             media_data = self._serialize_mediainfo(mediainfo)
             item["mediainfo"] = media_data
@@ -869,7 +871,7 @@ class HistoryService(OwnerDelegator):
                 self._local_resource_path,
                 target_subscribe,
                 mediainfo,
-                max(1, int(item.get("season") or 1)),
+                normalize_season(item.get("season")),
             )
         if notify_path and mediainfo:
             scheduled = self._media_server_notifier.notify(
@@ -959,7 +961,7 @@ class HistoryService(OwnerDelegator):
             if detail.get("type") != "电视剧":
                 aggregated.append(detail)
                 continue
-            season = max(1, int(detail.get("season") or 1))
+            season = normalize_season(detail.get("season"))
             detail["season"] = season
             detail["episodes"] = sorted(
                 {
@@ -1211,7 +1213,7 @@ class HistoryService(OwnerDelegator):
         if not title or not tmdb_id:
             raise ValueError("媒体目标缺少标题或 TMDB ID")
 
-        season = max(1, int(media.get("season") or 1)) if media_type == MediaType.TV else None
+        season = normalize_season(media.get("season")) if media_type == MediaType.TV else None
         selected_episodes = sorted({
             int(value)
             for value in (
@@ -1277,7 +1279,7 @@ class HistoryService(OwnerDelegator):
             media_key = str(record.get("tmdb_id") or "").strip() or (
                 f"{record.get('title') or ''}|{record.get('year') or ''}"
             )
-            season = max(1, int(record.get("season") or 1)) if media_type == MediaType.TV.value else 0
+            season = normalize_season(record.get("season")) if media_type == MediaType.TV.value else 0
             grouped.setdefault((media_type, media_key, season), []).append(record)
 
         targets = []
@@ -1781,7 +1783,7 @@ class HistoryService(OwnerDelegator):
             self._local_resource_path,
             target_subscribe,
             mediainfo,
-            max(1, int(record.get("season") or 1)),
+            normalize_season(record.get("season")),
         )
         if not notify_path:
             raise RuntimeError("无法按媒体分类规则确定入库通知目录")
@@ -1802,7 +1804,7 @@ class HistoryService(OwnerDelegator):
             "file_name": notification_name,
         }
         if mediainfo.type == MediaType.TV:
-            detail["season"] = max(1, int(record.get("season") or 1))
+            detail["season"] = normalize_season(record.get("season"))
             detail["episodes"] = [int(record.get("episode") or 0)]
         if self._file_finalized:
             self._file_finalized([detail], 1)

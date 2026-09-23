@@ -87,6 +87,9 @@ class SearchHandler:
             return params.get(name, default)
 
         self._plugin = plugin
+        drive = get_val("cloud_drive")
+        self._cloud_drive_key = str(getattr(drive, "key", "") or get_val("cloud_drive_key", ""))
+        self._cloud_drive_resource_types = set(getattr(drive, "resource_types", ()) or ())
         definitions = SearchSourceRegistry.get_definitions()
         for definition in definitions:
             for key in definition.get_config_keys():
@@ -576,6 +579,7 @@ class SearchHandler:
             strict_filter = bool(apply_platform_rules)
             results = filter_fansubs(
                 results,
+                config={"_target_season": season},
                 prefix=prefix,
                 strict=strict_filter,
                 fansub_order=getattr(self, f"_{prefix}_fansub_order", None),
@@ -587,7 +591,7 @@ class SearchHandler:
                 logger.debug(f"[{source.upper()}] 字幕与排除过滤（strict={strict_filter}）：{before} -> {len(results)}")
         # Apply the existing fork subtitle policy at the shared source boundary.
         from ...search.fansubs import filter_fansubs as fork_filter, is_japanese_anime
-        if is_japanese_anime(mediainfo):
+        if is_japanese_anime(mediainfo) and source not in {"mikan", "animegarden"}:
             results = fork_filter(results)
         for result in results:
             result.setdefault("source", source)

@@ -133,7 +133,8 @@ def normalize_magnets(
             item["magnet_name"] = metadata["display_name"]
         if metadata.get("size") and not item.get("size"):
             item["size"] = metadata["size"]
-        if metadata.get("preview_episodes"):
+        if metadata.get("preview_episodes") and not (
+                source in {"mikan", "animegarden"} and item.get("preview_episodes")):
             item["preview_episodes"] = metadata["preview_episodes"]
         normalized.append(item)
     return normalized

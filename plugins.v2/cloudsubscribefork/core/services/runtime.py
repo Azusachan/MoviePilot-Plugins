@@ -1,5 +1,7 @@
 """同步任务运行态、停止控制与网盘文件终态后处理监控。"""
 
+from ...core.media import normalize_season
+
 import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -88,7 +90,7 @@ class SyncRuntimeService(OwnerDelegator):
             if source and source_id
             else str(getattr(subscribe, "name", "") or "")
         )
-        season = int(getattr(subscribe, "season", 1) or 1) if media_type == MediaType.TV.value else 0
+        season = normalize_season(getattr(subscribe, "season", 1)) if media_type == MediaType.TV.value else 0
         return media_type, media_id, season
 
     def _register_sync_tasks(self, subscribes: List[Any]) -> None:
@@ -111,7 +113,7 @@ class SyncRuntimeService(OwnerDelegator):
                 "title": str(getattr(subscribe, "name", "") or "未命名订阅"),
                 "media_type": "电视剧" if is_tv else "电影",
                 "year": getattr(subscribe, "year", None) or "",
-                "season": int(getattr(subscribe, "season", 1) or 1) if is_tv else None,
+                "season": normalize_season(getattr(subscribe, "season", 1)) if is_tv else None,
                 "target_episodes": (
                     preparation.get("aired_target_episodes", []) if is_tv else []
                 ),
@@ -563,7 +565,7 @@ class SyncRuntimeService(OwnerDelegator):
                     "title": group["title"],
                     "media_type": "电视剧" if is_tv else "电影",
                     "year": group["year"],
-                    "season": int(group["season"] or 1) if is_tv else None,
+                    "season": normalize_season(group["season"]) if is_tv else None,
                     **values,
                     "transferred": 0,
                     "queued_at": group["queued_at"],

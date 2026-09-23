@@ -1,5 +1,7 @@
 """同步记录与 MoviePilot 平台整理历史表 (TransferHistory) 的双向同步。"""
 
+from ...core.media import normalize_season
+
 import copy
 import re
 from pathlib import PurePosixPath
@@ -153,7 +155,7 @@ class PlatformHistoryService(OwnerDelegator):
                 "src": self._platform_source_path(record),
             }]
 
-        season = positive_int(record.get("season")) or 1
+        season = normalize_season(record.get("season"))
         episodes = self._platform_episode_numbers(record)
         if not episodes:
             return [{
