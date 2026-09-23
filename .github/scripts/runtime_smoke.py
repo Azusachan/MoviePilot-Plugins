@@ -197,3 +197,33 @@ found = SearchHandler._prepare_source_results(
 assert searches[:2] == ['新中文片名', '旧中文片名'], searches
 assert [row['title'] for row in found] == ['[桜都字幕组] 旧中文片名 [09][1080P][简繁内封]'], found
 print('Mikan aliases searched and matched; unrelated titles and unnamed groups rejected')
+
+# Failed matching is reversible: no automatic delete, no released reservation,
+# and retries of completed downloads are not capped to an expired download TTL.
+from unittest.mock import Mock
+from app.plugins.cloudsubscribefork.drive.p115.files import cloud_file
+cloud = cloud_file(dict(id=7, name='unmatched.mkv', is_dir=False))
+delete = Mock()
+owner = SimpleNamespace(
+    _restore_pending_media_context=lambda *args: (SimpleNamespace(type=MediaType.TV), {}),
+    _cloud_query=SimpleNamespace(list_offline_task_files=lambda *args: [cloud]),
+    _search_handler=SimpleNamespace(select_file_candidate=lambda *args: (None, 0)),
+    _offline_tasks=SimpleNamespace(delete_offline_task=delete),
+    _OFFLINE_CHECK_DELAYS=(10, 20, 40), _OFFLINE_TIMEOUT=1800,
+)
+service = PostprocessService(owner)
+with patch('app.plugins.cloudsubscribefork.handlers.sync.postprocess.anime_file_candidates',
+           return_value={8: [cloud]}):
+    try:
+        service._finalize_magnet_package(
+            dict(subscribe_id=1, season=1, target_episodes=[8], resource=dict(source='mikan')),
+            'fixture', subscribe_cache={1: SimpleNamespace(id=1)}, offline_task={})
+        raise AssertionError('Unmatched completed download must remain retryable')
+    except RuntimeError as error:
+        assert '未匹配' in str(error)
+service._cleanup_failed_offline_task(dict(task_id='ABC'), 'fixture failure')
+delete.assert_not_called()
+item = dict(task_type='magnet', download_completed=True, created_at=1)
+service._schedule_finalize_retry(item, 10000)
+assert item['next_check_at'] > 10000
+print('Unmatched downloads and cloud files are preserved for recovery')
