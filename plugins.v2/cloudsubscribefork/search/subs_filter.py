@@ -217,6 +217,28 @@ def filter_fansubs(
     return sorted(accepted, key=lambda item: -item["fansub_priority"])
 
 
+def release_titles(title: str) -> List[str]:
+    """Keep bracketed media names, but never use group/episode/encoding tags as aliases."""
+    text = str(title or "").strip()
+    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", text)
+    clean = re.sub(r"\.(?:mkv|mp4|avi|ts|m2ts)$", "", clean, flags=re.I)
+    clean = re.split(r"\s*\[|\s+-\s+\d|\s+\(\d{2}", clean, maxsplit=1)[0]
+    if clean.strip():
+        return [part.strip() for part in clean.split(" / ") if part.strip()]
+    # All-bracket releases: the first tag is the group, not the media title.
+    names = []
+    for tag in re.findall(r"\[([^\]]+)\]", text)[1:]:
+        tag = tag.strip()
+        if not tag or _TECHNICAL_TAG_RE.fullmatch(tag):
+            continue
+        if re.search(r"新番|字幕|汉化|漢化|简中|繁中|简体|繁体|內嵌|内嵌|内封|內封", tag):
+            continue
+        if re.fullmatch(r"(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO|JPN|ENG)(?:[&+ /].*)?|\d+(?:v\d+)?|\d+[-~～]\d+.*", tag, re.I):
+            continue
+        names.extend(part.strip() for part in tag.split(" / ") if part.strip())
+    return names
+
+
 def release_matches(
         title: str,
         expected: List[str],
@@ -229,9 +251,7 @@ def release_matches(
         return False
     if season and season > 1 and not explicit_season:
         return False
-    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", title)
-    clean = re.split(r"\s*\[|\s+-\s+\d|\s+\(\d{2}", clean, maxsplit=1)[0]
-    parts = [p.strip() for p in clean.split(" / ") if p.strip()]
+    parts = release_titles(title)
     if any(title_matches(part, expected) for part in parts):
         return True
 
@@ -311,9 +331,10 @@ def anime_file_candidates(
         prefix: str = "mikan",
 ) -> Dict[int, List[Dict[str, Any]]]:
     """利用已匹配发布的双语名称精确匹配文件候选。"""
-    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", release_title)
-    clean = re.split(r"\s*\[|\s+-\s+\d", clean, maxsplit=1)[0]
-    aliases = [part.strip() for part in clean.split(" / ") if part.strip()]
+    aliases = release_titles(release_title)
+    # Some groups abbreviate the release's "X The Animation" to "X" in files.
+    aliases += [re.sub(r"\s+The Animation$", "", name, flags=re.I)
+                for name in aliases if re.search(r"\s+The Animation$", name, re.I)]
     candidates: Dict[int, List[Dict[str, Any]]] = {episode: [] for episode in targets}
     for file in files:
         name = str(file.get("name") or "")
