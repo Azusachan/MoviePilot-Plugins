@@ -112,6 +112,9 @@ class P115DirectoryReader:
 class P115FileQuery:
     manager: Any
 
+    def list_offline_task_files(self, task: Mapping[str, Any], path: str) -> list[CloudFile]:
+        return cloud_files(self.manager.list_offline_task_files(task, path))
+
     def list_files_recursive(self, path: str, **kwargs: Any) -> list[CloudFile]:
         return cloud_files(self.manager.list_files_recursive(path, **kwargs))
 
@@ -746,25 +749,57 @@ class P115FileService(OwnerDelegator):
         root_cid = self.get_pid_by_path(path, mkdir=False)
         if root_cid == -1:
             return []
+        return self._list_files_recursive_by_cid(root_cid, path, max_depth)
+
+    def list_offline_task_files(self, task: Mapping[str, Any], path: str) -> List[dict]:
+        """Locate only the object identified by the completed offline task.
+
+        Missing/expired task metadata must never trigger a whole-drive scan.
+        The normalized iterator uses `id` and `parent_id`, not legacy `fid/cid`.
+        """
+        file_id = str(task.get("file_id") or "")
+        parent_id = task.get("parent_id")
+        if not file_id or parent_id in (None, ""):
+            raise RuntimeError("115 离线任务缺少文件定位信息，保留任务等待重试")
+        checked, items = self.list_files_by_cid_checked(parent_id)
+        if not checked:
+            raise RuntimeError("115 离线任务目录读取失败，保留任务等待重试")
+        for raw in items:
+            file = cloud_file(raw)
+            if file is None or file.id != file_id:
+                continue
+            base = str(path or "/").rstrip("/")
+            if file.is_directory:
+                return self._list_files_recursive_by_cid(
+                    file.id, f"{base}/{file.name}", 6
+                )
+            return [{**raw, "_parent_cid": str(parent_id), "_cloud_dir": base or "/"}]
+        return []
+
+    def _list_files_recursive_by_cid(self, root_cid: Any, path: str, max_depth: int) -> List[dict]:
         result = []
+        visited = set()
         queue = deque([(root_cid, str(path).rstrip("/"), 0)])
         while queue:
             parent_cid, parent_path, depth = queue.popleft()
+            if str(parent_cid) in visited:
+                continue
+            visited.add(str(parent_cid))
             checked, items = self.list_files_by_cid_checked(parent_cid)
             if not checked:
                 return []
             for raw_item in items:
                 item = dict(raw_item)
                 name = str(item.get("name") or item.get("n") or "").strip()
-                is_dir = bool(
-                    item.get("is_dir")
-                    or (str(item.get("fid") or "0") == "0" and item.get("cid"))
-                )
+                normalized = cloud_file(item)
+                if normalized is None:
+                    continue
+                is_dir = normalized.is_directory
                 item["is_dir"] = is_dir
                 item["_parent_cid"] = str(parent_cid)
                 item["_cloud_dir"] = parent_path
                 if is_dir:
-                    child_cid = item.get("cid") or item.get("file_id") or item.get("id")
+                    child_cid = normalized.id
                     if child_cid and depth < max(0, int(max_depth)):
                         queue.append((
                             child_cid,

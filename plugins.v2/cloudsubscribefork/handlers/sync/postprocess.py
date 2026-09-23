@@ -1201,9 +1201,18 @@ class PostprocessService(OwnerDelegator):
         self._update_postprocess_progress(
             item, pending_key, "organize", "整理 Magnet 下载文件"
         )
-        finalized = self._finalize_magnet_package(
-            item, pending_key, subscribe_cache=ctx.subscribe_cache
-        )
+        try:
+            finalized = self._finalize_magnet_package(
+                item, pending_key, subscribe_cache=ctx.subscribe_cache,
+                offline_task=task,
+            )
+        except Exception as error:
+            # A lookup/organize failure is not a failed download. Keep both the
+            # cloud file and reservation; the next monitor pass can resume it.
+            item["last_error"] = str(error)
+            self._schedule_finalize_retry(item, ctx.now)
+            logger.error(f"Magnet 后处理失败，已保留下载文件等待重试：{pending_key}，{error}")
+            return
         if finalized is None:
             if not self._finalize_failure(item, pending_key):
                 self._schedule_finalize_retry(item, ctx.now)
@@ -1810,6 +1819,7 @@ class PostprocessService(OwnerDelegator):
             item: Dict[str, Any],
             pending_key: str,
             subscribe_cache: Optional[Dict[int, Any]] = None,
+            offline_task: Optional[Dict[str, Any]] = None,
     ) -> Optional[List[Dict[str, Any]]]:
         """读取完成后的真实文件树，只移动实际匹配的媒体文件。"""
         mediainfo, media_data = self._restore_pending_media_context(item, pending_key)
@@ -1833,7 +1843,14 @@ class PostprocessService(OwnerDelegator):
             )
             return []
 
-        files = self._cloud_query.list_files_recursive(item.get("cloud_dir"), max_depth=6)
+        task_files = getattr(self._cloud_query, "list_offline_task_files", None)
+        if callable(task_files):
+            files = task_files(offline_task or {}, item.get("cloud_dir") or "/")
+        else:
+            path = str(item.get("cloud_dir") or "").strip()
+            if not path or path == "/":
+                raise RuntimeError("离线后处理没有专用目录，拒绝扫描整个网盘")
+            files = self._cloud_query.list_files_recursive(path, max_depth=6)
         video_files = [
             file_item for file_item in files
             if MediaFileParser.is_video(str(file_item.get("name") or ""))
