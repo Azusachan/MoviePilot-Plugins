@@ -67,3 +67,89 @@ with tempfile.TemporaryDirectory(prefix='azusa-db-test-') as folder:
     assert reopened.load('pending_offline_strm') == before_pending
     assert (Path(folder) / 'cloudsubscribefork.db').is_file()
 print('Runtime imports, source discovery, config preservation and DB reopen passed')
+
+# Regression: 1.5.7 renamed the 115 path keys. Both runtime initialization and
+# UI normalization must migrate before defaults are applied, without replacing
+# an explicitly configured new path (including the deliberate root directory).
+legacy = dict(cloud_transfer_path='/staging', cloud_media_path='/library')
+UIConfig.migrate_drive_paths(legacy)
+assert legacy == dict(p115_transfer_path='/staging', p115_media_path='/library')
+UIConfig.migrate_drive_paths(legacy)
+explicit = dict(cloud_transfer_path='/old', p115_transfer_path='/')
+UIConfig.migrate_drive_paths(explicit)
+assert explicit == dict(p115_transfer_path='/')
+
+from app.plugins.cloudsubscribefork.drive.p115.files import P115FileService
+from app.plugins.cloudsubscribefork.drive.p115.offline import OfflineDownloadService
+task = OfflineDownloadService._format_offline_task(
+    dict(info_hash='ABC', status=2, file_id='7', wp_path_id=0))
+assert task['file_id'] == '7' and task['parent_id'] == '0'
+directory_calls = []
+fixture_tree = {
+    '0': [dict(id=7, name='target.mkv', is_dir=False, parent_id=0),
+          dict(id=8, name='unrelated', is_dir=True, parent_id=0)],
+    '9': [dict(id=10, name='nested.mkv', is_dir=False, parent_id=9),
+          dict(id=9, name='cycle', is_dir=True, parent_id=9)],
+}
+class FixtureFiles(P115FileService):
+    def list_files_by_cid_checked(self, cid):
+        directory_calls.append(str(cid))
+        return True, fixture_tree[str(cid)]
+files = FixtureFiles(SimpleNamespace())
+found = files.list_offline_task_files(task, '/')
+assert [file['id'] for file in found] == [7]
+assert directory_calls == ['0'], directory_calls
+try:
+    files.list_offline_task_files({}, '/')
+    raise AssertionError('Missing metadata must fail closed')
+except RuntimeError:
+    pass
+assert directory_calls == ['0']
+fixture_tree['0'].append(dict(id=9, name='package', is_dir=True, parent_id=0))
+task['file_id'] = '9'
+directory_calls.clear()
+assert [file['id'] for file in files.list_offline_task_files(task, '/')] == [10]
+assert directory_calls == ['0', '9'], directory_calls
+
+# Exercise real lease acquisition, dispatch and reconciliation with cloud IO
+# replaced; completed downloads must finalize, and lookup errors retain them.
+import copy
+import threading
+import time
+from unittest.mock import patch
+from app.plugins.cloudsubscribefork.handlers.sync.postprocess import PostprocessService
+for fails in (False, True):
+    pending = {'fixture': dict(task_type='magnet', task_id='ABC',
+                              subscribe_id=0, created_at=time.time())}
+    def save_pending(values):
+        pending.clear()
+        pending.update(copy.deepcopy(values))
+    owner = SimpleNamespace(
+        _get_data=lambda key: copy.deepcopy(pending),
+        _save_offline_pending=save_pending,
+        _OFFLINE_PENDING_KEY='pending_offline_strm',
+        _OFFLINE_MONITOR_LEASE_SECONDS=900,
+        _OFFLINE_CHECK_DELAYS=(10, 20, 40),
+        _OFFLINE_TIMEOUT=1800,
+        _offline_pending_lock=threading.RLock(),
+        _cloud_directories=True, _cloud_query=True, _cloud_mutations=True,
+        _cloud_batch_mutations=None, _stop_requested=lambda: False,
+        _postprocess_task_update=None,
+        _notify_offline_pending_changed=lambda count: None,
+        _schedule_finalize_retry=lambda item, now: item.update(check_index=1),
+    )
+    with patch.object(PostprocessService, '_finalize_magnet_package',
+                      side_effect=RuntimeError('fixture lookup failure') if fails else None,
+                      return_value=[dict(episode=9)]) as finalize, \
+         patch.object(PostprocessService, '_flush_batch_postprocess'), \
+         patch.object(PostprocessService, '_postprocess_task_id', return_value=''):
+        result = PostprocessService(owner).monitor_offline_strm_tasks(
+            offline_tasks=[dict(id='ABC', completed=True)], offline_tasks_valid=True)
+        assert finalize.call_args.kwargs['offline_task']['completed']
+        if fails:
+            assert result['pending'] == 1 and pending['fixture']['check_index'] == 1
+            assert '_monitor_token' not in pending['fixture']
+            assert '_monitor_until' not in pending['fixture']
+        else:
+            assert result['completed'] == 1 and not pending
+print('115 path migration, scoped file lookup and postprocess recovery passed')

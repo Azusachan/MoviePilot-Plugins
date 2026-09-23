@@ -479,10 +479,21 @@ class UIConfig:
             return []
 
     @staticmethod
+    def migrate_drive_paths(target: Dict[str, Any]) -> None:
+        """Preserve pre-1.5.7 115 paths without overriding explicit new settings."""
+        for old, new in (("cloud_transfer_path", "p115_transfer_path"),
+                         ("cloud_media_path", "p115_media_path")):
+            if old in target:
+                if new not in target:
+                    target[new] = target[old]
+                target.pop(old)
+
+    @staticmethod
     def normalize_config(target: Dict[str, Any]) -> Dict[str, Any]:
         """集中处理配置清洗、赋初值、字符串与数组拆分转换，解耦前端。"""
         if not isinstance(target, dict):
             return {}
+        UIConfig.migrate_drive_paths(target)
         import re
         current_year = datetime.datetime.now().year
         current_month = datetime.datetime.now().month

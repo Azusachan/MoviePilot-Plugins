@@ -49,6 +49,8 @@ class OfflineDownloadService(OwnerDelegator):
         return {
             "id": str(task.get("info_hash") or "").upper(),
             "name": str(task.get("name") or "未命名任务"),
+            "file_id": str(task.get("file_id") or ""),
+            "parent_id": str(task.get("wp_path_id") if task.get("wp_path_id") is not None else ""),
             "size": size,
             "state": state,
             "completed": state == "completed",

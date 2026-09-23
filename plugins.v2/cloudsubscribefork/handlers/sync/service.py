@@ -1538,7 +1538,7 @@ class SyncHandler:
         subscribe_id = int(getattr(subscribe, "id", 0) or 0)
         prefix = "magnet" if self._is_magnet_url(share_url) else "ed2k"
         pending_key = f"{prefix}:{info_hash}:{subscribe_id}"
-        staging_dir = f"{self._cloud_transfer_path.rstrip('/')}"
+        staging_dir = self._cloud_transfer_path.rstrip('/') or '/'
 
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
