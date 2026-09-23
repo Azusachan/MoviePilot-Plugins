@@ -50,6 +50,24 @@ def _accepts_extra_kwargs(func: Callable) -> bool:
         return False
 
 
+def _bounded_p115_request(*args, **kwargs):
+    """Translate httpcore-style limits to the actual urllib3.future transport."""
+    from urllib3_future_request import request
+    from urllib3_future.util import Timeout
+
+    extensions = dict(kwargs.pop("extensions", None) or {})
+    limits = extensions.pop("timeout", None)
+    if extensions:
+        kwargs["extensions"] = extensions
+    if limits:
+        kwargs.setdefault("timeout", Timeout(connect=limits.get("connect", 30),
+                                              read=limits.get("read", 60)))
+        kwargs.setdefault("pool_timeout", limits.get("pool", 15))
+        # Retrying mutations belongs to the task layer, never the transport.
+        kwargs.setdefault("retries", 0)
+    return request(*args, **kwargs)
+
+
 class P115ClientWithTimeout(P115Client if PAVAILABLE else object):
     """参考 p115disk，为 p115client API 统一注入连接和读取超时。"""
 
@@ -100,6 +118,8 @@ class P115ClientWithTimeout(P115Client if PAVAILABLE else object):
                     extensions = {}
                     kwargs["extensions"] = extensions
                 extensions.setdefault("timeout", timeout)
+                if kwargs.get("request") is None:
+                    kwargs["request"] = _bounded_p115_request
             return attr(*args, **kwargs)
 
         return wrapper

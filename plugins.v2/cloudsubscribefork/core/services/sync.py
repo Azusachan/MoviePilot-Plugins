@@ -1118,16 +1118,24 @@ class SyncExecutionService(OwnerDelegator):
         except Exception as e:
             logger.error(f"插件全局配置应用失败（下次首次执行重试）: {e}")
 
+    def _apply_pending_config_if_idle(self) -> bool:
+        """Defer handler replacement instead of blocking searches on cloud I/O."""
+        if not self._offline_monitor_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._apply_pending_config()
+        finally:
+            self._offline_monitor_lock.release()
+
     def _release_sync_resources(self, notification_batch_started: bool) -> None:
         try:
             # 配置重载会关闭旧 SyncHandler；必须避开正在使用它的后处理线程。
-            with self._offline_monitor_lock:
-                if notification_batch_started and self._sync_handler:
-                    try:
-                        self._sync_handler.finish_notification_batch()
-                    except Exception as error:
-                        logger.warning(f"同步结束提交媒体库刷新失败：{error}")
-                self._apply_pending_config()
+            if notification_batch_started and self._sync_handler:
+                try:
+                    self._sync_handler.finish_notification_batch()
+                except Exception as error:
+                    logger.warning(f"同步结束提交媒体库刷新失败：{error}")
+            self._apply_pending_config_if_idle()
         finally:
             sync_lock.release()
 
@@ -1194,8 +1202,7 @@ class SyncExecutionService(OwnerDelegator):
         task_counts: Dict[str, int] = {}
         stop_requested = False
         try:
-            with self._offline_monitor_lock:
-                self._apply_pending_config()
+            self._apply_pending_config_if_idle()
             # 首次成功运行时才应用系统级配置（避免安装失败却污染MP配置）
             if is_full_sync:
                 self._apply_global_config_once()
