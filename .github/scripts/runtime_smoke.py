@@ -79,6 +79,18 @@ explicit = dict(cloud_transfer_path='/old', p115_transfer_path='/')
 UIConfig.migrate_drive_paths(explicit)
 assert explicit == dict(p115_transfer_path='/')
 
+# Run the real startup migration, not only the helper. Stop at persistence so
+# this test cannot start schedulers or touch real account clients.
+from unittest.mock import patch
+class MigrationPersisted(Exception):
+    pass
+with patch.object(CloudSubscribeFork, 'update_config', side_effect=MigrationPersisted) as persist:
+    try:
+        CloudSubscribeFork()._apply_plugin_config({'cloud_transfer_path': '/staging'})
+        raise AssertionError('Startup did not persist path migration')
+    except MigrationPersisted:
+        assert persist.call_args.args[0]['p115_transfer_path'] == '/staging'
+
 from app.plugins.cloudsubscribefork.drive.p115.files import P115FileService
 from app.plugins.cloudsubscribefork.drive.p115.offline import OfflineDownloadService
 task = OfflineDownloadService._format_offline_task(

@@ -403,6 +403,7 @@ class CloudSubscribeFork(_PluginBase):
         """应用配置并重建相关服务；普通保存不重置同步任务状态。"""
         config = dict(config or {})
         original_config = dict(config)
+        from .core.config import UIConfig
         UIConfig.migrate_drive_paths(config)
         # 丢弃已移除搜索渠道的历史配置，避免旧字段继续进入运行态或保存结果。
         removed_config_prefixes = ("but" + "ailing_",)
