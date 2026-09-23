@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from app.log import logger
 
 from .client import MikanClient, MikanClientError
+from .titles import metadata_aliases, search_keywords
 from ..magnet import media_titles, normalize_magnets
 from ..matching import (
     extract_mikan_rss_params,
@@ -190,7 +191,8 @@ class MikanSearchService:
             + ([getattr(query, "title", "")] if getattr(query, "title", None) else [])
             + ([getattr(query, "original_title", "")] if getattr(query, "original_title", None) else [])
         )
-        expanded_titles = list(base_titles)
+        aliases = metadata_aliases(query.mediainfo)
+        expanded_titles = unique_texts(base_titles + aliases)
         for t in base_titles:
             for sep in ("，", "、", "：", ":", " - ", " ~ ", "～"):
                 if sep in t:
@@ -220,7 +222,7 @@ class MikanSearchService:
             logger.debug(f"[MIKAN] 探测相关推荐番剧异常：{bgm_error}")
 
         # 4. 常规关键词 HTML 搜索作为补充与兜底
-        for keyword in titles[:3]:
+        for keyword in search_keywords(base_titles, aliases):
             try:
                 rows = self._cached_search(keyword)
             except MikanClientError as e:

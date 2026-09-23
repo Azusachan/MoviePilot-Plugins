@@ -79,6 +79,20 @@ explicit = dict(cloud_transfer_path='/old', p115_transfer_path='/')
 UIConfig.migrate_drive_paths(explicit)
 assert explicit == dict(p115_transfer_path='/')
 
+# Run the real startup migration, not only the helper. Stop at persistence so
+# this test cannot start schedulers or touch real account clients.
+from unittest.mock import patch
+class MigrationPersisted(Exception):
+    pass
+with patch.object(CloudSubscribeFork, 'update_config', side_effect=MigrationPersisted) as persist:
+    try:
+        CloudSubscribeFork._apply_plugin_config(
+            SimpleNamespace(update_config=persist), {'cloud_transfer_path': '/staging'}
+        )
+        raise AssertionError('Startup did not persist path migration')
+    except MigrationPersisted:
+        assert persist.call_args.args[0]['p115_transfer_path'] == '/staging'
+
 from app.plugins.cloudsubscribefork.drive.p115.files import P115FileService
 from app.plugins.cloudsubscribefork.drive.p115.offline import OfflineDownloadService
 task = OfflineDownloadService._format_offline_task(
@@ -153,3 +167,33 @@ for fails in (False, True):
         else:
             assert result['completed'] == 1 and not pending
 print('115 path migration, scoped file lookup and postprocess recovery passed')
+
+from app.plugins.cloudsubscribefork.search.mikan.service import MikanSearchService
+from app.plugins.cloudsubscribefork.core.search import SearchQuery
+from app.db import SessionFactory
+from app.db.models.systemconfig import SystemConfig
+with SessionFactory() as fixture_db:
+    SystemConfig.__table__.create(fixture_db.get_bind(), checkfirst=True)
+searches = []
+class AliasClient:
+    def search_bangumis(self, keyword):
+        return []  # The related-Bangumi shortcut must not be required.
+    def search_html(self, keyword):
+        searches.append(keyword)
+        if keyword != '旧中文片名':
+            return []
+        return [dict(title=title, url='magnet:?xt=urn:btih:' + str(i) * 40)
+                for i, title in enumerate([
+                    '[桜都字幕组] 旧中文片名 [09][1080P][简繁内封]',
+                    '[桜都字幕组] 无关的别部作品 [09][1080P][简繁内封]',
+                    '旧中文片名 [09][1080P][简繁内封]',
+                ], 1)]
+media = SimpleNamespace(title='新中文片名', original_title='Original title',
+                        names=['旧中文片名'], source_meta={},
+                        category='日番', original_language='ja', genre_ids=[16])
+found = MikanSearchService(AliasClient()).search(SearchQuery(media, MediaType.TV, season=1))
+found = SearchHandler._prepare_source_results(
+    handler, found, 'mikan', media, MediaType.TV, None, 1, [9], True)
+assert searches[:2] == ['新中文片名', '旧中文片名'], searches
+assert [row['title'] for row in found] == ['[桜都字幕组] 旧中文片名 [09][1080P][简繁内封]'], found
+print('Mikan aliases searched and matched; unrelated titles and unnamed groups rejected')
