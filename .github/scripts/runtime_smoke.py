@@ -86,7 +86,9 @@ class MigrationPersisted(Exception):
     pass
 with patch.object(CloudSubscribeFork, 'update_config', side_effect=MigrationPersisted) as persist:
     try:
-        CloudSubscribeFork()._apply_plugin_config({'cloud_transfer_path': '/staging'})
+        CloudSubscribeFork._apply_plugin_config(
+            SimpleNamespace(update_config=persist), {'cloud_transfer_path': '/staging'}
+        )
         raise AssertionError('Startup did not persist path migration')
     except MigrationPersisted:
         assert persist.call_args.args[0]['p115_transfer_path'] == '/staging'
