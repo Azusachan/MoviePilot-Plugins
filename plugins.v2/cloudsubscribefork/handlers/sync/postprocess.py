@@ -271,22 +271,12 @@ class PostprocessService(OwnerDelegator):
     def _cleanup_failed_offline_task(
             self, item: Dict[str, Any], reason: str
     ) -> None:
-        """失败后删除对应离线任务及其已下载文件。"""
-        task_id = str(item.get("task_id") or "").strip().upper()
-        if not task_id or not self._offline_tasks:
-            return
-        try:
-            deleted = self._offline_tasks.delete_offline_task(
-                task_id, delete_source_file=True
-            )
-            if deleted:
-                logger.debug(
-                    f"Magnet 匹配失败，已删除离线任务及下载文件：{task_id}，原因：{reason}"
-                )
-        except Exception as error:
-            logger.debug(
-                f"Magnet 匹配失败后清理离线任务及下载文件失败：{task_id}，{error}"
-            )
+        """Automatic failures must never delete user cloud files or tasks.
+
+        Cleanup belongs to the explicit user delete action, not a title match,
+        temporary metadata failure or subscription change.
+        """
+        logger.warning(f"离线后处理失败，已保留网盘任务及文件：{reason}")
 
     @staticmethod
     def _upgrade_backup_name(file_name: str, task_id: str) -> str:
@@ -1201,6 +1191,7 @@ class PostprocessService(OwnerDelegator):
         self._update_postprocess_progress(
             item, pending_key, "organize", "整理 Magnet 下载文件"
         )
+        item["download_completed"] = True
         try:
             finalized = self._finalize_magnet_package(
                 item, pending_key, subscribe_cache=ctx.subscribe_cache,
@@ -1824,8 +1815,7 @@ class PostprocessService(OwnerDelegator):
         """读取完成后的真实文件树，只移动实际匹配的媒体文件。"""
         mediainfo, media_data = self._restore_pending_media_context(item, pending_key)
         if not mediainfo:
-            self._cleanup_failed_offline_task(item, "媒体元数据不存在")
-            return []
+            raise RuntimeError("媒体元数据不存在，保留下载文件")
         subscribe_id = int(item.get("subscribe_id") or 0)
         if subscribe_cache is not None:
             subscribe = subscribe_cache.get(subscribe_id)
@@ -1837,11 +1827,7 @@ class PostprocessService(OwnerDelegator):
         if not subscribe and item.get("transient_target"):
             subscribe = SimpleNamespace(**(item.get("target_subscribe") or {}))
         if not subscribe:
-            self._cleanup_failed_offline_task(item, "订阅已不存在")
-            self._mark_offline_history_status(
-                pending_key, "失败", "Magnet 下载完成时订阅已不存在"
-            )
-            return []
+            raise RuntimeError("订阅已不存在，保留下载文件")
 
         task_files = getattr(self._cloud_query, "list_offline_task_files", None)
         if callable(task_files):
@@ -1912,10 +1898,7 @@ class PostprocessService(OwnerDelegator):
 
         if not matched:
             reason = "Magnet 下载完成，但真实文件名未匹配当前订阅"
-            logger.debug(f"{reason}：{item.get('file_name')}")
-            self._cleanup_failed_offline_task(item, reason)
-            self._mark_offline_history_status(pending_key, "失败", reason)
-            return []
+            raise RuntimeError(reason)
 
         history_records = []
         details = []
@@ -2284,7 +2267,7 @@ class PostprocessService(OwnerDelegator):
         )
         item["check_index"] = check_index
         retry_at = now + self._OFFLINE_CHECK_DELAYS[check_index]
-        if str(item.get("task_type") or "share") in {"ed2k", "magnet", "offline"}:
+        if not item.get("download_completed") and str(item.get("task_type") or "share") in {"ed2k", "magnet", "offline"}:
             created_at = float(item.get("created_at") or now)
             retry_at = min(retry_at, created_at + self._OFFLINE_TIMEOUT)
         item["next_check_at"] = retry_at
