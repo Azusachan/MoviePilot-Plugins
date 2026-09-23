@@ -11,7 +11,7 @@ TIERS = (
     r"桜都|樱都|櫻都|Sakurato|豌豆|Dymy|动漫国|動漫國|DMG|极影|極影|KTXP",
 )
 NO_SUBS = re.compile(r"无字幕|無字幕|无字版|無字版|生肉|\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\b", re.I)
-CHINESE = re.compile(r"简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\b(?:CHS|CHT|BIG5|SC|TC|ZH|CHI|ZHO)(?:\b|_)", re.I)
+CHINESE = re.compile(r"简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\b|_)", re.I)
 
 
 def fansub_priority(title):
@@ -22,10 +22,17 @@ def fansub_priority(title):
     # Only release tags establish the group, not incidental prose in a description.
     tags = " ".join(left or right for left, right in
                     re.findall(r"\[([^\]]+)\]|【([^】]+)】", title))
+    # Some named groups publish with a star separator, not brackets.
+    prefix = re.match(r"^([^★\[【]{2,60}(?:字幕组|字幕組|字幕社|字幕屋))\s*[★☆]", title)
+    if prefix:
+        tags += " " + prefix.group(1)
     for index, pattern in enumerate(TIERS):
         if re.search(pattern, tags, re.I):
             return 400 - index * 100
     if re.search(r"[^\s\[\]]{2,}(?:字幕组|字幕組|字幕社|字幕屋)", tags):
+        return 100
+    # Recognized subtitle-bearing release groups are fallbacks, not preferred translators.
+    if re.search(r"\b(?:LoliHouse|ANi|KissSub|Comicat|Romanticat|64bitsub)\b", tags, re.I):
         return 100
     return None
 

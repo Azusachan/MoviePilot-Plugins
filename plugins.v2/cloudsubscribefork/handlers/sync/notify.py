@@ -1,5 +1,7 @@
 """同步任务完成通知聚合与推送服务。"""
 
+from ...core.media import normalize_season
+
 import copy
 import threading
 from typing import Any, Dict, List, Optional
@@ -107,7 +109,7 @@ class SyncNotificationService(OwnerDelegator):
                     file_count += 1
                 else:
                     title = detail.get("title", "未知")
-                    season = max(1, int(detail.get("season") or 1))
+                    season = normalize_season(detail.get("season"))
                     episodes = sorted(detail.get("episodes") or [])
                     if episodes:
                         file_count += len(episodes)

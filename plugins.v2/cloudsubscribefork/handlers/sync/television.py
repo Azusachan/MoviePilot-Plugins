@@ -1,5 +1,7 @@
 """电视剧订阅搜索、匹配与转存流程。"""
 
+from ...core.media import normalize_season
+
 import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -59,7 +61,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 )
 
             logger.debug(
-                f"📺 处理订阅：{subscribe.name} S{subscribe.season or 1:02d}，"
+                f"📺 处理订阅：{subscribe.name} S{normalize_season(subscribe.season):02d}，"
                 f"范围 E{subscribe.start_episode or 1:02d}-E{subscribe.total_episode or 0:02d}，"
                 f"订阅记录缺失 {subscribe.lack_episode} 集"
             )
@@ -78,7 +80,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 return transferred_count
 
             self._set_task_phase(subscribe, "核对播出范围", 20)
-            season = subscribe.season or 1
+            season = normalize_season(subscribe.season)
             total_ep = subscribe.total_episode or 0
             start_ep = subscribe.start_episode or 1
             expected_episodes = set(range(start_ep, total_ep + 1)) if total_ep >= start_ep else set()

@@ -1,5 +1,7 @@
 """洗版基线、评分与自动升级。"""
 
+from ...core.media import normalize_season
+
 import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -49,7 +51,7 @@ class UpgradeService(OwnerDelegator):
 
         try:
             transient_target = bool(getattr(subscribe, "_transient_target", False))
-            season = subscribe.season or 1
+            season = normalize_season(subscribe.season)
             sub_key = self.subscription_budget_key(subscribe, MediaType.TV)
             if self._search_handler:
                 self._search_handler.reset_subscription_budgets(sub_key)
@@ -715,7 +717,7 @@ class UpgradeService(OwnerDelegator):
                 failed += 1
                 logger.error(
                     f"网盘洗版评分刷新失败：{subscribe.name} "
-                    f"S{subscribe.season or 1:02d}，{error}"
+                    f"S{normalize_season(subscribe.season):02d}，{error}"
                 )
         logger.info(
             f"网盘洗版评分刷新完成：{len(targets) - failed}/"
@@ -726,7 +728,7 @@ class UpgradeService(OwnerDelegator):
         """按统一基线刷新单个订阅的 episode_priority。"""
         from app.db.subscribe_oper import SubscribeOper
 
-        season = int(subscribe.season or 1)
+        season = normalize_season(subscribe.season)
         mediainfo = self._subscribe_mediainfo(subscribe, MediaType.TV)
         if not mediainfo:
             logger.warning(f"洗版评分刷新失败：无法识别 {subscribe.name}")
@@ -767,7 +769,7 @@ class UpgradeService(OwnerDelegator):
         cleaned_count = 0
         for subscribe in subscribes:
             try:
-                season = int(subscribe.season or 1)
+                season = normalize_season(subscribe.season)
                 mediainfo = self._subscribe_mediainfo(
                     subscribe, MediaType.TV
                 )
@@ -793,7 +795,7 @@ class UpgradeService(OwnerDelegator):
             except Exception as error:
                 logger.warning(
                     f"洗版评分自愈失败：{subscribe.name} "
-                    f"S{subscribe.season or 1:02d}，{error}"
+                    f"S{normalize_season(subscribe.season):02d}，{error}"
                 )
 
         if updated_count or cleaned_count:

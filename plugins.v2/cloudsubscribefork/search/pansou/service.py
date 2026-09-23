@@ -1,5 +1,7 @@
 """PanSou 搜索结果匹配与候选构造。"""
 
+from ...core.media import normalize_season
+
 import re
 from typing import Any, Dict, List
 
@@ -224,7 +226,7 @@ class PanSouSearchService(OwnerDelegator):
     def search(self, query: SearchQuery) -> List[Dict[str, Any]]:
         mediainfo = query.mediainfo
         media_type = query.media_type
-        season = max(1, int(query.season or 1)) if media_type == MediaType.TV else None
+        season = normalize_season(query.season) if media_type == MediaType.TV else None
         keyword = (
             str(mediainfo.title or "").strip()
             if media_type == MediaType.TV else
@@ -252,9 +254,15 @@ class PanSouSearchService(OwnerDelegator):
         if not query.resource_list_mode and query.subscribe is not None:
             target_drive = str(getattr(self, "_cloud_drive_key", "") or "").strip().lower()
             if target_drive:
+                supported = set(getattr(self, "_cloud_drive_resource_types", ()) or ())
+                if not supported:
+                    supported = {target_drive} | ({"magnet", "ed2k"} if target_drive == "115" else set())
                 allowed_types = [
-                    "aliyun" if target_drive == "alipan" else target_drive
+                    value for value in allowed_types
+                    if normalize_resource_type(value) in supported
                 ]
+                if not allowed_types:
+                    return []
         response = self._pansou_client.request_search(
             keyword=keyword,
             cloud_types=allowed_types,

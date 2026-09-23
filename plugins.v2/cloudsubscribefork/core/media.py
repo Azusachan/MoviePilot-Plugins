@@ -12,6 +12,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 TMDB_SOURCE = "themoviedb"
 
+
+def normalize_season(value: Any, default: int = 1) -> int:
+    """Only missing seasons default to S01; zero is the real Specials season."""
+    return max(0, int(default if value is None or value == "" else value))
+
 _SOURCE_ALIASES = {
     "tmdb": TMDB_SOURCE,
     "themoviedb": TMDB_SOURCE,

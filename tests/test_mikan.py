@@ -21,7 +21,8 @@ fspec=importlib.util.spec_from_file_location('fansubs_for_mikan_test',SEARCH/'fa
 fansubs=importlib.util.module_from_spec(fspec)
 fspec.loader.exec_module(fansubs)
 namespace.update(Any=Any, Dict=Dict, Iterable=Iterable, List=List, Optional=Optional,
-                 title_without_season=matching.title_without_season)
+                 title_without_season=matching.title_without_season,
+                 subtitle_policy_priority=fansubs.fansub_priority)
 tree = ast.parse((SEARCH / "subs_filter.py").read_text(encoding="utf-8"))
 tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
 exec(compile(tree, "subs_filter.py", "exec"), namespace)

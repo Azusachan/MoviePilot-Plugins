@@ -1,5 +1,7 @@
 """媒体文件命名、目标分类路径计算与资源扫描服务。"""
 
+from ...core.media import normalize_season
+
 import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -145,7 +147,7 @@ class SyncNamingService(OwnerDelegator):
             year_part = f" ({clean_year})" if clean_year else ""
             source_suffix = Path(source_name).suffix or ".mp4"
             if effective_media.type == MediaType.TV:
-                s_num = max(1, int(season or 1))
+                s_num = normalize_season(season)
                 e_num = max(1, int(episode or 1))
                 relative_name = f"{clean_title}{year_part}/Season {s_num}/{clean_title} - S{s_num:02d}E{e_num:02d}{source_suffix}"
             else:

@@ -1,5 +1,7 @@
 """现有媒体版本基线。"""
 
+from ...core.media import normalize_season
+
 import json
 import re
 from pathlib import Path
@@ -34,7 +36,7 @@ class UpgradeBaselineService(OwnerDelegator):
             int(tmdb_id_of(subscribe) or 0),
             str(getattr(subscribe, "name", "") or "").casefold(),
             str(getattr(subscribe, "year", "") or ""),
-            int(season or 1),
+            normalize_season(season),
         )
 
     @staticmethod
@@ -153,7 +155,7 @@ class UpgradeBaselineService(OwnerDelegator):
                 continue
             if not tmdbid and str(record.get("title") or "") != title:
                 continue
-            if self._int_or_zero(record.get("season") or 1) != season:
+            if self._int_or_zero(normalize_season(record.get("season"))) != season:
                 continue
             if str(record.get("status") or "") in {"失败", "转存失败", "已删除"}:
                 continue

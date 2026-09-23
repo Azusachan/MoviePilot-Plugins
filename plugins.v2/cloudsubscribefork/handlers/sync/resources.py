@@ -1,5 +1,7 @@
 """候选资源解析、校验与网盘 Provider 路由。"""
 
+from ...core.media import normalize_season
+
 import copy
 import re
 from pathlib import PurePosixPath
@@ -146,7 +148,7 @@ class ResourceTransferService(OwnerDelegator):
         if not text:
             return set()
         episodes: Set[int] = set()
-        season_number = int(season or 1)
+        season_number = normalize_season(season)
         season_pattern = re.compile(
             r"[Ss](\d{1,2})[Ee]\s*0*(\d{1,4})"
             r"(?:\s*[-~～–—至到]\s*[Ee]?\s*0*(\d{1,4}))?"
@@ -199,7 +201,7 @@ class ResourceTransferService(OwnerDelegator):
         seasons = set()
         for match in cls._TITLE_SEASON_PATTERN.finditer(str(title or "")):
             value = match.group(1) or match.group(2)
-            if value and int(value) > 0:
+            if value is not None and int(value) >= 0:
                 seasons.add(int(value))
         return seasons
 
@@ -291,7 +293,7 @@ class ResourceTransferService(OwnerDelegator):
             structured = int(resource.get("season") or 0)
         except (TypeError, ValueError):
             structured = 0
-        if structured > 0:
+        if resource.get("season") is not None and structured >= 0:
             seasons.add(structured)
         return seasons
 

@@ -1,6 +1,8 @@
 """
 TMDB 剧集解析、日历与订阅元数据识别修复服务。
 """
+
+from ...core.media import normalize_season
 import datetime
 import re
 from concurrent.futures import Future
@@ -130,7 +132,7 @@ class SyncMetadataService(OwnerDelegator):
             media_identity(subscribe),
             str(getattr(subscribe, "name", "") or ""),
             str(getattr(subscribe, "year", "") or ""),
-            int(getattr(subscribe, "season", 1) or 1) if is_tv else 0,
+            normalize_season(getattr(subscribe, "season", 1)) if is_tv else 0,
             int(getattr(subscribe, "start_episode", 1) or 1) if is_tv else 0,
             int(getattr(subscribe, "total_episode", 0) or 0) if is_tv else 0,
             self._is_cloud_upgrade_subscribe(subscribe),
@@ -211,7 +213,7 @@ class SyncMetadataService(OwnerDelegator):
         if str(getattr(subscribe, "type", "") or "") != MediaType.TV.value:
             return None
         tmdb_id = int(tmdb_id or tmdb_id_of(subscribe) or 0)
-        season = int(getattr(subscribe, "season", 1) or 1)
+        season = normalize_season(getattr(subscribe, "season", 1))
         start_episode = int(getattr(subscribe, "start_episode", 1) or 1)
         total_episode = int(getattr(subscribe, "total_episode", 0) or 0)
         if tmdb_id <= 0 or total_episode < start_episode:
@@ -680,10 +682,10 @@ class SyncMetadataService(OwnerDelegator):
         meta.year = getattr(subscribe, "year", None)
         meta.type = media_type
         season = (
-            int(getattr(subscribe, "season", 0) or 1)
+            normalize_season(getattr(subscribe, "season", 0))
             if media_type == MediaType.TV else 0
         )
-        if season:
+        if media_type == MediaType.TV:
             meta.begin_season = season
         source, media_id = media_identity(subscribe)
         legacy_ids = legacy_media_ids(subscribe)

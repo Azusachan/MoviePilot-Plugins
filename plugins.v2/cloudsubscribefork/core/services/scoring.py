@@ -1,5 +1,7 @@
 """订阅已有资源评分。"""
 
+from ...core.media import normalize_season
+
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
@@ -36,7 +38,7 @@ class SubscriptionScoringService(OwnerDelegator):
         cleaned_episodes = 0
         failed = 0
         for subscribe in target_subscribes:
-            season = int(subscribe.season or 1)
+            season = normalize_season(subscribe.season)
             label = f"{subscribe.name} S{season:02d}"
             try:
                 mediainfo = self._sync_handler._subscribe_mediainfo(

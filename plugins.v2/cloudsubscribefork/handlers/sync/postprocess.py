@@ -1,5 +1,7 @@
 """离线任务完成检测与文件后处理。"""
 
+from ...core.media import normalize_season
+
 import copy
 import time
 import uuid
@@ -1324,7 +1326,7 @@ class PostprocessService(OwnerDelegator):
                     sub_id = int(item.get("subscribe_id") or 0)
                     calc_sub = ctx.subscribe_cache.get(sub_id)
                     if calc_media:
-                        season_val = max(1, int(item.get("season") or 1)) if calc_media.type == MediaType.TV else None
+                        season_val = normalize_season(item.get("season")) if calc_media.type == MediaType.TV else None
                         ep_list = [int(v) for v in (item.get("target_episodes") or []) if int(v) > 0]
                         ep_val = ep_list[0] if ep_list else (
                             int(item.get("episode")) if item.get("episode") else None
@@ -1869,8 +1871,10 @@ class PostprocessService(OwnerDelegator):
                 candidates = anime_file_candidates(
                     video_files,
                     resource.get("title") or "",
-                    max(1, int(season or 1)),
+                    normalize_season(season),
                     target_episodes,
+                    expected_titles=[getattr(mediainfo, "title", ""), getattr(mediainfo, "original_title", ""),
+                                     *(getattr(mediainfo, "names", None) or [])],
                 )
                 episode_files = {
                     episode: self._search_handler.select_file_candidate(files, mediainfo, subscribe)
@@ -1881,7 +1885,7 @@ class PostprocessService(OwnerDelegator):
                     video_files,
                     mediainfo,
                     subscribe,
-                    max(1, int(season or 1)),
+                    normalize_season(season),
                     target_episodes,
                 )
             matched = [
@@ -1928,7 +1932,7 @@ class PostprocessService(OwnerDelegator):
                 subscribe,
                 mediainfo,
                 source_name,
-                season=max(1, int(season or 1)) if episode else None,
+                season=normalize_season(season) if episode else None,
                 episode=episode,
             )
             source_suffix = Path(source_name).suffix
@@ -1950,7 +1954,7 @@ class PostprocessService(OwnerDelegator):
                         subscribe,
                         mediainfo,
                         old_name or source_name,
-                        season=max(1, int(season or 1)) if episode else None,
+                        season=normalize_season(season) if episode else None,
                         episode=episode,
                     )
                 if not old_file_id:
@@ -2003,7 +2007,7 @@ class PostprocessService(OwnerDelegator):
             else:
                 success_episodes.append(1)
             episode_fields = (
-                {"season": int(season or 1), "episode": int(episode)}
+                {"season": normalize_season(season), "episode": int(episode)}
                 if episode else {}
             )
             record = self._build_transfer_history_item(
@@ -2030,7 +2034,7 @@ class PostprocessService(OwnerDelegator):
                 "file_name": target_name,
             }
             if episode:
-                detail.update({"season": int(season or 1), "episodes": [int(episode)]})
+                detail.update({"season": normalize_season(season), "episodes": [int(episode)]})
             details.append(detail)
 
         details = self._persist_magnet_finalized_outputs(
@@ -2095,7 +2099,7 @@ class PostprocessService(OwnerDelegator):
                 self._local_resource_path,
                 subscribe,
                 mediainfo,
-                max(1, int(season or 1)),
+                normalize_season(season),
             )
             if notify_path:
                 self._media_server_notifier.notify(
@@ -2170,7 +2174,7 @@ class PostprocessService(OwnerDelegator):
                 subscribe,
                 mediainfo,
                 item.get("file_name") or mediainfo.title,
-                season=max(1, int(season or 1)) if ep else None,
+                season=normalize_season(season) if ep else None,
                 episode=ep,
             )
             if not cloud_dir or not target_name:
@@ -2219,7 +2223,7 @@ class PostprocessService(OwnerDelegator):
                 success_episodes.append(1)
 
             episode_fields = (
-                {"season": int(season or 1), "episode": int(ep)}
+                {"season": normalize_season(season), "episode": int(ep)}
                 if ep else {}
             )
             record = self._build_transfer_history_item(
@@ -2247,7 +2251,7 @@ class PostprocessService(OwnerDelegator):
                 "file_name": final_name,
             }
             if ep:
-                detail.update({"season": int(season or 1), "episodes": [int(ep)]})
+                detail.update({"season": normalize_season(season), "episodes": [int(ep)]})
             details.append(detail)
 
         return self._persist_magnet_finalized_outputs(

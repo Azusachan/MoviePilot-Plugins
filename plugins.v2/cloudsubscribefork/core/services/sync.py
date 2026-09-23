@@ -1,5 +1,7 @@
 """订阅同步执行与并发编排。"""
 
+from ...core.media import normalize_season
+
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Event as ThreadEvent, Thread
@@ -109,7 +111,7 @@ class SyncExecutionService(OwnerDelegator):
         return (
             normalized_type,
             media_identity,
-            int(season or 1) if normalized_type == "电视剧" else 0,
+            normalize_season(season) if normalized_type == "电视剧" else 0,
         )
 
     @staticmethod
@@ -124,7 +126,7 @@ class SyncExecutionService(OwnerDelegator):
             else str(getattr(subscribe, "name", "") or "").strip()
         )
         season = (
-            int(getattr(subscribe, "season", 1) or 1)
+            normalize_season(getattr(subscribe, "season", 1))
             if media_type == MediaType.TV.value else 0
         )
         return media_type, media_id, season

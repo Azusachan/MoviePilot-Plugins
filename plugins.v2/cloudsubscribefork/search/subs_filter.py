@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from .matching import extract_season, title_matches, title_without_season
+from .fansubs import fansub_priority as subtitle_policy_priority
 
 DEFAULT_FANSUB_ORDER = (
     r"LoliHouse", r"VCB-Studio", r"喵萌奶茶|Nekomoe", r"Nix-Raws", r"\bANI\b|ANi",
@@ -66,6 +67,8 @@ def anime_is_excluded(
     if not title:
         return False
     cfg = config or {}
+    if cfg.get("_target_season") != 0 and is_special_release(title):
+        return True
     pattern = (
         exclude_re
         if exclude_re is not None
@@ -78,6 +81,9 @@ def anime_is_excluded(
     )
     # 若是合法完结合集/打包资源，剥离其自身的合集范围标签（如 [01-12 合集]），避免被 \d-\d 等跨度规则误排除
     check_title = title
+    # Only a real S00 subscription may admit explicitly numbered specials.
+    if cfg.get("_target_season") == 0 and pattern == DEFAULT_ANIME_EXCLUDE_RE:
+        pattern = r"720[pP]|480[pP]"
     if is_pack_release(title):
         check_title = re.sub(
             r"\[(?:EP|E)?\s*0*\d{1,3}\s*[-~～–—至到]\s*(?:EP|E)?\s*0*\d{1,3}(?:v\d)?"
@@ -115,6 +121,10 @@ def fansub_priority(
     """
     title = str(title or "")
     cfg = config or {}
+
+    base_priority = subtitle_policy_priority(title)
+    if base_priority is None:
+        return None
 
     # 1. 优先检查渠道排除规则（如 720p、特别篇等）
     if anime_is_excluded(title, config=cfg, prefix=prefix, exclude_re=exclude_re):
@@ -174,15 +184,8 @@ def fansub_priority(
             if re.search(pattern, tags, re.I) or re.search(pattern, title, re.I):
                 return max(100, 1000 - index * 10)
 
-    # 5. 默认常用字幕组顺序匹配
-    for index, pattern in enumerate(DEFAULT_FANSUB_ORDER):
-        if re.search(pattern, tags, re.I) or re.search(pattern, title, re.I):
-            return max(100, 1000 - index * 10)
-
-    # 6. 其他具名中文字幕组兜底
-    if re.search(r"[^\s\[\]]{2,}(?:字幕组|字幕組|字幕社|字幕屋)", tags):
-        return 50
-    return None
+    # One shared acceptance/ranking policy; user ordering above remains optional.
+    return base_priority
 
 
 def filter_fansubs(
@@ -220,22 +223,30 @@ def filter_fansubs(
 def release_titles(title: str) -> List[str]:
     """Keep bracketed media names, but never use group/episode/encoding tags as aliases."""
     text = str(title or "").strip()
+    text = re.sub(r"^[^★☆\[【]{2,60}(?:字幕组|字幕組|字幕社|字幕屋)\s*[★☆]", "", text)
+    text = text.split("★", 1)[0].split("☆", 1)[0]
     clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", text)
     clean = re.sub(r"\.(?:mkv|mp4|avi|ts|m2ts)$", "", clean, flags=re.I)
-    clean = re.split(r"\s*\[|\s+-\s+\d|\s+\(\d{2}", clean, maxsplit=1)[0]
+    clean = re.split(r"\s*\[|\s+-\s+(?:\d|OVA|OAD|SP|EX)|\s+\(\d{2}", clean, maxsplit=1, flags=re.I)[0]
     if clean.strip():
-        return [part.strip() for part in clean.split(" / ") if part.strip()]
+        names = [part.strip() for part in clean.split(" / ") if part.strip()]
+        if "★" in str(title) and re.search(r"[\u3400-\u9fff]", clean):
+            english = re.search(r"\s+([A-Za-z][A-Za-z0-9 .:'!?-]*)$", clean)
+            if english:
+                names.append(english.group(1).strip())
+        return names
     # All-bracket releases: the first tag is the group, not the media title.
     names = []
     for tag in re.findall(r"\[([^\]]+)\]", text)[1:]:
         tag = tag.strip()
-        if not tag or _TECHNICAL_TAG_RE.fullmatch(tag):
+        if (not tag or _TECHNICAL_TAG_RE.fullmatch(tag) or special_episodes(tag)
+                or re.match(r"^(?:BDRip|WEBRip|WEB-DL|AVC|HEVC|AAC|FLAC)[ _-]", tag, re.I)):
             continue
         if re.search(r"新番|字幕|汉化|漢化|简中|繁中|简体|繁体|內嵌|内嵌|内封|內封", tag):
             continue
         if re.fullmatch(r"(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO|JPN|ENG)(?:[&+ /].*)?|\d+(?:v\d+)?|\d+[-~～]\d+.*", tag, re.I):
             continue
-        names.extend(part.strip() for part in tag.split(" / ") if part.strip())
+        names.extend(part.strip() for part in tag.split("/") if part.strip())
     return names
 
 
@@ -268,9 +279,36 @@ def release_matches(
     return False
 
 
-def release_episodes(title: str) -> List[int]:
+def special_episodes(title: str) -> List[int]:
+    """Only explicitly numbered specials are safe to map to S00."""
+    found = set()
+    for match in re.finditer(
+            r"(?<![A-Za-z0-9])(?:S00E|OVA|OAD|SP|EX)[ ._-]*0*(\d{1,3})"
+            r"(?:\s*[-~～–—]\s*(?:(?:OVA|OAD|SP|EX|E)[ ._-]*)?0*(\d{1,3}))?(?!\d)",
+            str(title or ""), re.I):
+        first, last = int(match.group(1)), int(match.group(2) or match.group(1))
+        if 0 < first <= last <= 99:
+            found.update(range(first, last + 1))
+    return sorted(found)
+
+
+def is_special_release(title: str) -> bool:
+    return bool(re.search(r"(?<![A-Za-z0-9])(?:OVA|OAD|SP|EX)(?=[\W_\d]|$)|S00E|特别篇|特別篇", str(title or ""), re.I))
+
+
+def release_season_matches(title: str, season: Optional[int]) -> bool:
+    if season == 0:
+        return bool(special_episodes(title))
+    return not is_special_release(title)
+
+
+def release_episodes(title: str, season: Optional[int] = None) -> List[int]:
     """从标题中提取显式集数，严格排除分辨率、年份等伪集数标签，支持完结合集与范围。"""
     title_str = str(title or "")
+    if season == 0:
+        return special_episodes(title_str)
+    if is_special_release(title_str):
+        return []
     # 1. 优先匹配合集范围如 [01-12 合集], [01-12Fin], [01-12+SP], [01~12]
     range_matches = re.findall(
         r"\[(?:EP|E)?\s*0*(\d{1,3})\s*[-~～–—至到]\s*(?:EP|E)?\s*0*(\d{1,3})(?:v\d)?"
@@ -329,20 +367,23 @@ def anime_file_candidates(
         targets: Iterable[int],
         config: Optional[Dict[str, Any]] = None,
         prefix: str = "mikan",
+        expected_titles: Optional[List[str]] = None,
 ) -> Dict[int, List[Dict[str, Any]]]:
     """利用已匹配发布的双语名称精确匹配文件候选。"""
     aliases = release_titles(release_title)
+    aliases.extend(str(value).strip() for value in (expected_titles or []) if str(value or "").strip())
     # Some groups abbreviate the release's "X The Animation" to "X" in files.
     aliases += [re.sub(r"\s+The Animation$", "", name, flags=re.I)
                 for name in aliases if re.search(r"\s+The Animation$", name, re.I)]
     candidates: Dict[int, List[Dict[str, Any]]] = {episode: [] for episode in targets}
     for file in files:
         name = str(file.get("name") or "")
-        episodes = release_episodes(name)
+        episodes = release_episodes(name, season)
         if (
                 len(episodes) != 1
                 or episodes[0] not in candidates
-                or fansub_priority(name, config=config, prefix=prefix) is None
+                or not release_season_matches(name, season)
+                or fansub_priority(name, config={**(config or {}), "_target_season": season}, prefix=prefix) is None
                 or not release_matches(name, aliases, season)
         ):
             continue
@@ -373,9 +414,9 @@ def build_anime_candidate(
         "resource_type": "magnet",
         "source": str(source or "").strip(),
         "fansub": fansub,
-        "season": int(season or 1),
+        "season": 1 if season is None else int(season),
         "episodes": episodes,
-        "preview_episodes": {str(season or 1): episodes},
+        "preview_episodes": {str(1 if season is None else season): episodes},
         "is_pack": is_pack_release(title_str, episodes),
     }
     if extra:

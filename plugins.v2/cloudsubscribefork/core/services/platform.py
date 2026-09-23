@@ -1,5 +1,7 @@
 """平台入口共享的聚合与业务调用。"""
 
+from ...core.media import normalize_season
+
 import copy
 import datetime
 import re
@@ -278,7 +280,7 @@ class PlatformIntegrationService(OwnerDelegator):
             if str(getattr(subscribe, "type", "")) == MediaType.MOVIE.value
             else MediaType.TV
         )
-        season = int(getattr(subscribe, "season", 0) or 1) if media_type == MediaType.TV else None
+        season = normalize_season(getattr(subscribe, "season", 0)) if media_type == MediaType.TV else None
         meta = MetaInfo(str(getattr(subscribe, "name", "") or ""))
         meta.year = getattr(subscribe, "year", None)
         meta.type = media_type
@@ -1175,7 +1177,7 @@ class PlatformIntegrationService(OwnerDelegator):
             "year": getattr(subscribe, "year", None),
         }
         if media_type == "tv":
-            media["seasons"] = [int(getattr(subscribe, "season", 1) or 1)]
+            media["seasons"] = [normalize_season(getattr(subscribe, "season", 1))]
         return media
 
     def _preview_link_media(self, links: List[str]) -> Dict[str, Any]:
