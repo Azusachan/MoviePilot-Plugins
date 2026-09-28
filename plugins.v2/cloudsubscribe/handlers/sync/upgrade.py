@@ -14,9 +14,9 @@ from ...core import OwnerDelegator
 
 class UpgradeService(OwnerDelegator):
     def _set_upgrade_phase(
-            self, subscribe, phase: str, progress: int, **extra_kwargs
+            self, subscribe, phase: str, progress: int, clear_search: bool = False, **extra_kwargs
     ) -> None:
-        self._set_task_phase(subscribe, phase, progress, **extra_kwargs)
+        self._set_task_phase(subscribe, phase, progress, clear_search=clear_search, **extra_kwargs)
 
     def _process_tv_subscribe_upgrade(
             self,
@@ -441,6 +441,7 @@ class UpgradeService(OwnerDelegator):
                         )
                         if not pending_key:
                             continue
+                        self._clear_task_search_state(subscribe)
                         self._append_magnet_pending_history(
                             history=history,
                             mediainfo=mediainfo,
@@ -582,7 +583,7 @@ class UpgradeService(OwnerDelegator):
                     if not matched_items:
                         continue
 
-                    self._set_upgrade_phase(subscribe, "提交替换", 80)
+                    self._set_upgrade_phase(subscribe, "提交替换", 80, clear_search=True)
                     transfer_results = self._transfer_episode_items(
                         matched_items,
                         share_url,

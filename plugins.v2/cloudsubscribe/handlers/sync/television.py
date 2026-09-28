@@ -671,6 +671,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             "登记网盘剧集整理"
                             if direct_cloud_resource else "转存匹配剧集",
                             92,
+                            clear_search=True,
                         )
                         logger.debug(
                             f"准备批量整理：{mediainfo.title_year} S{season:02d}，"
@@ -807,6 +808,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         continue
 
                 if offline_submit_queue:
+                    self._clear_task_search_state(subscribe)
                     successful_pending_keys = self._submit_offline_packages(
                         offline_submit_queue
                     )

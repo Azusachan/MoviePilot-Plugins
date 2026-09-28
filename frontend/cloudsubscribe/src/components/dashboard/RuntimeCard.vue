@@ -58,41 +58,43 @@
                 :aria-label="isTaskExpanded(task.id) ? '收起详情' : '查看详情'"
                 @click="toggleTaskDetails(task.id)" />
             </div>
-            <div class="d-flex align-center ga-2 flex-shrink-0 text-caption text-medium-emphasis">
-              <span
-                v-if="
-                  (task.transfer_active || ['pt_upgrade', 'cross_transfer'].includes(task.task_kind)) &&
-                  displayTotal(task) > 0
-                "
-                class="task-transfer">
-                {{ formatSize(displayTransferred(task)) }} / {{ formatSize(displayTotal(task)) }} ·
-                {{ formatSpeed(task.speed_bytes_per_second || task.upload_speed) }}
-              </span>
-              <span
-                v-else-if="hasDeterminateProgress(task)"
-                class="task-transfer font-weight-medium">
-                {{ Math.round(taskProgress(task)) }}%
-              </span>
+            <div
+              v-if="
+                (task.transfer_active || ['pt_upgrade', 'cross_transfer'].includes(task.task_kind)) &&
+                displayTotal(task) > 0
+              "
+              class="task-transfer flex-shrink-0 text-caption text-medium-emphasis">
+              {{ formatSize(displayTransferred(task)) }} / {{ formatSize(displayTotal(task)) }} ·
+              {{ formatSpeed(task.speed_bytes_per_second || task.upload_speed) }}
             </div>
           </div>
-          <v-progress-linear
-            v-if="shouldShowProgress(task)"
-            :class="[
-              'task-progress',
-              {
-                'task-progress--active':
-                  task.postprocess_active ||
-                  ['downloading', 'transferring', 'postprocessing'].includes(task.status) ||
-                  Boolean(task.transfer_active) ||
-                  Boolean(task.search_active),
-              },
-            ]"
-            :model-value="taskProgress(task)"
-            :style="progressStyle(task)"
-            :indeterminate="isProgressIndeterminate(task)"
-            :color="taskColor(task.status)"
-            height="5"
-            rounded />
+          <!-- 进度条与百分比：横向一体化显示 -->
+          <div v-if="shouldShowProgress(task)" class="task-progress-container d-flex align-center ga-2">
+            <v-progress-linear
+              :class="[
+                'task-progress',
+                'flex-grow-1',
+                {
+                  'task-progress--active':
+                    task.postprocess_active ||
+                    ['downloading', 'transferring', 'postprocessing'].includes(task.status) ||
+                    Boolean(task.transfer_active) ||
+                    Boolean(task.search_active),
+                },
+              ]"
+              :model-value="taskProgress(task)"
+              :style="progressStyle(task)"
+              :indeterminate="isProgressIndeterminate(task)"
+              :color="taskColor(task.status)"
+              height="4"
+              rounded />
+            <span
+              v-if="hasDeterminateProgress(task)"
+              class="task-progress-percent text-caption font-weight-bold flex-shrink-0"
+              :style="{ color: `rgb(var(--v-theme-${taskColor(task.status)}))` }">
+              {{ Math.round(taskProgress(task)) }}%
+            </span>
+          </div>
           <v-expand-transition>
             <div v-if="hasTaskDetails(task) && isTaskExpanded(task.id)" class="task-details text-caption">
               <!-- 搜索渠道详情：全宽流式横向胶囊排布 -->
@@ -126,7 +128,7 @@
                       </span>
                     </template>
                     <template v-else-if="ch.status === 'searching'">
-                      <span class="task-channel-hint ml-1">搜索中</span>
+                      <span class="task-channel-hint task-channel-searching-text ml-1">搜索中</span>
                       <span v-if="channelDisplayElapsed(task, ch)"
                             class="task-channel-time ml-1.5 d-inline-flex align-center">
                         <span class="opacity-60">(</span>
@@ -197,6 +199,7 @@
           color="warning"
           variant="text"
           size="x-small"
+          class="task-stop-btn"
           :loading="task.status === 'stopping'"
           title="停止此任务"
           @click="emit('stop-task', task.id)" />
@@ -272,11 +275,27 @@ function postprocessingSummary(task) {
   return pendingCount > 0 ? `${pendingCount} 个文件待完成后处理` : "正在完成文件后处理";
 }
 
+function isTransferringOrPostprocessing(task) {
+  if (!task) return false;
+  return Boolean(
+    task.postprocess_active ||
+    task.transfer_active ||
+    task.current_file ||
+    Number(task.postprocess_file_total || 0) > 0 ||
+    ["downloading", "transferring", "postprocessing"].includes(task.status) ||
+    /转存|下载|后处理|整理/.test(String(task.phase || "")),
+  );
+}
+
 function hasTaskDetails(task) {
   return hasPostprocessDetails(task) || hasSearchDetails(task);
 }
 
 function hasSearchDetails(task) {
+  // 进入转存或后处理阶段后，自动隐藏搜索渠道信息，聚焦转存与处理进度
+  if (isTransferringOrPostprocessing(task)) {
+    return false;
+  }
   return Array.isArray(task?.search_channels) && task.search_channels.length > 0;
 }
 
@@ -726,28 +745,37 @@ function displayTotal(task) {
 
 .task-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 30px;
+  grid-template-columns: 20px minmax(0, 1fr) 26px;
   align-items: center;
   gap: 8px;
-  min-height: 54px;
-  padding: 7px 12px;
+  min-height: 42px;
+  padding: 4px 10px;
 }
 
 .task-row + .task-row {
   border-top: 1px solid rgba(var(--v-border-color), 0.08);
 }
 
-.task-line,
-.task-meta {
+.task-line {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  line-height: 1.25;
 }
 
 .task-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-line :deep(.v-chip) {
+  height: 18px !important;
+  font-size: 10px !important;
+  padding: 0 5px !important;
 }
 
 .runtime-header > .d-flex {
@@ -755,11 +783,16 @@ function displayTotal(task) {
 }
 
 .task-meta {
-  margin-top: 4px;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
+  margin-top: 2px;
+  line-height: 1.2;
 }
 
 .task-phase {
+  font-size: 11px;
+  line-height: 1.2;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -775,6 +808,17 @@ function displayTotal(task) {
 
 .task-detail-toggle {
   flex: 0 0 auto;
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px !important;
+  padding: 0 !important;
+}
+
+.task-stop-btn {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px !important;
+  padding: 0 !important;
 }
 
 .task-details {
@@ -989,6 +1033,20 @@ function displayTotal(task) {
   text-align: center;
 }
 
+.task-progress-container {
+  width: 100%;
+  margin-top: 3px;
+  line-height: 1;
+}
+
+.task-progress-percent {
+  font-size: 11px !important;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+  letter-spacing: -0.2px;
+}
+
 @media (max-width: 600px) {
   .runtime-header > .d-flex {
     width: 100%;
@@ -996,13 +1054,105 @@ function displayTotal(task) {
   }
 
   .task-line {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .task-name {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .task-meta {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-direction: row;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .task-phase-wrap {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .task-phase {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-transfer {
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+
+  /* 手机端搜索渠道紧凑布局，简化瘦身并自适应拉伸占满一行 */
+  .task-search-details {
+    padding: 2px 0 1px;
+  }
+
+  .task-search-channels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .task-channel-badge {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 20px;
+    padding: 0 5px;
+    font-size: 10px;
+    justify-content: center;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+
+  .task-channel-badge :deep(.v-icon) {
+    font-size: 10px !important;
+    margin-right: 2px !important;
+    flex-shrink: 0;
+  }
+
+  .task-channel-badge :deep(.v-progress-circular) {
+    width: 8px !important;
+    height: 8px !important;
+    margin-right: 2px !important;
+    flex-shrink: 0;
+  }
+
+  /* 驱动名称完整显示，不强制截断 */
+  .task-channel-name {
+    max-width: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    flex-shrink: 0;
+  }
+
+  .task-channel-count,
+  .task-channel-hint {
+    font-size: 9.5px;
+    margin-left: 2px !important;
+    flex-shrink: 0;
+  }
+
+  /* 手机端省略“搜索中”文本，只保留加载动效，为完整显示驱动名称腾出空间 */
+  .task-channel-searching-text {
+    display: none !important;
+  }
+
+  .task-channel-time {
+    display: none !important; /* 手机端隐藏耗时，大幅简化并节省空间 */
   }
 }
 </style>

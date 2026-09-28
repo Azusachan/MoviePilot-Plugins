@@ -605,8 +605,33 @@ class SyncMetadataService(OwnerDelegator):
         )
         return True
 
+    @staticmethod
+    def _idle_search_state() -> Dict[str, Any]:
+        """清理仅用于搜索阶段实时展示的渠道与中间状态。"""
+        return {
+            "search_active": False,
+            "search_channels": [],
+            "search_total_results": 0,
+        }
+
+    def _clear_task_search_state(self, subscribe: Any) -> None:
+        """显式清理指定订阅任务的搜索中间态。"""
+        if self._task_update:
+            task_id = (
+                f"media:{self.subscription_budget_key(subscribe)}"
+                if bool(getattr(subscribe, "_transient_target", False))
+                   and hasattr(self, "subscription_budget_key")
+                else f"subscribe:{getattr(subscribe, 'id', '')}"
+            )
+            self._task_update(task_id, **self._idle_search_state())
+
     def _set_task_phase(
-            self, subscribe: Any, phase: str, progress: int, **extra_kwargs
+            self,
+            subscribe: Any,
+            phase: Optional[str] = None,
+            progress: Optional[int] = None,
+            clear_search: bool = False,
+            **extra_kwargs,
     ) -> None:
         """回写订阅任务的真实处理阶段。"""
         if self._task_update:
@@ -616,12 +641,15 @@ class SyncMetadataService(OwnerDelegator):
                    and hasattr(self, "subscription_budget_key")
                 else f"subscribe:{getattr(subscribe, 'id', '')}"
             )
-            self._task_update(
-                task_id,
-                phase=phase,
-                progress=max(0, min(100, int(progress))),
-                **extra_kwargs,
-            )
+            update_data = dict(extra_kwargs)
+            if phase is not None:
+                update_data["phase"] = str(phase)
+            if progress is not None:
+                update_data["progress"] = max(0, min(100, int(progress)))
+            if clear_search:
+                for key, val in self._idle_search_state().items():
+                    update_data.setdefault(key, val)
+            self._task_update(task_id, **update_data)
 
     def _subscribe_mediainfo(
             self,

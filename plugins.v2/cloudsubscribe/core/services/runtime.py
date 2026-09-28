@@ -151,9 +151,18 @@ class SyncRuntimeService(OwnerDelegator):
         changed = False
         with self._sync_tasks_lock:
             task = self._sync_tasks.get(task_id)
-            if task and any(task.get(key) != value for key, value in values.items()):
-                task.update(values)
-                changed = True
+            if task:
+                next_status = values.get("status")
+                # 状态机约束：当任务流转至下载、转存、后处理或完成状态时，自动收敛并清理搜索渠道中间态
+                if next_status in {
+                    "downloading", "transferring", "postprocessing", "completed"
+                }:
+                    if task.get("search_active") or task.get("search_channels"):
+                        for key, val in self._idle_search_state().items():
+                            values.setdefault(key, val)
+                if any(task.get(key) != value for key, value in values.items()):
+                    task.update(values)
+                    changed = True
         if changed:
             self._mark_runtime_changed()
 
@@ -382,6 +391,15 @@ class SyncRuntimeService(OwnerDelegator):
             else:
                 message_parts.append(f"约 {(remaining + 59) // 60} 分钟后复查")
         return phase, "；".join(message_parts)
+
+    @staticmethod
+    def _idle_search_state() -> Dict[str, Any]:
+        """清理仅用于搜索阶段实时展示的渠道与中间状态。"""
+        return {
+            "search_active": False,
+            "search_channels": [],
+            "search_total_results": 0,
+        }
 
     @staticmethod
     def _idle_postprocess_state() -> Dict[str, Any]:

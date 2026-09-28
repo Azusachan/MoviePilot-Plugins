@@ -866,17 +866,27 @@ async function notifyHistory() {
 
   .page-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     width: 100%;
-    gap: 8px;
+    gap: 4px;
   }
 
   .page-actions :deep(.v-btn) {
     min-width: 0;
-    height: 34px;
-    padding-inline: 10px;
-    font-size: 13px;
+    height: 32px;
+    padding-inline: 2px;
+    font-size: 11px;
     border-radius: 8px;
+    letter-spacing: -0.2px;
+  }
+
+  .page-actions :deep(.v-btn__prepend) {
+    margin-inline-end: 2px;
+    margin-inline-start: 0;
+  }
+
+  .page-actions :deep(.v-icon) {
+    font-size: 14px !important;
   }
 }
 </style>

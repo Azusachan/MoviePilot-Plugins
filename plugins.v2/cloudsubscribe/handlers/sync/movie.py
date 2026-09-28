@@ -398,7 +398,7 @@ class MovieSyncProcessor(OwnerDelegator):
                                     f"电影 {mediainfo.title} Magnet 洗版候选跳过：{magnet_reason}"
                                 )
                                 continue
-                        self._set_task_phase(subscribe, "提交离线下载", 90)
+                        self._set_task_phase(subscribe, "提交离线下载", 90, clear_search=True)
                         pending_key = self._queue_magnet_package(
                             resource, share_url, subscribe, mediainfo,
                             sub_key=sub_key if track_points else "",
@@ -522,6 +522,7 @@ class MovieSyncProcessor(OwnerDelegator):
                             subscribe,
                             "登记网盘文件整理" if direct_cloud_resource else "转存匹配文件",
                             90,
+                            clear_search=True,
                         )
                         success = True
                         if not direct_cloud_resource:
