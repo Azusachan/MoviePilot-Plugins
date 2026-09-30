@@ -61,6 +61,8 @@ class OfflineDownloadService(OwnerDelegator):
             ),
             "percent": max(0.0, min(percent, 100.0)),
             "add_time": int(task.get("add_time", 0) or 0),
+            "file_id": str(task.get("file_id") or ""),
+            "parent_id": str(task.get("wp_path_id") if task.get("wp_path_id") is not None else ""),
         }
 
     def get_offline_tasks(self, force: bool = False) -> List[Dict[str, Any]]:

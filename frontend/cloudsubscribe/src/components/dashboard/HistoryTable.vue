@@ -239,13 +239,29 @@
               prepend-icon="mdi-source-branch">
               多渠道
             </v-chip>
-            <span v-else>{{ sourceLabel(item.source_items[0]?.value) }}</span>
+            <v-chip
+              v-else-if="item.source_items[0]"
+              size="x-small"
+              variant="tonal"
+              :color="sourceColor(item.source_items[0]?.value)"
+              :prepend-icon="sourceIcon(item.source_items[0]?.value)">
+              {{ sourceLabel(item.source_items[0]?.value) }}
+            </v-chip>
+            <span v-else class="text-medium-emphasis">-</span>
           </div>
         </template>
 
         <template #item.resource_links="{ item }">
-          <v-chip v-if="item.resource_link_count" prepend-icon="mdi-link-variant" variant="tonal" size="x-small">
+          <v-chip
+            v-if="item.resource_link_count"
+            prepend-icon="mdi-link-variant"
+            variant="tonal"
+            color="#00acc1"
+            size="x-small">
             {{ item.resource_link_count }} 个
+            <v-tooltip activator="parent" location="top">
+              共 {{ item.resource_link_count }} 个独立网盘分享链接（涵盖 {{ item.records.length }} 集）
+            </v-tooltip>
           </v-chip>
           <span v-else class="text-medium-emphasis">-</span>
         </template>
@@ -350,37 +366,54 @@
                     </v-chip>
                   </td>
                   <td>
-                    <v-chip size="x-small" variant="tonal">
+                    <v-chip size="x-small" variant="tonal" :color="formatColor(record.file_extension)">
                       {{ record.file_extension || "-" }}
                     </v-chip>
                   </td>
                   <td>
                     <a
-                        v-if="record.source_link"
-                        :href="record.source_link"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="source-link"
-                        title="打开来源详情页"
-                        @click.stop>
-                      {{ sourceLabel(record.source) }}
-                      <v-icon icon="mdi-open-in-new" size="x-small" />
+                      v-if="record.source_link"
+                      :href="record.source_link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-decoration-none"
+                      title="打开来源详情页"
+                      @click.stop>
+                      <v-chip
+                        size="x-small"
+                        variant="tonal"
+                        :color="sourceColor(record.source)"
+                        :prepend-icon="sourceIcon(record.source)"
+                        class="cursor-pointer">
+                        {{ sourceLabel(record.source) }}
+                        <v-icon icon="mdi-open-in-new" size="10" class="ml-1" />
+                      </v-chip>
                     </a>
-                    <span v-else>{{ sourceLabel(record.source) }}</span>
+                    <v-chip
+                      v-else
+                      size="x-small"
+                      variant="tonal"
+                      :color="sourceColor(record.source)"
+                      :prepend-icon="sourceIcon(record.source)">
+                      {{ sourceLabel(record.source) }}
+                    </v-chip>
                   </td>
                   <td>
                     <a
-                        v-if="record.resource_link"
-                        :href="record.resource_link"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="source-link"
-                        title="打开资源链接"
-                        @click.stop>
-                      打开
-                      <v-icon icon="mdi-open-in-new" size="x-small" />
+                      v-if="record.resource_link"
+                      :href="record.resource_link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-decoration-none"
+                      title="打开资源链接"
+                      @click.stop>
+                      <v-chip size="x-small" variant="tonal" color="#00acc1" prepend-icon="mdi-link-variant"
+                              class="cursor-pointer">
+                        打开
+                        <v-icon icon="mdi-open-in-new" size="10" class="ml-1" />
+                      </v-chip>
                     </a>
-                    <span v-else>-</span>
+                    <span v-else class="text-medium-emphasis">-</span>
                   </td>
                   <td class="text-no-wrap">
                     {{ formatSize(record.file_size) }}
@@ -640,7 +673,13 @@
 <script setup>
 import {computed, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
-import {getResourceTypeName, getSourceName, getTypeColor} from "../../composables/resourceUtils";
+import {
+  getResourceTypeName,
+  getSourceColor,
+  getSourceIcon,
+  getSourceName,
+  getTypeColor,
+} from "../../composables/resourceUtils";
 
 const props = defineProps({
   items: {type: Array, default: () => []},
@@ -851,6 +890,22 @@ function normalizeSource(value) {
 
 function sourceLabel(value) {
   return getSourceName(normalizeSource(value));
+}
+
+function sourceColor(value) {
+  return getSourceColor(normalizeSource(value));
+}
+
+function sourceIcon(value) {
+  return getSourceIcon(normalizeSource(value));
+}
+
+function formatColor(ext) {
+  const e = String(ext || "").trim().toUpperCase();
+  if (["ISO", "BDMV"].includes(e)) return "#e64a19";
+  if (["TS", "M2TS"].includes(e)) return "#0288d1";
+  if (["MP4", "MKV"].includes(e)) return "#546e7a";
+  return "#607d8b";
 }
 
 function resourceType(item) {

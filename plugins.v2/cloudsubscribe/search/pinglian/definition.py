@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from .client import PinglianClient
+from .client import PinglianClient, PinglianError
 from .provider import create_pinglian_provider
 from .service import PinglianSearchService
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
+from ...core.definitions import (
+    CheckinDefinition,
+    FieldSpec,
+    GroupSpec,
+    SearchSourceDefinition,
+    build_checkin_definition,
+)
 
 
 class PinglianSourceDefinition(SearchSourceDefinition):
@@ -37,6 +43,21 @@ class PinglianSourceDefinition(SearchSourceDefinition):
             request_interval=float(cls.config_value(config, "pinglian_request_interval", 2.0) or 2.0),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),
+        )
+
+    @classmethod
+    def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
+        """自动注册盘链签到契约。"""
+        return build_checkin_definition(
+            cls,
+            icon="mdi-link-variant",
+            credential_attrs=("_pinglian_username", "_pinglian_password"),
+            credential_keys=("pinglian_username", "pinglian_password"),
+            error_types=(PinglianError,),
+            group_title="盘链签到",
+            points_label="配额",
+            track_days=True,
+            enable_cols=12,
         )
 
     @classmethod

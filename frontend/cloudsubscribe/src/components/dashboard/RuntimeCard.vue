@@ -3,6 +3,7 @@
     <div v-if="tasks.length" class="task-list">
       <div v-for="task in tasks" :key="task.id" class="task-row">
         <v-icon
+          class="task-leading-icon"
           :icon="
             task.task_kind === 'cross_transfer'
               ? 'mdi-swap-horizontal-bold'
@@ -37,7 +38,7 @@
           </div>
           <div class="task-meta">
             <div class="task-phase-wrap">
-              <span class="task-phase text-caption text-medium-emphasis">
+              <span class="task-phase text-caption">
                 {{
                   task.postprocess_active || ["downloading", "transferring", "postprocessing"].includes(task.status)
                     ? postprocessingSummary(task)
@@ -63,7 +64,7 @@
                 (task.transfer_active || ['pt_upgrade', 'cross_transfer'].includes(task.task_kind)) &&
                 displayTotal(task) > 0
               "
-              class="task-transfer flex-shrink-0 text-caption text-medium-emphasis">
+              class="task-transfer flex-shrink-0 text-caption">
               {{ formatSize(displayTransferred(task)) }} / {{ formatSize(displayTotal(task)) }} ·
               {{ formatSpeed(task.speed_bytes_per_second || task.upload_speed) }}
             </div>
@@ -86,7 +87,7 @@
               :style="progressStyle(task)"
               :indeterminate="isProgressIndeterminate(task)"
               :color="taskColor(task.status)"
-              height="4"
+              height="3"
               rounded />
             <span
               v-if="hasDeterminateProgress(task)"
@@ -114,54 +115,34 @@
                       indeterminate
                       size="10"
                       width="1.6"
-                      class="mr-1" />
-                    <v-icon v-else :icon="channelIcon(ch)" size="12" class="mr-1" />
+                      class="task-channel-icon task-channel-spinner" />
+                    <v-icon v-else :icon="channelIcon(ch)" size="11" class="task-channel-icon" />
                     <span class="task-channel-name">{{ ch.name }}</span>
-                    <template v-if="ch.status === 'success'">
-                      <span class="task-channel-count ml-1">{{ ch.count }}条</span>
-                      <span v-if="channelDisplayElapsed(task, ch)"
-                            class="task-channel-time ml-1.5 d-inline-flex align-center">
-                        <span class="opacity-60">(</span>
-                        <v-icon icon="mdi-clock-outline" size="9" class="mx-0.5 opacity-75" />
-                        <span>{{ channelDisplayElapsed(task, ch) }}</span>
-                        <span class="opacity-60">)</span>
-                      </span>
-                    </template>
-                    <template v-else-if="ch.status === 'searching'">
-                      <span class="task-channel-hint task-channel-searching-text ml-1">搜索中</span>
-                      <span v-if="channelDisplayElapsed(task, ch)"
-                            class="task-channel-time ml-1.5 d-inline-flex align-center">
-                        <span class="opacity-60">(</span>
-                        <v-icon icon="mdi-clock-outline" size="9" class="mx-0.5 opacity-75" />
-                        <span>{{ channelDisplayElapsed(task, ch) }}</span>
-                        <span class="opacity-60">)</span>
-                      </span>
-                    </template>
-                    <template v-else-if="ch.status === 'timeout'">
-                      <span class="task-channel-hint ml-1">超时</span>
-                      <span v-if="channelDisplayElapsed(task, ch)"
-                            class="task-channel-time ml-1.5 d-inline-flex align-center">
-                        <span class="opacity-60">(</span>
-                        <v-icon icon="mdi-clock-outline" size="9" class="mx-0.5 opacity-75" />
-                        <span>{{ channelDisplayElapsed(task, ch) }}</span>
-                        <span class="opacity-60">)</span>
-                      </span>
-                    </template>
-                    <span v-else-if="ch.status === 'circuit_break'" class="task-channel-hint ml-1">
+
+                    <span
+                      v-if="ch.status === 'success'"
+                      class="task-channel-tag"
+                      :class="ch.count > 0 ? 'task-channel-tag--count' : 'task-channel-tag--zero'">
+                      {{ ch.count }}条
+                    </span>
+                    <span v-else-if="ch.status === 'searching'" class="task-channel-tag task-channel-tag--searching">
+                      搜索中
+                    </span>
+                    <span v-else-if="ch.status === 'timeout'" class="task-channel-tag task-channel-tag--warn">
+                      超时
+                    </span>
+                    <span v-else-if="ch.status === 'circuit_break'" class="task-channel-tag task-channel-tag--warn">
                       熔断
                     </span>
-                    <template v-else-if="ch.status === 'failed'">
-                      <span class="task-channel-hint ml-1">失败</span>
-                      <span v-if="channelDisplayElapsed(task, ch)"
-                            class="task-channel-time ml-1.5 d-inline-flex align-center">
-                        <span class="opacity-60">(</span>
-                        <v-icon icon="mdi-clock-outline" size="9" class="mx-0.5 opacity-75" />
-                        <span>{{ channelDisplayElapsed(task, ch) }}</span>
-                        <span class="opacity-60">)</span>
-                      </span>
-                    </template>
-                    <span v-else-if="ch.status === 'pending'" class="task-channel-hint ml-1">
+                    <span v-else-if="ch.status === 'failed'" class="task-channel-tag task-channel-tag--err">
+                      失败
+                    </span>
+                    <span v-else-if="ch.status === 'pending'" class="task-channel-tag task-channel-tag--pending">
                       等待
+                    </span>
+
+                    <span v-if="channelDisplayElapsed(task, ch)" class="task-channel-time">
+                      {{ channelDisplayElapsed(task, ch) }}
                     </span>
                   </div>
                 </div>
@@ -746,10 +727,15 @@ function displayTotal(task) {
 .task-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) 26px;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  min-height: 42px;
-  padding: 4px 10px;
+  min-height: 34px;
+  padding: 5px 10px 4px;
+}
+
+.task-leading-icon {
+  margin-top: 1.5px;
+  flex-shrink: 0;
 }
 
 .task-row + .task-row {
@@ -759,23 +745,23 @@ function displayTotal(task) {
 .task-line {
   display: flex;
   align-items: center;
-  gap: 6px;
-  line-height: 1.25;
+  gap: 5px;
+  line-height: 1.32;
 }
 
 .task-name {
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.25;
+  line-height: 1.32;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .task-line :deep(.v-chip) {
-  height: 18px !important;
-  font-size: 10px !important;
-  padding: 0 5px !important;
+  height: 17px !important;
+  font-size: 9.5px !important;
+  padding: 0 4px !important;
 }
 
 .runtime-header > .d-flex {
@@ -786,13 +772,14 @@ function displayTotal(task) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 2px;
-  line-height: 1.2;
+  margin-top: 2.5px;
+  line-height: 1.32;
 }
 
 .task-phase {
-  font-size: 11px;
-  line-height: 1.2;
+  font-size: 11.5px;
+  line-height: 1.32;
+  color: rgba(var(--v-theme-on-surface), 0.82) !important;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -812,22 +799,34 @@ function displayTotal(task) {
   height: 16px !important;
   min-width: 16px !important;
   padding: 0 !important;
+  color: rgba(var(--v-theme-on-surface), 0.72) !important;
+  opacity: 0.85;
+}
+
+.task-detail-toggle :deep(.v-icon) {
+  font-size: 13px !important;
+}
+
+.task-detail-toggle:hover {
+  opacity: 1;
+  color: rgb(var(--v-theme-primary)) !important;
 }
 
 .task-stop-btn {
-  width: 24px !important;
-  height: 24px !important;
-  min-width: 24px !important;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
   padding: 0 !important;
+  margin-top: -1px;
 }
 
 .task-details {
   display: grid;
-  gap: 4px;
-  margin-top: 7px;
-  padding: 7px 0 1px;
-  border-top: 1px dashed rgba(var(--v-border-color), 0.18);
-  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  gap: 2px;
+  margin-top: 4px;
+  padding: 3px 0 1px;
+  border-top: 1px dashed rgba(var(--v-border-color), 0.14);
+  color: rgba(var(--v-theme-on-surface), 0.8);
 }
 
 .task-detail-row {
@@ -885,7 +884,7 @@ function displayTotal(task) {
 
 .task-search-details {
   width: 100%;
-  padding: 3px 0 1px;
+  padding: 1px 0 0;
 }
 
 .task-search-channels {
@@ -894,94 +893,125 @@ function displayTotal(task) {
   width: 100%;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 5px 8px;
 }
 
 .task-channel-badge {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   height: 22px;
-  border-radius: 11px;
-  padding: 0 8px;
+  border-radius: 5px;
+  padding: 0 7px;
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
-  background: rgba(var(--v-theme-surface-variant), 0.35);
-  color: rgba(var(--v-theme-on-surface), 0.82);
-  border: 1px solid rgba(var(--v-border-color), 0.16);
-  transition: all 0.15s ease;
+  background: rgba(var(--v-theme-surface-variant), 0.28);
+  color: rgba(var(--v-theme-on-surface), 0.88);
+  border: 1px solid rgba(var(--v-border-color), 0.14);
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
 }
 
 .task-channel-badge:hover {
   transform: translateY(-1px);
+  border-color: rgba(var(--v-border-color), 0.32);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.task-channel-icon {
+  flex-shrink: 0;
 }
 
 .task-channel-name {
+  font-weight: 550;
+  letter-spacing: 0.1px;
+}
+
+.task-channel-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.task-channel-tag--count {
+  color: rgb(var(--v-theme-success));
+}
+
+.task-channel-tag--zero {
+  opacity: 0.75;
   font-weight: 500;
 }
 
+.task-channel-tag--searching {
+  color: rgb(var(--v-theme-info));
+}
+
+.task-channel-tag--warn {
+  color: rgb(var(--v-theme-warning));
+}
+
+.task-channel-tag--err {
+  color: rgb(var(--v-theme-error));
+}
+
+.task-channel-tag--pending {
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.task-channel-time {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  letter-spacing: -0.2px;
+}
+
+.task-channel-time::before {
+  content: "·";
+  margin-right: 3px;
+  opacity: 0.55;
+  font-weight: normal;
+}
+
 .task-channel-badge--success {
-  background: rgba(var(--v-theme-success), 0.14);
+  background: rgba(var(--v-theme-success), 0.1);
   color: rgb(var(--v-theme-success));
-  border-color: rgba(var(--v-theme-success), 0.35);
+  border-color: rgba(var(--v-theme-success), 0.28);
 }
 
 .task-channel-badge--empty {
-  background: rgba(var(--v-theme-success), 0.08);
-  color: rgb(var(--v-theme-success));
-  border-color: rgba(var(--v-theme-success), 0.24);
-  opacity: 0.92;
+  background: rgba(var(--v-theme-on-surface), 0.035);
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  border-color: rgba(var(--v-border-color), 0.12);
 }
 
 .task-channel-badge--searching {
-  background: rgba(var(--v-theme-info), 0.12);
+  background: rgba(var(--v-theme-info), 0.08);
   color: rgb(var(--v-theme-info));
-  border-color: rgba(var(--v-theme-info), 0.32);
+  border-color: rgba(var(--v-theme-info), 0.28);
 }
 
-.task-channel-badge--timeout {
-  background: rgba(var(--v-theme-warning), 0.1);
-  color: rgb(var(--v-theme-warning));
-  border-color: rgba(var(--v-theme-warning), 0.28);
-}
-
+.task-channel-badge--timeout,
 .task-channel-badge--circuit_break {
   background: rgba(var(--v-theme-warning), 0.08);
   color: rgb(var(--v-theme-warning));
-  border-color: rgba(var(--v-theme-warning), 0.24);
+  border-color: rgba(var(--v-theme-warning), 0.26);
 }
 
 .task-channel-badge--failed {
-  background: rgba(var(--v-theme-error), 0.12);
+  background: rgba(var(--v-theme-error), 0.08);
   color: rgb(var(--v-theme-error));
-  border-color: rgba(var(--v-theme-error), 0.32);
-  font-weight: 550;
+  border-color: rgba(var(--v-theme-error), 0.28);
 }
 
 .task-channel-badge--pending {
   color: rgba(var(--v-theme-on-surface), 0.45);
-  background: rgba(var(--v-theme-on-surface), 0.04);
-}
-
-.task-channel-count {
-  font-weight: 600;
-}
-
-.task-channel-time {
-  font-size: 10px;
-  font-weight: normal;
-  opacity: 0.85;
-}
-
-.task-status-chip {
-  font-weight: 550;
-}
-
-.task-status-time {
-  font-size: 10px;
-  font-weight: 500;
-  opacity: 0.92;
+  background: rgba(var(--v-theme-on-surface), 0.03);
+  border-color: rgba(var(--v-border-color), 0.08);
 }
 
 .task-elapsed {
@@ -995,7 +1025,7 @@ function displayTotal(task) {
 }
 
 .task-progress {
-  margin-top: 5px;
+  margin-top: 0;
 }
 
 .task-progress :deep(.v-progress-linear__determinate) {
@@ -1035,7 +1065,8 @@ function displayTotal(task) {
 
 .task-progress-container {
   width: 100%;
-  margin-top: 3px;
+  margin-top: 3.5px;
+  margin-bottom: 1px;
   line-height: 1;
 }
 
@@ -1109,24 +1140,25 @@ function displayTotal(task) {
   .task-channel-badge {
     flex: 1 1 auto;
     min-width: 0;
-    height: 20px;
-    padding: 0 5px;
-    font-size: 10px;
+    height: 22px;
+    padding: 0 6px;
+    font-size: 10.5px;
+    gap: 3px;
     justify-content: center;
     border-radius: 6px;
     white-space: nowrap;
   }
 
   .task-channel-badge :deep(.v-icon) {
-    font-size: 10px !important;
-    margin-right: 2px !important;
+    font-size: 11px !important;
+    margin-right: 0 !important;
     flex-shrink: 0;
   }
 
   .task-channel-badge :deep(.v-progress-circular) {
-    width: 8px !important;
-    height: 8px !important;
-    margin-right: 2px !important;
+    width: 9px !important;
+    height: 9px !important;
+    margin-right: 0 !important;
     flex-shrink: 0;
   }
 
@@ -1139,15 +1171,14 @@ function displayTotal(task) {
     flex-shrink: 0;
   }
 
-  .task-channel-count,
-  .task-channel-hint {
-    font-size: 9.5px;
-    margin-left: 2px !important;
+  .task-channel-tag {
+    font-size: 10px;
+    margin-left: 0 !important;
     flex-shrink: 0;
   }
 
   /* 手机端省略“搜索中”文本，只保留加载动效，为完整显示驱动名称腾出空间 */
-  .task-channel-searching-text {
+  .task-channel-tag--searching {
     display: none !important;
   }
 

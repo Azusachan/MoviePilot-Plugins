@@ -13,7 +13,7 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from .utils import extract_ed2k_filename
+from .utils import extract_ed2k_filename, normalize_season
 from ...core import CloudDriveCapability, OwnerDelegator
 from ...search.subs_filter import anime_file_candidates
 from ...utils import MediaFileParser
@@ -271,23 +271,13 @@ class PostprocessService(OwnerDelegator):
     def _cleanup_failed_offline_task(
             self, item: Dict[str, Any], reason: str
     ) -> None:
-        """失败后删除对应离线任务及其已下载文件。"""
+        """失败后仅记录日志，保留离线任务及已下载文件，避免误删用户云端资产。"""
         task_id = str(item.get("task_id") or "").strip().upper()
-        if not task_id or not self._offline_tasks:
+        if not task_id:
             return
-        try:
-            deleted = self._offline_tasks.delete_offline_task(
-                task_id, delete_source_file=True
-            )
-            if deleted:
-                logger.debug(
-                    f"Magnet 匹配失败，已删除离线任务及下载文件：{task_id}，原因：{reason}"
-                )
-        except Exception as error:
-            logger.debug(
-                f"Magnet 匹配失败后清理离线任务及下载文件失败：{task_id}，{error}"
-            )
-
+        logger.warning(
+            f"Magnet 后处理未完成，保留离线任务及已下载文件：{task_id}，原因：{reason}"
+        )
     @staticmethod
     def _upgrade_backup_name(file_name: str, task_id: str) -> str:
         """仅在原文件名后追加短任务 ID，避免隐藏文件和冗长标记。"""
@@ -1202,7 +1192,7 @@ class PostprocessService(OwnerDelegator):
             item, pending_key, "organize", "整理 Magnet 下载文件"
         )
         finalized = self._finalize_magnet_package(
-            item, pending_key, subscribe_cache=ctx.subscribe_cache
+            item, pending_key, subscribe_cache=ctx.subscribe_cache, offline_task=task
         )
         if finalized is None:
             if not self._finalize_failure(item, pending_key):
@@ -1810,6 +1800,7 @@ class PostprocessService(OwnerDelegator):
             item: Dict[str, Any],
             pending_key: str,
             subscribe_cache: Optional[Dict[int, Any]] = None,
+            offline_task: Optional[Dict[str, Any]] = None,
     ) -> Optional[List[Dict[str, Any]]]:
         """读取完成后的真实文件树，只移动实际匹配的媒体文件。"""
         mediainfo, media_data = self._restore_pending_media_context(item, pending_key)
@@ -1833,7 +1824,15 @@ class PostprocessService(OwnerDelegator):
             )
             return []
 
-        files = self._cloud_query.list_files_recursive(item.get("cloud_dir"), max_depth=6)
+        task_files_func = getattr(self._cloud_query, "list_offline_task_files", None)
+        files = []
+        if callable(task_files_func) and offline_task:
+            try:
+                files = task_files_func(offline_task, item.get("cloud_dir") or "/")
+            except Exception as e:
+                logger.debug(f"精准定位离线任务文件异常，回退扫描：{e}")
+        if not files:
+            files = self._cloud_query.list_files_recursive(item.get("cloud_dir"), max_depth=6)
         video_files = [
             file_item for file_item in files
             if MediaFileParser.is_video(str(file_item.get("name") or ""))
@@ -1866,7 +1865,7 @@ class PostprocessService(OwnerDelegator):
                 candidates = anime_file_candidates(
                     video_files,
                     resource.get("title") or "",
-                    max(1, int(season or 1)),
+                    normalize_season(season),
                     target_episodes,
                 )
                 episode_files = {
@@ -1878,7 +1877,7 @@ class PostprocessService(OwnerDelegator):
                     video_files,
                     mediainfo,
                     subscribe,
-                    max(1, int(season or 1)),
+                    normalize_season(season),
                     target_episodes,
                 )
             matched = [

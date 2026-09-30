@@ -208,31 +208,13 @@ class SyncExecutionService(OwnerDelegator):
                 set(range(start_episode, total_episode + 1))
                 if is_tv and total_episode >= start_episode else set()
             )
-            calendar_entry = (
-                self._sync_handler.get_tv_subscribe_calendar(subscribe)
-                if self._sync_handler and expected_episodes else None
-            )
-            unreleased_episodes = {
-                int(episode)
-                for episode in (
-                        (calendar_entry or {}).get("unreleased_episodes") or []
-                )
-            }
             preparation = {
                 "tmdb_id": int(tmdb_id_of(subscribe) or 0),
-                "calendar": calendar_entry,
                 "expected_episodes": sorted(expected_episodes),
-                "aired_target_episodes": sorted(
-                    expected_episodes - unreleased_episodes
-                ),
-                "unreleased_episodes": sorted(unreleased_episodes),
-                "all_targets_future": bool(
-                    calendar_entry
-                    and calendar_entry.get("all_targets_future")
-                ),
-                "defer_until": str(
-                    (calendar_entry or {}).get("defer_until") or ""
-                ),
+                "aired_target_episodes": sorted(expected_episodes),
+                "unreleased_episodes": [],
+                "all_targets_future": False,
+                "defer_until": "",
             }
             setattr(subscribe, "_cloudsubscribe_preparation", preparation)
             return subscribe
@@ -1118,6 +1100,15 @@ class SyncExecutionService(OwnerDelegator):
         except Exception as e:
             logger.error(f"插件全局配置应用失败（下次首次执行重试）: {e}")
 
+    def _apply_pending_config_if_idle(self) -> bool:
+        """若离线监控线程正忙则延后应用配置，避免阻塞搜索与同步主线程。"""
+        if not self._offline_monitor_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._apply_pending_config()
+        finally:
+            self._offline_monitor_lock.release()
+
     def _release_sync_resources(self, notification_batch_started: bool) -> None:
         try:
             # 配置重载会关闭旧 SyncHandler；必须避开正在使用它的后处理线程。
@@ -1194,8 +1185,7 @@ class SyncExecutionService(OwnerDelegator):
         task_counts: Dict[str, int] = {}
         stop_requested = False
         try:
-            with self._offline_monitor_lock:
-                self._apply_pending_config()
+            self._apply_pending_config_if_idle()
             # 首次成功运行时才应用系统级配置（避免安装失败却污染MP配置）
             if is_full_sync:
                 self._apply_global_config_once()

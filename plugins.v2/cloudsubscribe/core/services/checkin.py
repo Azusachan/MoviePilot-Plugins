@@ -95,6 +95,9 @@ class CheckinService(OwnerDelegator):
             provider_key: str = "",
     ) -> Optional[int]:
         """综合本地打卡历史与渠道返回，计算累计签到天数。"""
+        provider_def = get_checkin_definitions().get(str(provider_key or "").strip().lower())
+        if provider_def and not getattr(provider_def, "track_days", True):
+            return None
         signed_dates = {
             cls._record_date_key(item)
             for item in (history or [])
@@ -603,6 +606,10 @@ class CheckinService(OwnerDelegator):
         if points_change is not None:
             points_label = str(item.get("points_label") or "积分")
             details.append(f"{points_label} {points_change:+d}")
+        points_after = record.get("points_after")
+        if points_after is not None:
+            points_label = str(item.get("points_label") or "积分")
+            details.append(f"当前{points_after}{points_label}")
         message = str(record.get("message") or "")
         if not success and message and message != status:
             details.append(message[:36])

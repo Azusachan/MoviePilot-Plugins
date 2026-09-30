@@ -115,6 +115,9 @@ class P115FileQuery:
     def list_files_recursive(self, path: str, **kwargs: Any) -> list[CloudFile]:
         return cloud_files(self.manager.list_files_recursive(path, **kwargs))
 
+    def list_offline_task_files(self, task: Any, path: str) -> list[CloudFile]:
+        return cloud_files(self.manager.list_offline_task_files(task, path))
+
     def find_file(self, path: str, file_name: str, **kwargs: Any) -> CloudFile | None:
         return cloud_file(self.manager.find_file_by_exact_name(path, file_name, **kwargs))
 
@@ -741,11 +744,7 @@ class P115FileService(OwnerDelegator):
             logger.error(f"列出文件失败: {e}")
             return False, []
 
-    def list_files_recursive(self, path: str, max_depth: int = 5) -> List[dict]:
-        """下载完成后按目录批次读取真实文件树，并保留源父目录。"""
-        root_cid = self.get_pid_by_path(path, mkdir=False)
-        if root_cid == -1:
-            return []
+    def _list_files_recursive_by_cid(self, root_cid: Any, path: str, max_depth: int = 5) -> List[dict]:
         result = []
         queue = deque([(root_cid, str(path).rstrip("/"), 0)])
         while queue:
@@ -774,6 +773,45 @@ class P115FileService(OwnerDelegator):
                 else:
                     result.append(item)
         return result
+
+    def list_files_recursive(self, path: str, max_depth: int = 5) -> List[dict]:
+        """下载完成后按目录批次读取真实文件树，并保留源父目录。"""
+        root_cid = self.get_pid_by_path(path, mkdir=False)
+        if root_cid == -1:
+            return []
+        return self._list_files_recursive_by_cid(root_cid, path, max_depth)
+
+    def list_offline_task_files(self, task: Any, path: str) -> List[dict]:
+        """精确定位离线任务生成的文件或目录，避免全盘递归扫描。"""
+        if not isinstance(task, dict):
+            return []
+        file_id = str(task.get("file_id") or "").strip()
+        parent_id = task.get("parent_id")
+        if not file_id or parent_id in (None, ""):
+            return []
+        checked, items = self.list_files_by_cid_checked(parent_id)
+        if not checked:
+            return []
+        base = str(path or "/").rstrip("/")
+        for raw in items:
+            raw_dict = dict(raw)
+            fid = str(raw_dict.get("id") or raw_dict.get("fid") or "")
+            cid = str(raw_dict.get("cid") or "")
+            if fid != file_id and cid != file_id:
+                continue
+            name = str(raw_dict.get("name") or raw_dict.get("n") or "").strip()
+            is_dir = bool(
+                raw_dict.get("is_dir")
+                or (str(raw_dict.get("fid") or "0") == "0" and raw_dict.get("cid"))
+            )
+            raw_dict["is_dir"] = is_dir
+            if is_dir:
+                dir_id = raw_dict.get("cid") or raw_dict.get("id")
+                return self._list_files_recursive_by_cid(dir_id, f"{base}/{name}", 6)
+            raw_dict["_parent_cid"] = str(parent_id)
+            raw_dict["_cloud_dir"] = base or "/"
+            return [raw_dict]
+        return []
 
     def move_and_rename_file(
             self, item: Dict[str, Any], save_path: str, target_name: str

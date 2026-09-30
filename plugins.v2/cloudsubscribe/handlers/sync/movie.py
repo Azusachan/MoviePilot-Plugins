@@ -373,6 +373,12 @@ class MovieSyncProcessor(OwnerDelegator):
                         ):
                             continue
                         provider_name = provider_name or resource_title
+                        title_seasons = self._magnet_title_seasons(resource)
+                        if title_seasons:
+                            logger.debug(
+                                f"电影离线资源包含剧集季数，已跳过：{provider_name}"
+                            )
+                            continue
                         matched, current_score = self._search_handler.select_file_candidate(
                             [{"name": provider_name, "size": resource.get("size") or 0}],
                             mediainfo,

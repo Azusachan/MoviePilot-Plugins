@@ -70,8 +70,8 @@ class SearchSourceRegistry:
 
     @classmethod
     def get_source_catalog(cls) -> List[Dict[str, Any]]:
-        """返回搜索渠道展示目录（含手动与未知占位），供前端直接渲染。"""
-        catalog = [
+        """返回搜索渠道展示目录，供前端直接渲染。"""
+        return [
             {
                 "key": def_cls.id,
                 "name": def_cls.name,
@@ -80,15 +80,6 @@ class SearchSourceRegistry:
             }
             for def_cls in cls.get_definitions()
         ]
-        catalog.append({
-            "key": "manual", "name": "手动添加",
-            "icon": "mdi-hand-pointing-right", "color": "grey",
-        })
-        catalog.append({
-            "key": "unknown", "name": "未知",
-            "icon": "mdi-help-circle-outline", "color": "grey",
-        })
-        return catalog
 
     @classmethod
     def get_search_schemas(cls, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

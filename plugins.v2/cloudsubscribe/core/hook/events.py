@@ -637,6 +637,9 @@ class PluginEventHandler(OwnerDelegator):
             if record.get("points_change") is not None:
                 points_label = "枫叶" if provider == "p115" else "积分"
                 details.append(f"{points_label} {int(record.get('points_change') or 0):+d}")
+            if record.get("points_after") is not None:
+                points_label = "枫叶" if provider == "p115" else "积分"
+                details.append(f"当前{record.get('points_after')}{points_label}")
             if not record.get("success") and record.get("message"):
                 message = str(record.get("message"))
                 if message != status:

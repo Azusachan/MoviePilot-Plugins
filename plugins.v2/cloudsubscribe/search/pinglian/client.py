@@ -1,5 +1,6 @@
 """盘链网页登录、资源查询与分享链接解析。"""
 
+import base64
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
@@ -7,6 +8,7 @@ from urllib.parse import urlparse
 
 from app.log import logger
 
+from .captcha import PinglianCaptchaRecognizer
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
@@ -14,11 +16,6 @@ from ..http_client import (
     normalize_proxies,
     request_error_summary,
     requests,
-)
-from ..types import (
-    append_share_password,
-    normalize_resource_type,
-    resource_type_from_url,
 )
 
 
@@ -85,6 +82,7 @@ class PinglianClient:
         self._save_data_func = save_data_func
         self._lock = threading.RLock()
         self._authenticated = False
+        self._captcha = PinglianCaptchaRecognizer()
         self._restore_session()
 
     @property
@@ -207,53 +205,106 @@ class PinglianClient:
             elif self._authenticated and self._check_auth_status():
                 return
 
-            try:
-                response = gated_request(
-                    self._request_gate,
-                    self._session_request,
-                    "POST",
-                    f"{self.base_url}/api/auth/login",
-                    data={
-                        "username": self.username,
-                        "password": self.password,
-                        "remember": "1",
-                    },
-                    headers={
-                        "Origin": self.base_url,
-                        "Referer": f"{self.base_url}/login",
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                    proxies=self._proxies,
-                    timeout=self._timeout,
-                )
-            except requests.exceptions.RequestException as error:
-                raise PinglianError(
-                    f"盘链登录失败：{request_error_summary(error)}",
-                    "pinglian_login_failed",
-                ) from error
+            max_captcha_attempts = 3
+            for attempt in range(1, max_captcha_attempts + 1):
+                cid, code = self._fetch_captcha()
+                try:
+                    response = gated_request(
+                        self._request_gate,
+                        self._session_request,
+                        "POST",
+                        f"{self.base_url}/api/auth/login",
+                        data={
+                            "username": self.username,
+                            "password": self.password,
+                            "remember": "1",
+                            "captcha_id": cid,
+                            "captcha_code": code,
+                        },
+                        headers={
+                            "Origin": self.base_url,
+                            "Referer": f"{self.base_url}/login",
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
+                        proxies=self._proxies,
+                        timeout=self._timeout,
+                    )
+                except requests.exceptions.RequestException as error:
+                    raise PinglianError(
+                        f"盘链登录失败：{request_error_summary(error)}",
+                        "pinglian_login_failed",
+                    ) from error
 
+                payload = {}
+                if self._is_json(response):
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload = {}
+                elif response.status_code != 200:
+                    raise PinglianError(
+                        f"盘链登录失败（HTTP {response.status_code}）",
+                        "pinglian_login_failed",
+                    )
+
+                if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("success"):
+                    details = (payload or {}).get("details") or {}
+                    if isinstance(details, dict) and details.get("captcha_error"):
+                        logger.warning(
+                            f"盘链验证码识别错误，重试第 {attempt}/{max_captcha_attempts} 次..."
+                        )
+                        time.sleep(0.3)
+                        continue
+                    error_msg = str(
+                        (payload or {}).get("message")
+                        or f"盘链登录失败（HTTP {response.status_code}）"
+                    )
+                    raise PinglianError(error_msg, "pinglian_login_failed")
+
+                self._authenticated = True
+                self._save_session()
+                logger.info("盘链登录成功并已更新会话")
+                return
+
+            raise PinglianError("盘链验证码连续识别失败，请检查网络或重试", "pinglian_captcha_failed")
+
+    def _fetch_captcha(self) -> tuple[str, str]:
+        """获取并自动识别盘链图形验证码，返回 (captcha_id, captcha_code)。"""
+        try:
+            response = gated_request(
+                self._request_gate,
+                self._session_request,
+                "GET",
+                f"{self.base_url}/api/auth/captcha",
+                headers={
+                    "Origin": self.base_url,
+                    "Referer": f"{self.base_url}/login",
+                },
+                proxies=self._proxies,
+                timeout=self._timeout,
+            )
             if response.status_code != 200 or not self._is_json(response):
                 raise PinglianError(
-                    f"盘链登录失败（HTTP {response.status_code}）",
-                    "pinglian_login_failed",
+                    f"获取盘链验证码失败（HTTP {response.status_code}）",
+                    "pinglian_captcha_failed",
                 )
-            try:
-                payload = response.json()
-            except ValueError as error:
-                raise PinglianError(
-                    "盘链登录响应格式异常", "pinglian_schema_changed"
-                ) from error
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            cid = str(data.get("id") or "").strip()
+            raw_b64 = str(data.get("image") or "").split(",", 1)[-1]
+            if not cid or not raw_b64:
+                raise PinglianError("盘链验证码数据缺失", "pinglian_captcha_failed")
+            img_bytes = base64.b64decode(raw_b64)
+            code, confidence = self._captcha.recognize(img_bytes)
+            logger.debug(f"盘链验证码自动识别：[{code}]（置信度 {confidence:.2f}）")
+            return cid, code
+        except Exception as error:
+            if isinstance(error, PinglianError):
+                raise
+            raise PinglianError(
+                f"获取并识别盘链验证码异常：{error}", "pinglian_captcha_failed"
+            ) from error
 
-            if not isinstance(payload, dict) or not payload.get("success"):
-                error_msg = str(
-                    (payload or {}).get("message")
-                    or "盘链账号或密码错误"
-                )
-                raise PinglianError(error_msg, "pinglian_login_failed")
-
-            self._authenticated = True
-            self._save_session()
-            logger.info("盘链登录成功并已更新会话")
 
     def _request(
             self,
@@ -348,76 +399,6 @@ class PinglianClient:
             raise PinglianError(message, error_type)
         return payload
 
-    @staticmethod
-    def apply_password(resource_type: str, target: str, password: str) -> str | bytes:
-        """按资源类型把提取码附加到直链，规则与搜索层保持同一份定义。"""
-        return append_share_password(resource_type, target, password)
-
-    def resolve_resource(
-            self,
-            token: str = "",
-            resource_type: str = "",
-            password: str = "",
-            link_id: str = "",
-            **kwargs,
-    ) -> Dict[str, str | bytes]:
-        """按两步解锁流程换取盘链的真实网盘直链。"""
-        target_id = str(link_id or token or "").strip()
-        expected_type = normalize_resource_type(resource_type)
-        if not target_id:
-            raise PinglianError("盘链资源标识无效", "pinglian_invalid_token")
-
-        # 第一步：获取解锁凭证 (link-ticket)
-        try:
-            ticket_payload = self.request_json(
-                "/api/videos/link-ticket",
-                method="POST",
-                json={"link_id": int(target_id) if target_id.isdigit() else target_id},
-            )
-        except Exception as error:
-            raise PinglianError(
-                f"获取盘链资源解锁凭证失败：{error}", "pinglian_ticket_failed"
-            ) from error
-
-        ticket_data = ticket_payload.get("data") if isinstance(ticket_payload, dict) else {}
-        ticket = str((ticket_data or {}).get("ticket") or "").strip()
-        ticket_code = str((ticket_data or {}).get("code") or "").strip()
-        if not ticket:
-            raise PinglianError("盘链未返回有效解锁凭证", "pinglian_ticket_empty")
-
-        # 第二步：使用凭证换取实际网盘链接 (link-open)
-        try:
-            open_payload = self.request_json(
-                f"/api/videos/link-open/{target_id}",
-                method="GET",
-                params={"t": ticket},
-            )
-        except Exception as error:
-            raise PinglianError(
-                f"打开盘链真实链接失败：{error}", "pinglian_open_failed"
-            ) from error
-
-        open_data = open_payload.get("data") if isinstance(open_payload, dict) else {}
-        target_url = str((open_data or {}).get("url") or "").strip()
-        if not target_url:
-            raise PinglianError("盘链未返回有效分享链接", "pinglian_empty_link")
-
-        actual_type = resource_type_from_url(target_url)
-        final_type = actual_type or expected_type
-
-        # 密码提取优先级：link-open 返回的密码 > ticket 附带的 code > 参数传入的 password
-        resolved_pwd = str(
-            (open_data or {}).get("password")
-            or (open_data or {}).get("code")
-            or ticket_code
-            or password
-            or ""
-        ).strip()
-
-        return {
-            "url": self.apply_password(final_type, target_url, resolved_pwd),
-            "resource_type": final_type,
-        }
 
     def get_account_info(self) -> Dict[str, Any]:
         """从新版个人中心及配额接口读取账户、会员与配额信息。"""
@@ -437,40 +418,126 @@ class PinglianClient:
         except Exception as error:
             logger.debug(f"盘链读取配额信息失败：{error}")
 
-        quota_text = ""
-        if isinstance(quota, dict) and quota:
-            if quota.get("unlimited"):
-                quota_text = "不限次数"
-            elif "limit" in quota and "used" in quota:
-                quota_text = f"{quota.get('used', 0)}/{quota.get('limit', 0)} 次"
-            elif quota.get("remaining") is not None:
-                quota_text = f"{quota.get('remaining')} 次"
+        if isinstance(quota, dict) and quota.get("unlimited"):
+            remaining_text = "不限次数"
+            quota_text = "今日解锁查看不限次数"
+        elif isinstance(quota, dict) and quota.get("remaining") is not None:
+            rem = int(quota.get("remaining", 0) or 0)
+            remaining_text = f"{rem} 次"
+            if quota.get("limit") is not None:
+                limit = int(quota.get("limit") or 0)
+                used = int(quota.get("used", 0) or 0)
+                quota_text = f"{used}/{limit} 次"
+            else:
+                quota_text = f"{rem} 次"
+        elif isinstance(quota, dict) and quota.get("limit") is not None:
+            limit = int(quota.get("limit") or 0)
+            used = int(quota.get("used", 0) or 0)
+            rem = max(0, limit - used)
+            remaining_text = f"{rem} 次"
+            quota_text = f"{used}/{limit} 次"
+        else:
+            remaining_text = "—"
+            quota_text = "—"
+        task_data = self.get_task_center()
+        checkin_info = (task_data.get("checkin") or {}) if isinstance(task_data, dict) else {}
+        total_days = checkin_info.get("total_days")
+        try:
+            signin_days = int(total_days) if total_days is not None else None
+        except (TypeError, ValueError):
+            signin_days = None
 
         details: Dict[str, str] = {}
+        details["quota"] = quota_text
+        details["remaining_quota"] = remaining_text
+        if signin_days is not None:
+            details["signin_days"] = f"{signin_days}"
         if profile.get("created_at"):
-            details["注册日期"] = _format_datetime(profile.get("created_at"))
+            details["created_at"] = _format_datetime(profile.get("created_at"))
         if profile.get("vip_expires_at"):
-            details["VIP 到期"] = _format_datetime(profile.get("vip_expires_at"))
+            details["vip_expires_at"] = _format_datetime(profile.get("vip_expires_at"))
         if profile.get("account_count") is not None:
-            details["关联网盘数"] = f"{int(profile.get('account_count') or 0)} 个"
-
-        remaining_quota = (
-            quota.get("remaining") if isinstance(quota, dict) else None
-        )
-        points = quota_text or (int(remaining_quota) if remaining_quota is not None else 0)
-
+            details["account_count"] = f"{int(profile.get('account_count') or 0)}"
         return {
             "name": name,
             "email": str(profile.get("email") or ""),
             "level": level_str,
-            "points": points,
-            "quota_text": quota_text,
+            "points": remaining_text,
+            "quota_text": remaining_text,
+            "quota_usage": quota_text,
+            "signin_days": signin_days,
             "expires_at": _format_datetime(profile.get("vip_expires_at")),
             "registered_at": _format_datetime(profile.get("created_at")),
             "invite_count": "",
             "details": details,
         }
 
+    def get_task_center(self) -> Dict[str, Any]:
+        """读取盘链任务中心状态（包含今日签到状态与配额）。"""
+        try:
+            payload = self.request_json("/api/tasks")
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            return data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
+        except Exception as error:
+            logger.debug(f"读取盘链任务中心状态失败：{error}")
+            return {}
+
+    def checkin(self, mode: str = "normal") -> Dict[str, Any]:
+        before_profile = self.get_account_info()
+        task_data = self.get_task_center()
+        checkin_info = (task_data.get("checkin") or {}) if isinstance(task_data, dict) else {}
+        already_checked_in = bool(checkin_info.get("done"))
+
+        payload: Dict[str, Any] = {}
+        if not already_checked_in:
+            try:
+                payload = self.request_json("/api/tasks/checkin", method="POST", json={})
+            except Exception as error:
+                refreshed_tasks = self.get_task_center()
+                refreshed_checkin = (refreshed_tasks.get("checkin") or {}) if isinstance(refreshed_tasks, dict) else {}
+                if not refreshed_checkin.get("done"):
+                    raise PinglianError(f"盘链签到失败：{error}", "pinglian_checkin_failed") from error
+                already_checked_in = True
+
+        after_profile = self.get_account_info()
+        after_tasks = self.get_task_center()
+        checkin_info = (after_tasks.get("checkin") or {}) if isinstance(after_tasks, dict) else {}
+        total_days = checkin_info.get("total_days")
+        try:
+            signin_days = int(total_days) if total_days is not None else None
+        except (TypeError, ValueError):
+            signin_days = None
+
+        success = bool(already_checked_in or payload.get("success", True))
+        status_text = "今日已签到" if already_checked_in else ("签到成功" if success else "签到失败")
+
+        quota_msg = after_profile.get("quota_text") or ""
+        msg_parts = [status_text]
+        if payload.get("message") and str(payload.get("message")) not in (status_text, "success"):
+            msg_parts.append(str(payload.get("message")))
+        if quota_msg:
+            msg_parts.append(f"今日剩余配额: {quota_msg}")
+
+        message = "，".join(msg_parts)
+        return {
+            "success": success,
+            "already_checked_in": already_checked_in,
+            "status": status_text,
+            "message": message,
+            "mode": "normal",
+            "signin_days": signin_days,
+            "points_before": before_profile.get("points") or 0,
+            "points_after": after_profile.get("points") or 0,
+            "points_change": 0,
+            "details": {
+                "status": status_text,
+                "today_quota": quota_msg,
+                "remaining_quota": after_profile.get("points") or "",
+                "quota_usage": after_profile.get("quota_usage") or "",
+                "signin_days": signin_days,
+                "vip_level": after_profile.get("level", ""),
+            },
+        }
     def clear_cache(self) -> Dict[str, int]:
         return {"session": int(self._authenticated)}
 

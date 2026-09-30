@@ -1497,9 +1497,23 @@ class SyncHandler:
                 f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
             )
             return ""
+        if season is None and title_seasons:
+            logger.debug(
+                "电影离线资源包含剧集季数，预过滤排除："
+                f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
+                f"标题={magnet_title or info_hash}"
+            )
+            return ""
         title_episodes = self._magnet_title_episodes(
             resource, int(season or 1)
         )
+        if season is None and title_episodes:
+            logger.debug(
+                "电影离线资源包含剧集集数，预过滤排除："
+                f"标题集数={self._format_episode_ranges(title_episodes)}，"
+                f"标题={magnet_title or info_hash}"
+            )
+            return ""
         preview_episodes = (
                 title_episodes
                 or self._resource_preview_episodes(resource, int(season or 1))
@@ -1530,10 +1544,16 @@ class SyncHandler:
                 and not preview_episodes
                 and not metadata.get("torrent_files")
         ):
-            logger.debug(
-                "Magnet 标题未识别明确集数，开始获取远端内容元数据："
-                f"{magnet_title or info_hash}"
-            )
+            if season is not None:
+                logger.debug(
+                    "Magnet 标题未识别明确集数，开始获取远端内容元数据："
+                    f"{magnet_title or info_hash}"
+                )
+            else:
+                logger.debug(
+                    "Magnet 开始获取远端内容元数据："
+                    f"{magnet_title or info_hash}"
+                )
             magnet_info = self._offline_download.parse_magnet_link(
                 share_url, fetch_metadata=True
             )
@@ -1560,6 +1580,13 @@ class SyncHandler:
                         f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
                     )
                     return ""
+                if season is None and title_seasons:
+                    logger.debug(
+                        "Magnet 远端内容元数据包含剧集季数，与电影订阅不匹配，已跳过："
+                        f"内容季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
+                        f"标题={magnet_title or info_hash}"
+                    )
+                    return ""
                 title_episodes = self._magnet_title_episodes(
                     resource, int(season or 1)
                 )
@@ -1577,9 +1604,11 @@ class SyncHandler:
                 or not self._get_data
                 or (
                 self._is_magnet_url(share_url)
-                and not bool(metadata.get("metadata_available"))
-                and not bool(title_episodes)
-                and not bool(preview_episodes)
+                and (
+                        (season is not None and not bool(metadata.get("metadata_available")) and not bool(
+                            title_episodes) and not bool(preview_episodes))
+                        or (season is None and not bool(metadata.get("metadata_available")) and not bool(magnet_title))
+                )
         )
         ):
             logger.debug(
@@ -1631,7 +1660,7 @@ class SyncHandler:
                 "status": "submitting",
                 "subscribe_id": subscribe_id,
                 "season": season,
-                "target_episodes": sorted({int(value) for value in target_episodes if int(value) > 0}),
+                "target_episodes": sorted({int(value) for value in (target_episodes or []) if int(value) > 0}),
                 "mediainfo": self._serialize_mediainfo(mediainfo),
                 "target_subscribe": {
                     "tmdbid": tmdb_id_of(subscribe) if subscribe else None,

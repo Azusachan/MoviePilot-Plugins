@@ -10,6 +10,9 @@ from .client import MikanClient, MikanClientError
 from ..magnet import media_titles, normalize_magnets
 from ..matching import (
     extract_mikan_rss_params,
+    media_aliases,
+    normalize_season,
+    search_keyword_candidates,
     unique_texts,
 )
 from ..subs_filter import (
@@ -17,6 +20,7 @@ from ..subs_filter import (
     is_pack_release,
     release_episodes,
     release_matches,
+    release_season_matches,
 )
 from ...core.search import SearchQuery
 
@@ -74,11 +78,13 @@ class MikanSearchService:
                         subgroup_id=subgroup_id,
                         rss_url=rss_url,
                     )
-                    season_num = query.season or 1
+                    season_num = normalize_season(query.season)
                     results = []
                     for row in rows:
                         row_title = str(row.get("title") or "")
-                        episodes = release_episodes(row_title)
+                        if not release_season_matches(row_title, season_num):
+                            continue
+                        episodes = release_episodes(row_title, season_num)
                         results.append({
                             **row,
                             "season": season_num,
@@ -110,7 +116,9 @@ class MikanSearchService:
             if rss_rows:
                 for row in rss_rows:
                     row_title = str(row.get("title") or "")
-                    episodes = release_episodes(row_title)
+                    if not release_season_matches(row_title, season_num):
+                        continue
+                    episodes = release_episodes(row_title, season_num)
                     results.append({
                         **row,
                         "season": season_num,
@@ -139,7 +147,9 @@ class MikanSearchService:
                     )
                     for row in expanded_rows:
                         row_title = str(row.get("title") or "")
-                        episodes = release_episodes(row_title)
+                        if not release_season_matches(row_title, season_num):
+                            continue
+                        episodes = release_episodes(row_title, season_num)
                         results.append({
                             **row,
                             "season": season_num,
@@ -190,7 +200,8 @@ class MikanSearchService:
             + ([getattr(query, "title", "")] if getattr(query, "title", None) else [])
             + ([getattr(query, "original_title", "")] if getattr(query, "original_title", None) else [])
         )
-        expanded_titles = list(base_titles)
+        aliases = media_aliases(query.mediainfo)
+        expanded_titles = unique_texts(base_titles + aliases)
         for t in base_titles:
             for sep in ("，", "、", "：", ":", " - ", " ~ ", "～"):
                 if sep in t:
@@ -202,7 +213,7 @@ class MikanSearchService:
             return []
 
         results = []
-        season_num = query.season or 1
+        season_num = normalize_season(query.season)
 
         # 3. 优先探测是否命中 Mikan 相关推荐番剧（Bangumi 精准关联）
         try:
@@ -220,7 +231,7 @@ class MikanSearchService:
             logger.debug(f"[MIKAN] 探测相关推荐番剧异常：{bgm_error}")
 
         # 4. 常规关键词 HTML 搜索作为补充与兜底
-        for keyword in titles[:3]:
+        for keyword in search_keyword_candidates(base_titles, aliases):
             try:
                 rows = self._cached_search(keyword)
             except MikanClientError as e:
@@ -233,7 +244,9 @@ class MikanSearchService:
             ]
             for row in matched:
                 row_title = str(row.get("title") or "")
-                episodes = release_episodes(row_title)
+                if not release_season_matches(row_title, season_num):
+                    continue
+                episodes = release_episodes(row_title, season_num)
                 results.append({
                     **row,
                     "season": season_num,
@@ -248,7 +261,7 @@ class MikanSearchService:
         normalized = normalize_magnets(results, "mikan")
         before = len(normalized)
         normalized = filter_fansubs(
-            normalized, config=self._config, prefix="mikan", strict=strict_filter
+            normalized, config={**self._config, "_target_season": query.season}, prefix="mikan", strict=strict_filter
         )
         if before != len(normalized):
             logger.debug(f"[MIKAN] 字幕过滤与排序（strict={strict_filter}）：{before} -> {len(normalized)}")

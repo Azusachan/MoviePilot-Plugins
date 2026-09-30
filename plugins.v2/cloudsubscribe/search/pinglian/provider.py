@@ -21,8 +21,11 @@ def create_pinglian_provider(
         resource_types=frozenset(resource_types),
         services={
             SearchCapability.RESOURCE_SEARCH: service,
+            SearchCapability.RESOURCE_UNLOCK: service,
             SearchCapability.RESOURCE_RESOLVE: service,
             SearchCapability.ACCOUNT: client,
+            SearchCapability.CHECKIN: client,
+            SearchCapability.POINT_BUDGET: service.budget,
             SearchCapability.CACHE_MAINTENANCE: service,
             SearchCapability.LIFECYCLE: client,
         },

@@ -9,6 +9,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ..magnet import clear_cache, normalize_magnets
+from ..matching import normalize_season
 from ..types import PANSOU_RESOURCE_TYPES, normalize_resource_type, resource_type_name
 from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 
@@ -101,17 +102,17 @@ class PanSouSearchService(OwnerDelegator):
 
     @staticmethod
     def _media_titles(mediainfo: MediaInfo) -> List[str]:
+        if not mediainfo:
+            return []
+        titles = [
+            getattr(mediainfo, "title", None),
+            getattr(mediainfo, "original_title", None),
+            getattr(mediainfo, "cn_name", None),
+            getattr(mediainfo, "en_name", None),
+        ]
         return list(dict.fromkeys(
-            value for value in (
-                str(getattr(mediainfo, "title", "") or "").strip(),
-                str(
-                    getattr(mediainfo, "original_title", "")
-                    or getattr(mediainfo, "original_name", "")
-                    or ""
-                ).strip(),
-            ) if value
+            str(t).strip() for t in titles if t and str(t).strip()
         ))
-
     @staticmethod
     def _resource_type(resource: Dict[str, Any]) -> str:
         value = str(resource.get("resource_type") or "").strip().lower()
@@ -224,7 +225,7 @@ class PanSouSearchService(OwnerDelegator):
     def search(self, query: SearchQuery) -> List[Dict[str, Any]]:
         mediainfo = query.mediainfo
         media_type = query.media_type
-        season = max(1, int(query.season or 1)) if media_type == MediaType.TV else None
+        season = normalize_season(query.season) if media_type == MediaType.TV else None
         keyword = (
             str(mediainfo.title or "").strip()
             if media_type == MediaType.TV else
@@ -252,9 +253,15 @@ class PanSouSearchService(OwnerDelegator):
         if not query.resource_list_mode and query.subscribe is not None:
             target_drive = str(getattr(self, "_cloud_drive_key", "") or "").strip().lower()
             if target_drive:
+                supported = set(getattr(self, "_cloud_drive_resource_types", ()) or ())
+                if not supported:
+                    supported = {target_drive} | ({"magnet", "ed2k"} if target_drive == "115" else set())
                 allowed_types = [
-                    "aliyun" if target_drive == "alipan" else target_drive
+                    value for value in allowed_types
+                    if normalize_resource_type(value) in supported
                 ]
+                if not allowed_types:
+                    return []
         response = self._pansou_client.request_search(
             keyword=keyword,
             cloud_types=allowed_types,
@@ -266,7 +273,6 @@ class PanSouSearchService(OwnerDelegator):
             response_mode="merge" if query.resource_list_mode else "results",
         )
         raw_items = (response or {}).get("results") or []
-        # 如果带年份搜索结果为空，尝试以纯标题降级检索
         pure_title = str(mediainfo.title or "").strip()
         if (not raw_items) and keyword != pure_title and pure_title:
             logger.debug(f"{prefix} 带年份关键词 '{keyword}' 无结果，降级尝试纯标题 '{pure_title}'")
@@ -288,13 +294,12 @@ class PanSouSearchService(OwnerDelegator):
             reason = response.get("error") if response else "接口未返回结果"
             logger.debug(f"{prefix} 搜索失败：关键词 '{keyword}'，原因：{reason}")
             return []
-        # 剧集搜索放宽年份约束：剧集关键词不含年份，不应因标题年份差异而误杀资源
-        strict_year = (media_type != MediaType.TV)
+
+        strict_year = media_type != MediaType.TV or season == 1
         groups = self._normalize_results(
             response.get("results"), keyword, titles,
             None if query.resource_list_mode else getattr(mediainfo, "year", None),
-            allowed_types, limit,
-            strict_year=strict_year,
+            allowed_types, limit, strict_year=strict_year,
         )
         # 用 candidate 的 resource_type 字段标准化后与配置对比。
         # groups.key 是中文显示名，不能直接匹配 _resource_type_order_config。

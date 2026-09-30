@@ -254,6 +254,9 @@ function latestSigninDays(provider) {
 }
 
 function buildSigninDays(provider) {
+  if (provider.trackDays === false) {
+    return "—";
+  }
   // 签到天数完全由后端统一计算下发，前端不处理时间计算
   const topDays = histories[provider.key]?.signin_days;
   if (topDays !== undefined && topDays !== null && topDays !== "") {
@@ -272,11 +275,6 @@ function buildSigninDays(provider) {
       }
     }
   }
-
-  const status = providerStatus(provider);
-  if (status && (status.tone === "already" || status.tone === "success")) {
-    return "1天";
-  }
   return "—";
 }
 
@@ -284,20 +282,37 @@ function latestPoints(provider) {
   return providerView(provider).points;
 }
 
+function formatProviderPoints(provider, rawPoints) {
+  if (rawPoints === null || rawPoints === undefined || rawPoints === "") return "—";
+  const str = String(rawPoints).trim();
+  if (provider.key === "pinglian" || provider.pointsLabel === "配额") {
+    const match = str.match(/^(\d+)\/(\d+)\s*(次|配额)?$/);
+    if (match) {
+      const used = Number(match[1]);
+      const limit = Number(match[2]);
+      if (Number.isFinite(used) && Number.isFinite(limit)) {
+        const remaining = Math.max(0, limit - used);
+        return `${remaining} 次`;
+      }
+    }
+  }
+  return str;
+}
+
 function buildPoints(provider) {
   const currentPoints = histories[provider.key]?.current_points;
   if (currentPoints !== null && currentPoints !== undefined && currentPoints !== "") {
-    return currentPoints;
+    return formatProviderPoints(provider, currentPoints);
   }
   const items = historyState(provider).items || [];
   for (const item of items) {
     if (item.points_after !== null && item.points_after !== undefined && item.points_after !== "") {
-      return item.points_after;
+      return formatProviderPoints(provider, item.points_after);
     }
   }
   const record = latestRecord(provider);
   if (record && record.points_after !== null && record.points_after !== undefined) {
-    return record.points_after;
+    return formatProviderPoints(provider, record.points_after);
   }
   return "—";
 }
@@ -399,7 +414,18 @@ function buildTimelineDays(provider) {
         error: "mdi-alert-outline",
         none: "mdi-minus",
       }[status],
-      pointsDetail: pointsChange === null ? "" : `积分 ${pointsLabel || "0"}`,
+      pointsDetail: (() => {
+        const isQuota = provider.key === "pinglian" || provider.pointsLabel === "配额" || latest?.points_label === "配额";
+        if (isQuota) {
+          const quotaStr = formatProviderPoints(provider, latest?.points_after);
+          return quotaStr && quotaStr !== "—" ? `剩余配额 ${quotaStr}` : "";
+        }
+        if (pointsChange !== null) {
+          const lbl = provider.pointsLabel || latest?.points_label || "积分";
+          return `${lbl} ${pointsLabel || "0"}`;
+        }
+        return "";
+      })(),
       lotteryDetail: latest?.lottery_target_count
         ? `转盘 ${latest.lottery_executed || 0}/${latest.lottery_target_count} 次`
         : "",

@@ -156,13 +156,13 @@ class CheckinDefinition:
     order: int = 100
     group: Optional[GroupSpec] = None
     points_label: str = "积分"
+    track_days: bool = True
     #: 非空表示客户端来自网盘驱动管理器（网盘渠道），否则来自搜索渠道注册表。
     drive_key: str = ""
     #: 未配置凭据时的提示，可为字符串或 owner -> 文本 的函数（双模式渠道按模式给提示）。
     hint: Union[str, Callable[[Any], str]] = ""
     #: 自定义凭据判定，缺省按 credential_attrs 判断。
     ready: Optional[Callable[[Any], bool]] = None
-
     @property
     def enabled_key(self) -> str:
         return f"{self.key}_checkin_enabled"
@@ -198,8 +198,9 @@ class CheckinDefinition:
             "enabledKey": self.enabled_key,
             "modeKey": self.mode_key,
             "credentialKeys": list(self.credential_keys),
+            "pointsLabel": self.points_label,
+            "trackDays": self.track_days,
         }
-
 
 def build_checkin_definition(
         definition_cls: Any,
@@ -218,6 +219,7 @@ def build_checkin_definition(
         error_types: Sequence[Type[Exception]] = (Exception,),
         modes: Sequence[str] = ("normal",),
         points_label: str = "积分",
+        track_days: bool = True,
         enable_label: str = "启用每日签到",
         enable_hint: str = "",
         enable_cols: int = 4,
@@ -279,6 +281,7 @@ def build_checkin_definition(
         modes=resolved_modes,
         order=resolved_order,
         points_label=str(points_label or "积分"),
+        track_days=bool(track_days),
         group=GroupSpec(
             tab="checkin",
             title=str(group_title or f"{resolved_name} 签到"),

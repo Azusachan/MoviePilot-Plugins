@@ -1,11 +1,14 @@
 """盘链作品匹配与资源候选构造。"""
 
 import re
-from typing import Any, Dict, Iterable, List, Optional
+import threading
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from app.log import logger
 
-from .client import PinglianClient, PinglianError
+from .client import PinglianClient
+from .resource import PinglianResourceService
+from ..budget import PointBudgetStatus
 from ..magnet import clear_cache, media_titles
 from ..matching import extract_year, title_matches, unique_texts
 from ..types import (
@@ -14,6 +17,57 @@ from ..types import (
     normalize_resource_type,
 )
 from ...core.search import SearchQuery, format_search_log_prefix
+
+
+class PinglianQuotaBudget:
+    """盘链每日链接解锁配额预算适配器，接入 CloudSubscribe 统一预算协议。"""
+
+    def __init__(self, service: Any, client: PinglianClient):
+        self._service = service
+        self._client = client
+        self.lock = threading.RLock()
+
+    def cached_url(self, key: str) -> str:
+        return self._service.resources.cached_url(key)
+
+    def record_result(self, key: str, url: str, points: int = 1) -> None:
+        if url:
+            self._service.resources.record_unlocked(key, url)
+
+    def clear_cached_urls(self) -> int:
+        return self._service.resources.clear_cache()
+
+    def has_budget(self, points: Any) -> bool:
+        return self._service.resources.has_quota()
+
+    def status(self, points: Any) -> PointBudgetStatus:
+        quota = self._service.resources.get_link_quota()
+        unlimited = bool(quota.get("unlimited"))
+        limit = 9999 if unlimited else (int(quota.get("limit")) if quota.get("limit") is not None else 0)
+        used = 0 if unlimited else max(0, int(quota.get("used") or 0))
+        req = max(1, int(points or 1))
+        return PointBudgetStatus(
+            requested=req,
+            task_spent=used,
+            subscribe_spent=0,
+            task_limit=limit,
+            subscribe_limit=limit,
+        )
+
+    def reset_task(self) -> None:
+        pass
+
+    def reset_subscription(self, key: str = "") -> None:
+        pass
+
+    def clear_subscription(self, key: str) -> None:
+        pass
+
+    def clear_history(self) -> int:
+        return 0
+
+    def configure_storage(self, get_data: Callable, save_data: Callable) -> None:
+        pass
 
 
 class PinglianSearchService:
@@ -26,6 +80,16 @@ class PinglianSearchService:
         self._client = client
         self._resource_types = tuple(resource_types)
         self._result_limit = result_limit
+        self._budget = PinglianQuotaBudget(self, client)
+        self._resources = PinglianResourceService(client)
+
+    @property
+    def budget(self) -> PinglianQuotaBudget:
+        return self._budget
+
+    @property
+    def resources(self) -> PinglianResourceService:
+        return self._resources
 
     @staticmethod
     def _video_title(row: Dict[str, Any]) -> str:
@@ -146,16 +210,10 @@ class PinglianSearchService:
             f"{prefix} 选中作品：id={vod_id}，标题={video_name}"
         )
 
-        # 2. 获取作品详情及网盘链接列表
-        try:
-            detail_payload = self._client.request_json(f"/api/videos/{vod_id}")
-        except Exception as error:
-            logger.warning(f"{prefix} 获取作品详情失败（id={vod_id}）：{error}")
-            return []
-
-        detail_data = detail_payload.get("data") if isinstance(detail_payload, dict) else {}
-        if not isinstance(detail_data, dict):
-            logger.debug(f"{prefix} 作品详情数据格式异常")
+        # 2. 获取作品详情及网盘链接列表（带 TTL 缓存）
+        detail_data = self._resources.get_video_detail(vod_id)
+        if not detail_data or not isinstance(detail_data, dict):
+            logger.debug(f"{prefix} 获取作品详情失败或格式异常（id={vod_id}）")
             return []
 
         raw_links = detail_data.get("links") or []
@@ -234,58 +292,33 @@ class PinglianSearchService:
                 row.get("updated_at") or row.get("created_at") or ""
             )
 
-            # 延迟解析模式（用于前端展示，避免无谓消耗用户的每日解锁额度）
-            if resource_list_mode:
-                results.append({
-                    "title": title,
-                    "description": desc,
-                    "url": "",
-                    "resource_type": resource_type,
-                    "update_time": update_time,
-                    "source_url": source_url,
-                    "pending_resolution": True,
-                    "provider_data": {
-                        "resource_id": link_id,
-                        "link_id": link_id,
-                        "token": link_id,
-                        "video_id": str(vod_id),
-                        "password": str(row.get("password") or ""),
-                    },
-                })
-                continue
-
-            # 直接解析模式（用于订阅下载，直接换取最终真实链接）
-            try:
-                resolved = self._client.resolve_resource(
-                    link_id=link_id,
-                    token=link_id,
-                    resource_type=resource_type,
-                    password=str(row.get("password") or ""),
-                )
-                target_url = str(resolved.get("url") or "").strip()
-                if not target_url:
-                    raise PinglianError("未获取到有效直链")
-                resolved_count += 1
-            except PinglianError as error:
-                resolve_failed_count += 1
-                logger.debug(f"{prefix} 解析盘链资源失败（id={link_id}）：{error}")
-                continue
+            # 候选资源构造：盘链无免费资源，所有链接在未解锁前均为待解锁状态 (need_unlock=True, need_access=True, 1点配额)
+            # 命中本地已解锁缓存时方可直接复用直链
+            cached_url = self._resources.cached_url(link_id)
+            is_unlocked = bool(cached_url)
 
             results.append({
                 "title": title,
                 "description": desc,
-                "url": target_url,
+                "url": cached_url if is_unlocked else "",
                 "resource_type": resource_type,
                 "update_time": update_time,
                 "source_url": source_url,
+                "need_unlock": not is_unlocked,
+                "need_access": not is_unlocked,
+                "unlock_points": 0 if is_unlocked else 1,
+                "pending_resolution": not is_unlocked,
+                "is_unlocked": is_unlocked,
+                "resource_ref": str(link_id),
+                "unlock_group": f"pinglian:link:{link_id}",
                 "provider_data": {
                     "resource_id": link_id,
                     "link_id": link_id,
                     "token": link_id,
                     "video_id": str(vod_id),
+                    "password": str(row.get("password") or ""),
                 },
             })
-
         logger.debug(
             f"{prefix} 候选构造完成：最终输出={len(results)}，"
             f"直接解析={resolved_count}，解析失败={resolve_failed_count}"
@@ -293,6 +326,16 @@ class PinglianSearchService:
         return results
 
     def search(self, query: SearchQuery):
+        prefix = format_search_log_prefix(query, "pinglian")
+        # 订阅转存/下载模式下，若今日解锁配额已耗尽，直接跳过搜索以避免无用请求与风控
+        if not query.resource_list_mode and not self._resources.has_quota():
+            quota_text = self._resources.format_quota_text()
+            logger.warning(
+                f"{prefix} 今日链接解锁配额已用尽（{quota_text}），"
+                "跳过盘链搜索以阻止无用请求并保护配额"
+            )
+            return []
+
         mediainfo = query.mediainfo
         titles = media_titles(mediainfo)
         return self._search(
@@ -303,11 +346,33 @@ class PinglianSearchService:
                 if query.resource_list_mode else self._result_limit
             ),
             resource_list_mode=query.resource_list_mode,
-            log_prefix=format_search_log_prefix(query, "pinglian"),
+            log_prefix=prefix,
+        )
+
+    def unlock(
+            self,
+            candidate: Dict[str, Any],
+            search_label: str = "",
+    ) -> Optional[str]:
+        """按需解锁单个盘链资源。"""
+        provider_data = candidate.get("provider_data") or {}
+        link_id = str(provider_data.get("link_id") or candidate.get("resource_ref") or "")
+        resource_type = candidate.get("resource_type") or ""
+        password = str(provider_data.get("password") or "")
+        return self._resources.unlock_resource(
+            link_id=link_id,
+            resource_type=resource_type,
+            password=password,
+            budget=self._budget,
+            check_first=True,
+            search_label=search_label,
         )
 
     def resolve(self, **kwargs):
-        return self._client.resolve_resource(**kwargs)
+        return self._resources.resolve_link(**kwargs)
 
     def clear_cache(self) -> int:
-        return clear_cache(self._client)
+        count = self._resources.clear_cache()
+        count += clear_cache(self._client)
+        count += self._budget.clear_cached_urls()
+        return count

@@ -241,5 +241,61 @@ class TestCheckinReturnStructure(unittest.TestCase):
             self.assertEqual(channels[0]["signin_days"], 7)
 
 
+class TestP115ClientCheckin(unittest.TestCase):
+    """测试 115 网盘签到正确累积当前积分与显示数量。"""
+
+    def setUp(self):
+        import types
+        for p in ["cloudsubscribe.drive", "cloudsubscribe.drive.p115"]:
+            if p not in sys.modules:
+                m = types.ModuleType(p)
+                m.__path__ = []
+                sys.modules[p] = m
+        sys.modules.setdefault("cloudsubscribe.drive.p115.files", MagicMock())
+        sys.modules.setdefault("cloudsubscribe.drive.p115.share", MagicMock())
+        sys.modules.setdefault("cloudsubscribe.drive.p115.offline", MagicMock())
+        sys.modules.setdefault("cloudsubscribe.drive.p115.upload", MagicMock())
+        p115_client_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/p115/client.py")
+        spec_115 = importlib.util.spec_from_file_location("cloudsubscribe.drive.p115.client", p115_client_path)
+        mod_115 = importlib.util.module_from_spec(spec_115)
+        mod_115.__package__ = "cloudsubscribe.drive.p115"
+        sys.modules["cloudsubscribe.drive.p115.client"] = mod_115
+        spec_115.loader.exec_module(mod_115)
+        self.P115ClientManager = mod_115.P115ClientManager
+
+    def test_p115_checkin_already_checked_in_accumulates_points(self):
+        manager = self.P115ClientManager("fake_cookie_value")
+        manager.client = MagicMock()
+        manager.client.user_points_sign.return_value = {"state": True,
+                                                        "data": {"is_sign_today": 1, "continuous_day": 15}}
+        manager.client.user_points_balance.return_value = {"state": True, "data": {"balance": 1234}}
+
+        res = manager.checkin()
+        self.assertTrue(res["success"])
+        self.assertTrue(res["already_checked_in"])
+        self.assertEqual(res["points_after"], 1234)
+        self.assertIn("1234", res["message"])
+        self.assertEqual(res["details"]["current_points"], 1234)
+
+    def test_p115_checkin_success_accumulates_points(self):
+        manager = self.P115ClientManager("fake_cookie_value")
+        manager.client = MagicMock()
+        manager.client.user_points_sign.return_value = {"state": True,
+                                                        "data": {"is_sign_today": 0, "continuous_day": 15}}
+        manager.client.user_points_sign_post.return_value = {
+            "state": True,
+            "data": {"points_num": 5, "continuous_day": 16, "total_points": 1239}
+        }
+
+        res = manager.checkin()
+        self.assertTrue(res["success"])
+        self.assertEqual(res["status"], "签到成功")
+        self.assertEqual(res["signin_points"], 5)
+        self.assertEqual(res["points_after"], 1239)
+        self.assertIn("1239", res["message"])
+        self.assertEqual(res["details"]["current_points"], 1239)
+        self.assertEqual(res["details"]["reward_points"], 5)
+
+
 if __name__ == "__main__":
     unittest.main()

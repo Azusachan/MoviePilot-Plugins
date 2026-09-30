@@ -50,6 +50,38 @@ def extract_fansub_from_title(title: str) -> Optional[str]:
     return None
 
 
+def is_special_release(title: str) -> bool:
+    """判定是否为特别篇、SP、OVA 等非正片季度资源。"""
+    return bool(
+        re.search(
+            r"(?<![A-Za-z0-9])(?:OVA|OAD|SP|EX)(?=[\W_\d]|$)|S00E|特别篇|特別篇",
+            str(title or ""),
+            re.I,
+        )
+    )
+
+
+def special_episodes(title: str) -> List[int]:
+    """提取 S00 特别篇集数。"""
+    found = set()
+    for match in re.finditer(
+            r"(?<![A-Za-z0-9])(?:S00E|OVA|OAD|SP|EX)[ ._-]*0*(\d{1,3})|(?:特别篇|特別篇)[ ._-]*0*(\d{1,3})",
+            str(title or ""),
+            re.I,
+    ):
+        ep = match.group(1) or match.group(2)
+        if ep:
+            found.add(int(ep))
+    return sorted(found)
+
+
+def release_season_matches(title: str, season: Optional[int]) -> bool:
+    """判断资源标题是否属于当前目标季度（严防正片与特别篇互相误选）。"""
+    if season == 0:
+        return bool(special_episodes(title))
+    return not is_special_release(title)
+
+
 def anime_is_excluded(
         title: str,
         config: Optional[Dict[str, Any]] = None,
@@ -66,6 +98,9 @@ def anime_is_excluded(
     if not title:
         return False
     cfg = config or {}
+    target_season = cfg.get("_target_season")
+    if target_season is not None and target_season != 0 and is_special_release(title):
+        return True
     pattern = (
         exclude_re
         if exclude_re is not None
@@ -76,6 +111,8 @@ def anime_is_excluded(
                 or DEFAULT_ANIME_EXCLUDE_RE
         )
     )
+    if target_season == 0 and pattern == DEFAULT_ANIME_EXCLUDE_RE:
+        pattern = r"720[pP]|480[pP]"
     # 若是合法完结合集/打包资源，剥离其自身的合集范围标签（如 [01-12 合集]），避免被 \d-\d 等跨度规则误排除
     check_title = title
     if is_pack_release(title):
@@ -217,6 +254,27 @@ def filter_fansubs(
     return sorted(accepted, key=lambda item: -item["fansub_priority"])
 
 
+def release_titles(title: str) -> List[str]:
+    text = str(title or "").strip()
+    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", text)
+    clean = re.sub(r"\.(?:mkv|mp4|avi|ts|m2ts)$", "", clean, flags=re.I)
+    clean = re.split(r"\s*\[|\s+-\s+\d|\s+\(\d{2}", clean, maxsplit=1)[0]
+    if clean.strip():
+        return [part.strip() for part in clean.split(" / ") if part.strip()]
+    names = []
+    for tag in re.findall(r"\[([^\]]+)\]", text)[1:]:
+        tag = tag.strip()
+        if not tag or _TECHNICAL_TAG_RE.fullmatch(tag):
+            continue
+        if re.search(r"新番|字幕|汉化|漢化|简中|繁中|简体|繁体|內嵌|内嵌|内封|內封", tag):
+            continue
+        if re.fullmatch(r"(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO|JPN|ENG)(?:[&+ /].*)?|\d+(?:v\d+)?|\d+[-~～]\d+.*", tag,
+                        re.I):
+            continue
+        names.extend(part.strip() for part in tag.split(" / ") if part.strip())
+    return names
+
+
 def release_matches(
         title: str,
         expected: List[str],
@@ -229,9 +287,7 @@ def release_matches(
         return False
     if season and season > 1 and not explicit_season:
         return False
-    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", title)
-    clean = re.split(r"\s*\[|\s+-\s+\d|\s+\(\d{2}", clean, maxsplit=1)[0]
-    parts = [p.strip() for p in clean.split(" / ") if p.strip()]
+    parts = release_titles(title)
     if any(title_matches(part, expected) for part in parts):
         return True
 
@@ -248,10 +304,13 @@ def release_matches(
     return False
 
 
-def release_episodes(title: str) -> List[int]:
+def release_episodes(title: str, season: Optional[int] = None) -> List[int]:
     """从标题中提取显式集数，严格排除分辨率、年份等伪集数标签，支持完结合集与范围。"""
     title_str = str(title or "")
-    # 1. 优先匹配合集范围如 [01-12 合集], [01-12Fin], [01-12+SP], [01~12]
+    if season == 0:
+        return special_episodes(title_str)
+    if is_special_release(title_str):
+        return []
     range_matches = re.findall(
         r"\[(?:EP|E)?\s*0*(\d{1,3})\s*[-~～–—至到]\s*(?:EP|E)?\s*0*(\d{1,3})(?:v\d)?"
         r"(?:\s*(?:合集|全集|Fin|End|完|话|話|集|\+SP|\+OVA))?[^\]]*\]",
@@ -311,10 +370,12 @@ def anime_file_candidates(
         prefix: str = "mikan",
 ) -> Dict[int, List[Dict[str, Any]]]:
     """利用已匹配发布的双语名称精确匹配文件候选。"""
-    clean = re.sub(r"^(?:\s*\[[^\]]*\]\s*)+", "", release_title)
-    clean = re.split(r"\s*\[|\s+-\s+\d", clean, maxsplit=1)[0]
-    aliases = [part.strip() for part in clean.split(" / ") if part.strip()]
-    candidates: Dict[int, List[Dict[str, Any]]] = {episode: [] for episode in targets}
+    aliases = release_titles(release_title)
+    aliases += [
+        re.sub(r"\s+The Animation$", "", name, flags=re.I)
+        for name in list(aliases)
+        if re.search(r"\s+The Animation$", name, re.I)
+    ]
     for file in files:
         name = str(file.get("name") or "")
         episodes = release_episodes(name)
