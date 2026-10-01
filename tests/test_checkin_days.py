@@ -52,7 +52,10 @@ sys.modules["cloudsubscribe.search.hdhaven"].__path__ = []
 sys.modules["cloudsubscribe.search.hdhaven.security"] = MagicMock()
 sys.modules["cloudsubscribe.search.cloudflare"] = MagicMock()
 sys.modules["cloudsubscribe.search.http_client"] = MagicMock()
-
+mock_utils = MagicMock()
+mock_utils.__path__ = []
+sys.modules["cloudsubscribe.utils"] = mock_utils
+sys.modules["cloudsubscribe.utils.cache"] = MagicMock()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 plugins_v2_path = os.path.join(project_root, "plugins.v2")
@@ -255,6 +258,7 @@ class TestP115ClientCheckin(unittest.TestCase):
         sys.modules.setdefault("cloudsubscribe.drive.p115.share", MagicMock())
         sys.modules.setdefault("cloudsubscribe.drive.p115.offline", MagicMock())
         sys.modules.setdefault("cloudsubscribe.drive.p115.upload", MagicMock())
+        sys.modules.setdefault("cloudsubscribe.drive.common", MagicMock())
         p115_client_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/p115/client.py")
         spec_115 = importlib.util.spec_from_file_location("cloudsubscribe.drive.p115.client", p115_client_path)
         mod_115 = importlib.util.module_from_spec(spec_115)

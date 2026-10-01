@@ -63,23 +63,12 @@
       </div>
     </header>
 
-    <section class="overview-band" aria-label="转存概览">
-      <div class="overview-title">
+    <section class="overview-band" aria-label="转存统计">
+      <div class="overview-title d-flex align-center ga-2 mb-2">
         <v-icon icon="mdi-chart-box-outline" color="primary" size="small" />
-        <span>转存概览</span>
+        <span class="text-subtitle-2 font-weight-bold">转存统计</span>
       </div>
-      <div class="overview-metrics">
-        <div
-          v-for="stat in stats"
-          :key="stat.title"
-          :class="['overview-metric', { 'overview-metric--desktop-only': ['成功', '失败'].includes(stat.title) }]">
-          <v-icon :icon="stat.icon" :color="stat.color" size="20" />
-          <div>
-            <span>{{ stat.title }}</span>
-            <strong :class="`text-${stat.color}`">{{ stat.value }}</strong>
-          </div>
-        </div>
-      </div>
+      <StatsGrid :stats="stats" class="overview-stats-grid" />
     </section>
 
     <section :class="['workspace', { 'workspace-history': mainTab === 'history' }]">
@@ -276,6 +265,7 @@ import {computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch} from
 import {useDisplay} from "vuetify";
 import RuntimeCard from "./dashboard/RuntimeCard.vue";
 import HistoryTable from "./dashboard/HistoryTable.vue";
+import StatsGrid from "./dashboard/StatsGrid.vue";
 import {useHistoryPageData} from "../composables/usePageData.js";
 import {useRuntimeData} from "../composables/useRuntimeData.js";
 import {CACHE_CATEGORIES, useCacheActions} from "../composables/useCacheActions.js";

@@ -36,13 +36,12 @@
       <v-divider />
       <div class="page-summary page-summary--compact">
         <div class="summary-heading">
-          <div class="d-flex align-center ga-2">
+          <div class="summary-title d-flex align-center ga-2">
             <v-icon icon="mdi-chart-box-outline" color="primary" size="small" />
-            <span>转存概览</span>
+            <span class="text-subtitle-2 font-weight-bold">转存统计</span>
           </div>
           <div class="page-actions">
             <v-btn
-              color="secondary"
               variant="tonal"
               size="small"
               prepend-icon="mdi-link-variant-plus"
@@ -760,16 +759,19 @@ async function notifyHistory() {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.summary-title {
   color: rgb(var(--v-theme-on-surface));
   font-size: 0.875rem;
-  font-weight: 600;
 }
 
 .page-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .summary-stats {

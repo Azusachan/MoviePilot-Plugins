@@ -20,8 +20,9 @@ class ConfigApi(OwnerDelegator):
          "search_concurrency", "search_source_timeout", "search_circuit_breaker_enabled",
          "search_circuit_breaker_threshold", "search_circuit_breaker_cooldown", "hdhive_timeout",
          "dian115_timeout", "juying_timeout", "pansou_timeout", "seedhub_timeout", "piratebay_timeout",
-         "uindex_timeout", "pinglian_timeout", "mikan_timeout", "animegarden_timeout",
-         "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit", "hdhaven_candidate_limit"})
+         "uindex_timeout", "pinglian_timeout", "mikan_timeout", "animegarden_timeout", "woniu_timeout",
+         "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit", "hdhaven_candidate_limit",
+         "woniu_result_limit", "pinglian_unlocks_per_minute"})
     _AGENT_BOOL_FIELDS = frozenset(
         {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_circuit_breaker_enabled"})
     _AGENT_INT_RANGES = {"search_cache_ttl_minutes": (1, 1440), "search_concurrency": (1, 5),
@@ -31,11 +32,12 @@ class ConfigApi(OwnerDelegator):
                          "dian115_timeout": (5, 120), "juying_timeout": (5, 120),
                          "pansou_timeout": (5, 120), "seedhub_timeout": (5, 120), "piratebay_timeout": (5, 120),
                          "uindex_timeout": (5, 120), "pinglian_timeout": (5, 120),
-                         "mikan_timeout": (5, 120), "animegarden_timeout": (5, 120),
+                         "mikan_timeout": (5, 120), "animegarden_timeout": (5, 120), "woniu_timeout": (5, 120),
                          "subscription_concurrency": (1, 5), "pansou_result_limit": (1, 100),
                          "hdhive_candidate_limit": (1, 20), "hdhive_unlocks_per_minute": (1, 3),
                          "hdhaven_candidate_limit": (1, 20), "hdhaven_unlocks_per_minute": (1, 10),
-                         "dian115_unlocks_per_minute": (1, 10)}
+                         "dian115_unlocks_per_minute": (1, 10), "woniu_result_limit": (1, 20),
+                         "pinglian_unlocks_per_minute": (1, 20)}
 
     @staticmethod
     def _validate_search_proxy_config(payload: Dict[str, Any]) -> None:
@@ -275,12 +277,37 @@ class ConfigApi(OwnerDelegator):
         if not normalized_mikan_urls:
             return "Mikan 至少需要配置一个服务地址"
         payload["auto_subscribe_mikan_base_urls"] = normalized_mikan_urls
-        for provider_id in ("douban", "maoyan"):
+        raw_global_types = payload.get("auto_subscribe_media_types")
+        if raw_global_types is None:
+            raw_global_types = payload.get("auto_subscribe_media_type") or ["movie", "tv"]
+        if isinstance(raw_global_types, str):
+            types_list = [t.strip().lower() for t in raw_global_types.split(",") if t.strip()]
+        elif isinstance(raw_global_types, (list, tuple, set)):
+            types_list = [str(t).strip().lower() for t in raw_global_types if str(t).strip()]
+        else:
+            types_list = ["movie", "tv"]
+        normalized_types = [t for t in types_list if t in {"movie", "tv", "all"}]
+        if not normalized_types or "all" in normalized_types:
+            normalized_types = ["movie", "tv"]
+        payload["auto_subscribe_media_types"] = normalized_types
+        payload["auto_subscribe_media_type"] = (
+            "all" if set(normalized_types) >= {"movie", "tv"}
+            else (normalized_types[0] if normalized_types else "all")
+        )
+
+        for provider_id in ("douban", "maoyan", "tmdb", "netflix"):
             media_type_key = f"auto_subscribe_{provider_id}_media_type"
-            media_type = str(payload.get(media_type_key) or "all").strip().lower()
-            if media_type not in {"all", "movie", "tv"}:
-                return f"{provider_id} 媒体类型配置无效"
-            payload[media_type_key] = media_type
+            val = payload.get(media_type_key)
+            if val is not None:
+                if isinstance(val, (list, tuple, set)):
+                    s = {str(x).strip().lower() for x in val if str(x).strip()}
+                    m_type = "all" if s >= {"movie", "tv"} or "all" in s else (
+                        "movie" if "movie" in s else ("tv" if "tv" in s else "all"))
+                else:
+                    m_type = str(val).strip().lower()
+                    if m_type not in {"all", "movie", "tv"}:
+                        m_type = payload["auto_subscribe_media_type"]
+                payload[media_type_key] = m_type
         maoyan_map = payload.get("auto_subscribe_maoyan_web_platform_map", {})
         if not isinstance(maoyan_map, dict):
             return "猫眼平台与类型配置格式错误"

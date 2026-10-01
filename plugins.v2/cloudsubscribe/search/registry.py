@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from ..core.search import SearchRegistry
 from .scanner import SearchSourceRegistry
+from ..core.search import SearchRegistry
 
 
 def create_search_registry(
@@ -12,20 +12,37 @@ def create_search_registry(
 ) -> SearchRegistry:
     """根据当前配置自动扫描并组装可用搜索渠道。"""
     registry = SearchRegistry()
-    resource_types = tuple(getattr(owner, "_resource_type_order_config", ()))
+    config = {}
+    plugin = getattr(owner, "_owner", None) or getattr(owner, "_plugin", None) or getattr(owner, "plugin", None)
+    if plugin:
+        if hasattr(plugin, "get_config"):
+            try:
+                config = dict(plugin.get_config() or {})
+            except Exception:
+                pass
+        if not config and hasattr(plugin, "_applied_config"):
+            config = dict(getattr(plugin, "_applied_config", None) or {})
+        if not config and hasattr(plugin, "_config"):
+            config = dict(getattr(plugin, "_config", None) or {})
+    if not config and isinstance(owner, dict):
+        config = dict(owner)
+    elif not config:
+        config = dict(getattr(owner, "__dict__", {}) or {})
+
+    resource_types = tuple(getattr(owner, "_resource_type_order_config", ()) or config.get("resource_type_order", ()))
     context = {
         "owner": owner,
-        "storage_owner": getattr(owner, "_plugin", None) or owner,
+        "storage_owner": plugin or getattr(owner, "_plugin", None) or owner,
         "resource_types": resource_types,
-        "proxy": getattr(owner, "_search_proxy", None),
+        "proxy": getattr(owner, "_search_proxy", None) or config.get("search_proxy"),
         **extra_context,
     }
 
     for def_cls in SearchSourceRegistry.get_definitions():
         try:
-            client = def_cls.create_client(owner.__dict__, context)
-            service = def_cls.create_service(client, owner.__dict__, context)
-            provider = def_cls.create_provider(service, client, owner.__dict__, context)
+            client = def_cls.create_client(config, context)
+            service = def_cls.create_service(client, config, context)
+            provider = def_cls.create_provider(service, client, config, context)
             if provider:
                 registry.register(provider, replace=True)
             else:

@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from app.log import logger
 
-from .client import PinglianClient
+from .client import PinglianClient, PinglianError
 from .resource import PinglianResourceService
 from ..budget import PointBudgetStatus
 from ..magnet import clear_cache, media_titles
@@ -181,6 +181,13 @@ class PinglianSearchService:
                         "page_size": 20,
                     },
                 )
+            except PinglianError as error:
+                if "已被禁用" in str(error) or error.code in ("ACCOUNT_DISABLED", "pinglian_rate_limited",
+                                                              "pinglian_auth_failed"):
+                    logger.error(f"{prefix} 盘链账号出现致命异常，立即阻断搜索并触发熔断：{error}")
+                    raise
+                logger.warning(f"{prefix} 搜索影视条目失败（{keyword}）：{error}")
+                continue
             except Exception as error:
                 logger.warning(f"{prefix} 搜索影视条目失败（{keyword}）：{error}")
                 continue

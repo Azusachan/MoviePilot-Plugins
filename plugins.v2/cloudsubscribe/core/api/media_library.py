@@ -31,14 +31,42 @@ class MediaLibraryApi(OwnerDelegator):
         """消费已鉴权并标准化的媒体服务器 Webhook 事件。"""
         if not event_info:
             return False
-        event_name = str(getattr(event_info, "event", "") or "").strip().lower()
-        channel = str(getattr(event_info, "channel", "") or "").strip().lower()
-        if event_name == "deep.delete":
+
+        if isinstance(event_info, dict):
+            event_name = str(event_info.get("event") or event_info.get("Event") or "").strip().lower()
+            channel = str(event_info.get("channel") or "").strip().lower()
+            payload = event_info.get("json_object") or event_info
+            title = str(event_info.get("item_name") or event_info.get("Title") or "")
+            desc = str(event_info.get("overview") or event_info.get("Description") or "")
+        else:
+            event_name = str(getattr(event_info, "event", "") or "").strip().lower()
+            channel = str(getattr(event_info, "channel", "") or "").strip().lower()
+            payload = getattr(event_info, "json_object", None) or {}
+            title = str(getattr(event_info, "item_name", "") or payload.get("Title") or "")
+            desc = str(getattr(event_info, "overview", "") or payload.get("Description") or "")
+
+        raw_event = str(payload.get("Event") or "").strip().lower() if isinstance(payload, dict) else ""
+        raw_title = str(payload.get("Title") or "") if isinstance(payload, dict) else ""
+        raw_desc = str(payload.get("Description") or "") if isinstance(payload, dict) else ""
+
+        is_deep_delete = (
+                event_name in {"deep.delete", "deep_delete", "deepdelete"}
+                or raw_event in {"deep.delete", "deep_delete", "deepdelete"}
+                or "deep.delete" in event_name
+                or "深度删除" in title or "深度删除" in raw_title
+                or "神医" in title or "神医" in raw_title
+                or "Item Path:" in desc or "Item Path:" in raw_desc
+                or event_name in {"item.delete", "item.deleted", "library.deleted"}
+        )
+
+        if is_deep_delete:
             return self._handle_platform_deep_delete(event_info)
+
         if not self._platform_media_sync_enabled:
             return False
         server_name = str(
-            getattr(event_info, "server_name", "") or ""
+            (getattr(event_info, "server_name", None) if not isinstance(event_info, dict) else event_info.get(
+                "server_name")) or ""
         ).strip()
         if channel != "emby" or event_name not in self._PLATFORM_SYNC_EVENTS:
             return False
@@ -60,26 +88,25 @@ class MediaLibraryApi(OwnerDelegator):
                 f"已接收平台 Emby Webhook：{server_name} - {event_name}"
             )
         return scheduled
-
     def _handle_platform_deep_delete(self, event_info: Any) -> bool:
         """按神医通知中的媒体服务器路径精确删除关联内容。"""
         if not self._platform_deep_delete_enabled:
-            logger.info("收到神医深度删除事件，联动删除未启用，已跳过")
+            logger.info("收到神医/媒体库深度删除事件，但网盘订阅设置中「联动删除」未开启，已跳过")
             return False
         if not self._sync_handler:
-            logger.warning("神医深度删除联动失败：同步处理器未初始化")
+            logger.warning("深度删除联动失败：同步处理器未初始化")
             return False
         paths = self._deep_delete_paths(event_info)
         if not paths:
-            logger.warning("神医深度删除通知缺少 Item Path，已跳过")
+            logger.warning("深度删除通知缺少有效媒体路径 (Item Path)，已跳过")
             return False
         logger.info(
-            f"收到神医深度删除事件：路径={len(paths)} 个，开始匹配插件历史"
+            f"收到深度删除请求：提取到 {len(paths)} 个目标路径：{paths}，开始匹配插件转存历史..."
         )
         result = self._sync_handler.delete_by_media_server_paths(paths)
-        if not result["matched"]:
+        if not result.get("matched"):
             logger.warning(
-                f"神医深度删除未匹配插件历史：{', '.join(paths)}"
+                f"深度删除未匹配到对应的插件历史记录（目标路径：{paths}）"
             )
             return False
         message = (
@@ -88,33 +115,53 @@ class MediaLibraryApi(OwnerDelegator):
             f"{result.get('cloud_files_deleted', 0)} 个、STRM "
             f"{result.get('strm_deleted', 0)} 个"
         )
-        if result["skipped"]:
+        if result.get("skipped"):
             message += f"，跳过 {result['skipped']} 条"
-        logger.info(f"神医深度删除联动完成：{message}")
+        logger.info(f"深度删除联动完成：{message}")
         if self._notify:
             try:
                 self.post_message(
                     mtype=self._notification_type,
-                    title="【网盘订阅】神医联动删除完成",
+                    title="【网盘订阅】深度联动删除完成",
                     text=message,
                 )
             except Exception as error:
-                logger.warning(f"神医深度删除结果通知发送失败：{error}")
+                logger.warning(f"深度删除结果通知发送失败：{error}")
         return result["deleted"] > 0
 
     @classmethod
     def _deep_delete_paths(cls, event_info: Any) -> list[str]:
         """合并标准路径与神医 Description 中的多版本路径。"""
-        paths = [str(getattr(event_info, "item_path", "") or "").strip()]
-        payload = getattr(event_info, "json_object", None) or {}
-        description = str(payload.get("Description") or "")
+        paths: list[str] = []
+        if isinstance(event_info, dict):
+            raw_path = str(event_info.get("item_path") or event_info.get("Path") or "").strip()
+            payload = event_info.get("json_object") or event_info
+        else:
+            raw_path = str(getattr(event_info, "item_path", "") or "").strip()
+            payload = getattr(event_info, "json_object", None) or {}
+            if not payload and hasattr(event_info, "dict"):
+                try:
+                    payload = event_info.dict()
+                except Exception:
+                    payload = {}
+
+        if raw_path:
+            paths.append(raw_path)
+
+        item_obj = payload.get("Item") if isinstance(payload, dict) else {}
+        if isinstance(item_obj, dict) and item_obj.get("Path"):
+            paths.append(str(item_obj["Path"]).strip())
+
+        description = str((payload.get("Description") if isinstance(payload, dict) else "") or (
+            getattr(event_info, "overview", "") if not isinstance(event_info, dict) else "") or "")
         in_path_section = False
         for raw_line in description.splitlines():
             line = raw_line.strip()
             if "Item Path:" in line:
                 in_path_section = True
                 _, _, inline_path = line.partition(":")
-                paths.append(inline_path.strip())
+                if inline_path.strip():
+                    paths.append(inline_path.strip())
                 continue
             if not in_path_section:
                 continue

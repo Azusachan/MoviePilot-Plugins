@@ -1,13 +1,13 @@
-"""聚影搜索渠道自描述规范与表单声明。"""
+"""蜗牛搜索渠道自描述规范与表单声明。"""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from .client import JuyingClient, JuyingError
-from .provider import create_juying_provider
-from .resource import JuyingResourceService
-from .service import JuyingSearchService
+from .client import WoniuClient, WoniuError
+from .provider import create_woniu_provider
+from .resource import WoniuResourceService
+from .service import WoniuSearchService
 from ...core.definitions import (
     CheckinDefinition,
     FieldSpec,
@@ -17,44 +17,46 @@ from ...core.definitions import (
 )
 
 
-class JuyingSourceDefinition(SearchSourceDefinition):
-    """聚影搜索渠道规范。"""
+class WoniuSourceDefinition(SearchSourceDefinition):
+    """蜗牛搜索渠道规范。"""
 
-    id = "juying"
-    name = "聚影"
+    id = "woniu"
+    name = "蜗牛"
     icon = "mdi-movie-search-outline"
-    color = "orange"
-    order = 40
+    color = "light-green-darken-2"
+    order = 45
 
     @classmethod
     def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
         ctx = context or {}
         owner = ctx.get("storage_owner")
-        username = str(cls.config_value(config, "juying_username", "") or "").strip()
-        password = str(cls.config_value(config, "juying_password", "") or "")
+        username = str(cls.config_value(config, "woniu_username", "") or "").strip()
+        password = str(cls.config_value(config, "woniu_password", "") or "")
         if not username or not password:
             return None
-        return JuyingClient(
-            base_url=str(cls.config_value(config, "juying_base_url", JuyingClient.BASE_URL) or JuyingClient.BASE_URL),
+        return WoniuClient(
+            base_url=str(cls.config_value(config, "woniu_base_url", WoniuClient.BASE_URL) or WoniuClient.BASE_URL),
             username=username,
             password=password,
             proxy=ctx.get("proxy"),
-            request_timeout=int(cls.config_value(config, "juying_timeout", 60) or 60),
-            request_interval=float(cls.config_value(config, "juying_request_interval", 1.0) or 1.0),
+            request_timeout=int(cls.config_value(config, "woniu_timeout", 60) or 60),
+            request_interval=float(cls.config_value(config, "woniu_request_interval", 1.0) or 1.0),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),
         )
 
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
-        """自动注册聚影签到契约：执行器与启用开关均由工厂按渠道自描述生成。"""
+        """自动注册蜗牛签到契约。"""
         return build_checkin_definition(
             cls,
-            icon="mdi-movie-check-outline",
-            credential_attrs=("_juying_username", "_juying_password"),
-            credential_keys=("juying_username", "juying_password"),
-            error_types=(JuyingError,),
-            group_title="聚影签到",
+            icon="mdi-calendar-check-outline",
+            credential_attrs=("_woniu_username", "_woniu_password"),
+            credential_keys=("woniu_username", "woniu_password"),
+            error_types=(WoniuError,),
+            group_title="蜗牛签到",
+            points_label="积分",
+            track_days=True,
             enable_cols=12,
         )
 
@@ -62,63 +64,63 @@ class JuyingSourceDefinition(SearchSourceDefinition):
     def get_config_groups(cls, context: Optional[Dict[str, Any]] = None) -> List[GroupSpec]:
         return [
             GroupSpec(
-                tab="juying",
-                title="聚影账号",
+                tab="woniu",
+                title="蜗牛账号",
                 icon="mdi-account-key-outline",
-                hint="使用聚影网页登录账号访问官方 WebAPI",
+                hint="使用蜗牛 (www.wn4k.com) 账号登录以解锁高清与原盘分享直链",
                 fields=[
                     FieldSpec(
-                        key="juying_account_info",
+                        key="woniu_account_info",
                         type="account",
-                        account_key="search:juying",
+                        account_key="search:woniu",
                         compact=True,
                         cols=12,
                     ),
                     FieldSpec(
-                        key="juying_base_url",
+                        key="woniu_base_url",
                         label="服务地址",
-                        placeholder="https://juying.tv",
-                        default="https://juying.tv",
+                        placeholder="https://www.wn4k.com",
+                        default="https://www.wn4k.com",
                         cols=12,
                     ),
                     FieldSpec(
-                        key="juying_username",
+                        key="woniu_username",
                         label="网页登录账号",
                         cols=6,
                     ),
                     FieldSpec(
-                        key="juying_password",
+                        key="woniu_password",
                         label="网页登录密码",
                         type="password",
                         cols=6,
                     ),
                     FieldSpec(
-                        key="test_juying",
+                        key="test_woniu",
                         label="测试搜索",
                         type="test-source",
-                        source="juying",
+                        source="woniu",
                         cols=12,
                     ),
                 ],
             ),
             GroupSpec(
-                tab="juying",
+                tab="woniu",
                 title="搜索与风控",
                 icon="mdi-shield-search",
-                hint="影片、资源和票据接口共用限速；缓存搜索结果和短时访问票据，减少重复请求。",
+                hint="影片搜索和详情直链抓取共用限速保护，缓存搜索结果避免频繁调用。",
                 fields=[
                     FieldSpec(
-                        key="juying_result_limit",
+                        key="woniu_result_limit",
                         label="候选上限",
-                        hint="最大保留候选数量",
+                        hint="单次搜索最多保留的候选资源数量",
                         type="number",
-                        default=5,
+                        default=10,
                         min=1,
                         max=20,
                         cols=4,
                     ),
                     FieldSpec(
-                        key="juying_request_interval",
+                        key="woniu_request_interval",
                         label="请求访问间隔",
                         hint="接口请求基础间隔秒数",
                         type="number",
@@ -130,7 +132,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                         cols=4,
                     ),
                     FieldSpec(
-                        key="juying_timeout",
+                        key="woniu_timeout",
                         label="搜索超时",
                         hint="单次搜索超时秒数，默认 60 秒",
                         type="number",
@@ -149,16 +151,15 @@ class JuyingSourceDefinition(SearchSourceDefinition):
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None
     ) -> Any:
         ctx = context or {}
-        owner = ctx.get("owner")
-        resources = JuyingResourceService(client) if client else None
-        r_types = ctx.get("resource_types", ()) or getattr(owner, "_juying_resource_types", ())
-        if not client or not resources or not r_types or not getattr(client, "is_configured", False):
+        resource_types = ctx.get("resource_types", ())
+        if not client or not getattr(client, "is_configured", False) or not resource_types:
             return None
-        limit = int(cls.config_value(config, "juying_result_limit", 20) or 20)
-        svc = JuyingSearchService(client, resources, r_types, limit)
-        return create_juying_provider(
+        resources = WoniuResourceService(client)
+        limit = int(cls.config_value(config, "woniu_result_limit", 10) or 10)
+        svc = WoniuSearchService(client, resources, resource_types, limit)
+        return create_woniu_provider(
             svc,
             client,
-            r_types,
-            {"result_limit": limit, "resource_types": list(r_types)},
+            resource_types,
+            {"result_limit": limit, "resource_types": list(resource_types)},
         )

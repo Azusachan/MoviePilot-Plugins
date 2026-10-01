@@ -10,6 +10,7 @@ from app.log import logger
 
 from .captcha import PinglianCaptchaRecognizer
 from ..http_client import (
+    AccountActionGate,
     RequestGate,
     gated_idempotent_request,
     gated_request,
@@ -64,6 +65,7 @@ class PinglianClient:
             proxy: Any = None,
             request_timeout: int = 30,
             request_interval: float = 1.0,
+            unlocks_per_minute: int = 5,
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
     ):
@@ -78,13 +80,21 @@ class PinglianClient:
             f"{self.base_url}|{self.username.casefold()}|{self._proxies}",
             request_interval=request_interval, minimum_interval=0.5
         )
+        self._unlocks_per_minute = max(1, min(int(unlocks_per_minute or 5), 20))
+        self._unlock_gate = AccountActionGate.shared(
+            "盘链 解锁接口",
+            f"pinglian:{self.username.casefold()}",
+            max_actions=self._unlocks_per_minute,
+            maximum_actions=20,
+        )
+        self._account_disabled = False
+        self._disabled_reason = ""
         self._get_data_func = get_data_func
         self._save_data_func = save_data_func
         self._lock = threading.RLock()
         self._authenticated = False
         self._captcha = PinglianCaptchaRecognizer()
         self._restore_session()
-
     @property
     def _timeout(self) -> tuple[int, int]:
         return min(15, self._request_timeout), self._request_timeout
@@ -193,11 +203,15 @@ class PinglianClient:
         return False
 
     def _login(self, force: bool = False) -> None:
+        if self._account_disabled:
+            raise PinglianError(self._disabled_reason or "盘链账号已被禁用，请联系管理员", "ACCOUNT_DISABLED")
         if not self.is_configured:
             raise PinglianError("盘链账号或密码未配置", "pinglian_not_configured")
         if self._authenticated and not force:
             return
         with self._LOGIN_LOCK:
+            if self._account_disabled:
+                raise PinglianError(self._disabled_reason or "盘链账号已被禁用，请联系管理员", "ACCOUNT_DISABLED")
             if self._authenticated and not force:
                 return
             if force:
@@ -259,8 +273,11 @@ class PinglianClient:
                         (payload or {}).get("message")
                         or f"盘链登录失败（HTTP {response.status_code}）"
                     )
+                    if "已被禁用" in error_msg or "禁用" in error_msg:
+                        self._account_disabled = True
+                        self._disabled_reason = error_msg
+                        raise PinglianError(error_msg, "ACCOUNT_DISABLED")
                     raise PinglianError(error_msg, "pinglian_login_failed")
-
                 self._authenticated = True
                 self._save_session()
                 logger.info("盘链登录成功并已更新会话")
@@ -313,11 +330,13 @@ class PinglianClient:
             retry_auth: bool = True,
             **kwargs,
     ):
+        if self._account_disabled:
+            raise PinglianError(self._disabled_reason or "盘链账号已被禁用，请联系管理员", "ACCOUNT_DISABLED")
         if not path.startswith("/api/auth/login"):
             self._login()
-        headers = dict(kwargs.pop("headers", {}) or {})
-        headers.setdefault("Origin", self.base_url)
-        headers.setdefault("Referer", f"{self.base_url}/")
+        req_headers = dict(kwargs.pop("headers", None) or {})
+        req_headers.setdefault("Origin", self.base_url)
+        req_headers.setdefault("Referer", f"{self.base_url}/")
         try:
             response = gated_idempotent_request(
                 self._request_gate,
@@ -325,7 +344,7 @@ class PinglianClient:
                 method,
                 f"{self.base_url}{path}",
                 on_retry=self._reset_transport,
-                headers=headers,
+                headers=req_headers,
                 proxies=self._proxies,
                 timeout=self._timeout,
                 **kwargs,
@@ -396,6 +415,10 @@ class PinglianClient:
         if payload.get("success") is False:
             message = str(payload.get("message") or "盘链接口调用失败")
             error_type = str(payload.get("error_type") or "pinglian_api_error")
+            if "已被禁用" in message or "禁用" in message:
+                self._account_disabled = True
+                self._disabled_reason = message
+                raise PinglianError(message, "ACCOUNT_DISABLED")
             raise PinglianError(message, error_type)
         return payload
 

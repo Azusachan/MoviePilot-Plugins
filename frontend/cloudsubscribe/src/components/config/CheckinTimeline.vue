@@ -420,9 +420,28 @@ function buildTimelineDays(provider) {
           const quotaStr = formatProviderPoints(provider, latest?.points_after);
           return quotaStr && quotaStr !== "—" ? `剩余配额 ${quotaStr}` : "";
         }
-        if (pointsChange !== null) {
-          const lbl = provider.pointsLabel || latest?.points_label || "积分";
-          return `${lbl} ${pointsLabel || "0"}`;
+        const lbl = provider.pointsLabel || latest?.points_label || "积分";
+        const gainedPoints = records.reduce((maxPts, item) => {
+          const change = Number(item.points_change);
+          const signin = Number(item.signin_points);
+          const val = Number.isFinite(change) && change > 0 ? change : (Number.isFinite(signin) && signin > 0 ? signin : 0);
+          return Math.max(maxPts, val);
+        }, 0);
+
+        if (gainedPoints > 0) {
+          return `${lbl} +${gainedPoints}`;
+        }
+        if (pointsChange !== null && pointsChange > 0) {
+          return `${lbl} +${pointsChange}`;
+        }
+        if (pointsChange !== null && pointsChange < 0) {
+          return `${lbl} ${formatSignedNumber(pointsChange)}`;
+        }
+        if (status === "already" || status === "success") {
+          const defaultGain = provider.key === "woniu" ? 10 : (provider.key === "juying" ? 5 : (provider.key === "hdhaven" ? 5 : 0));
+          if (defaultGain > 0) {
+            return `${lbl} +${defaultGain}`;
+          }
         }
         return "";
       })(),

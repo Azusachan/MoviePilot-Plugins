@@ -41,10 +41,10 @@ class PinglianSourceDefinition(SearchSourceDefinition):
             proxy=ctx.get("proxy"),
             request_timeout=int(cls.config_value(config, "pinglian_timeout", 60) or 60),
             request_interval=float(cls.config_value(config, "pinglian_request_interval", 2.0) or 2.0),
+            unlocks_per_minute=int(cls.config_value(config, "pinglian_unlocks_per_minute", 5) or 5),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),
         )
-
     @classmethod
     def get_checkin_definition(cls) -> Optional[CheckinDefinition]:
         """自动注册盘链签到契约。"""
@@ -79,7 +79,8 @@ class PinglianSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="pinglian_base_url",
                         label="服务地址",
-                        placeholder="https://panlian.me",
+                        placeholder="https://pinglian.lol",
+                        default="https://pinglian.lol",
                         cols=12,
                     ),
                     FieldSpec(
@@ -111,33 +112,47 @@ class PinglianSourceDefinition(SearchSourceDefinition):
                         key="pinglian_result_limit",
                         label="候选上限",
                         type="number",
+                        default=10,
                         min=1,
                         max=10,
-                        cols=4,
+                        cols=3,
+                    ),
+                    FieldSpec(
+                        key="pinglian_unlocks_per_minute",
+                        label="每分钟解锁",
+                        hint="频次限制，默认 5 次",
+                        type="number",
+                        default=5,
+                        min=1,
+                        max=20,
+                        step=1,
+                        suffix="次",
+                        cols=3,
                     ),
                     FieldSpec(
                         key="pinglian_request_interval",
-                        label="请求访问间隔",
+                        label="请求间隔",
                         type="number",
+                        default=2.0,
                         min=1,
                         max=10,
                         step=0.5,
                         suffix="秒",
-                        cols=4,
+                        cols=3,
                     ),
                     FieldSpec(
                         key="pinglian_timeout",
                         label="搜索超时",
                         type="number",
+                        default=60,
                         min=5,
                         max=120,
                         suffix="秒",
-                        cols=4,
+                        cols=3,
                     ),
                 ],
             ),
         ]
-
     @classmethod
     def create_provider(
             cls, service: Any, client: Any, config: Dict[str, Any], context: Optional[Any] = None

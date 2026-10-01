@@ -34,7 +34,7 @@ from ...search.mikan.service import filter_fansubs
 from ...search.pansou import PanSouSearchService
 from ...search.registry import create_search_registry
 from ...search.scanner import SearchSourceRegistry
-from ...search.types import SUPPORTED_RESOURCE_TYPES, normalize_resource_type
+from ...search.types import normalize_resource_type
 from ...utils.cache import create_platform_ttl_cache
 
 _COMPONENT_TYPES = (
@@ -96,17 +96,6 @@ class SearchHandler:
 
         anime_pack_preferred = get_val("anime_pack_preferred", True)
         self._anime_pack_preferred = bool(anime_pack_preferred)
-        self._pansou_channels = self._normalize_pansou_values(get_val("pansou_channels"))
-        self._pansou_plugins = self._normalize_pansou_values(get_val("pansou_plugins"))
-        self._pansou_cloud_types = [
-            value.lower() for value in self._normalize_pansou_values(
-                get_val("pansou_cloud_types")
-            )
-        ]
-        self._pansou_filter = {
-            "include": self._normalize_pansou_values(get_val("pansou_filter_include")),
-            "exclude": self._normalize_pansou_values(get_val("pansou_filter_exclude")),
-        }
         resource_type_order = get_val("resource_type_order")
         self._resource_type_order_config = list(
             ["115", "ed2k"]
@@ -116,24 +105,6 @@ class SearchHandler:
         for index, value in enumerate(self._resource_type_order_config):
             self._resource_type_order_map.setdefault(value, index)
 
-        pansou_concurrency = get_val("pansou_concurrency")
-        try:
-            self._pansou_concurrency = (
-                max(1, min(int(pansou_concurrency), 100))
-                if pansou_concurrency else None
-            )
-        except (TypeError, ValueError):
-            self._pansou_concurrency = None
-
-        self._pansou_result_limit = max(1, min(int(get_val("pansou_result_limit", 10) or 10), 100))
-        self._pansou_refresh = bool(get_val("pansou_refresh", True))
-        self._pansou_timeout = max(5, min(int(get_val("pansou_timeout", 60) or 60), 120))
-        self._juying_resource_types = [
-            value for value in unique_texts(
-                self._resource_type_order_config, str.lower
-            )
-            if value in SUPPORTED_RESOURCE_TYPES
-        ]
         self._search_source_order = get_val("search_source_order", []) or []
         self._search_proxy = get_val("search_proxy")
         self._search_cache_enabled = bool(get_val("search_cache_enabled", True))
@@ -688,6 +659,38 @@ class SearchHandler:
         )
         return list(results)[:self._TEST_RESULT_LIMIT]
 
+    def _auto_remove_search_source(self, source: str, reason: str = "") -> None:
+        """当渠道账号封禁或永久不可用时，自动从搜索渠道优先级列表和运行态中剔除，防止反复发起错误请求。"""
+        source = str(source or "").strip().lower()
+        if not source:
+            return
+        logger.warning(
+            f"🚫 搜索渠道 [{source.upper()}] 触发封禁保护（{reason or '账号已被封禁'}），已自动剔除该渠道"
+        )
+        try:
+            if hasattr(self, "_search_source_order") and source in self._search_source_order:
+                self._search_source_order = [s for s in self._search_source_order if s != source]
+        except Exception:
+            pass
+        try:
+            SEARCH_CIRCUIT_BREAKER.record_failure(source, reason or "账号被封禁")
+        except Exception:
+            pass
+        try:
+            owner = getattr(self, "_owner", None)
+            if owner and hasattr(owner, "update_config"):
+                cfg = dict(getattr(owner, "_config", None) or {})
+                raw_order = cfg.get("search_source_order") or []
+                if isinstance(raw_order, str):
+                    raw_order = [s.strip() for s in raw_order.split(",") if s.strip()]
+                new_order = [s for s in raw_order if str(s).strip().lower() != source]
+                if len(new_order) != len(raw_order):
+                    cfg["search_source_order"] = new_order
+                    owner.update_config(cfg)
+                    logger.info(f"已持久化更新插件配置：已将 [{source.upper()}] 从搜索渠道优先级列表中自动移除")
+        except Exception as err:
+            logger.debug(f"持久化剔除搜索渠道 [{source}] 失败：{err}")
+
     def search_single_source(
             self,
             source: str,
@@ -772,11 +775,19 @@ class SearchHandler:
                 raise error
             return []
         except Exception as error:
+            err_msg = str(error)
             logger.warning(
                 f"[{search_label}][{source.upper()}] 外部查询抛出异常：{error}",
                 exc_info=True,
             )
-            if self._search_circuit_breaker_enabled:
+            is_banned = (
+                    getattr(error, "code", "") in {"woniu_account_banned", "account_banned"}
+                    or any(marker in err_msg for marker in
+                           ("账号被封禁", "账号已封禁", "已被管理员禁用", "账号异常锁定", "已被封禁"))
+            )
+            if is_banned:
+                self._auto_remove_search_source(source, f"账号被封禁: {err_msg}")
+            elif self._search_circuit_breaker_enabled:
                 SEARCH_CIRCUIT_BREAKER.record_failure(source, str(error))
             if raise_errors:
                 raise error

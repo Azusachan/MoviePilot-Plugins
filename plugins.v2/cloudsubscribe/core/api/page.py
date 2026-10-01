@@ -16,13 +16,10 @@ from ..config import UIConfig
 from ..media import call_with_supported_kwargs, recognize_media
 from ...drive.scanner import DriverRegistry
 from ...search.matching import is_anime_media
-from ...search.pansou import PanSouClient
 from ...search.scanner import SearchSourceRegistry
 from ...search.types import (
-    PANSOU_RESOURCE_TYPES,
     resource_type_aliases,
     resource_type_catalog,
-    resource_type_name,
 )
 from ...utils.cache import create_platform_ttl_cache
 
@@ -285,6 +282,27 @@ class PageApi(OwnerDelegator):
             "data": self._get_data_store().history_summary(today),
         }
 
+    def _get_plugin_config(self) -> Dict[str, Any]:
+        """获取当前插件的完整持久化或运行时配置字典。"""
+        owner = getattr(self, "_owner", None)
+        if owner:
+            if hasattr(owner, "get_config"):
+                try:
+                    cfg = owner.get_config()
+                    if isinstance(cfg, dict) and cfg:
+                        return cfg
+                except Exception:
+                    pass
+            if hasattr(owner, "_applied_config"):
+                cfg = getattr(owner, "_applied_config", None)
+                if isinstance(cfg, dict) and cfg:
+                    return cfg
+            if hasattr(owner, "_config"):
+                cfg = getattr(owner, "_config", None)
+                if isinstance(cfg, dict) and cfg:
+                    return cfg
+        return getattr(self, "__dict__", {}) or {}
+
     def api_vue_ui_options(self, scope: str = "base", refresh: bool = False) -> dict:
         normalized_scope = str(scope or "base").strip().lower()
         normalized_scope = {
@@ -315,43 +333,12 @@ class PageApi(OwnerDelegator):
             return result
 
         if normalized_scope == "pansou":
-            pansou_options = {
-                "status": "unavailable",
-                "plugins": [],
-                "channels": [],
-                "cloud_types": [
-                    {
-                        "title": resource_type_name(value, value),
-                        "value": value,
-                    }
-                    for value in PANSOU_RESOURCE_TYPES
-                ],
-            }
-            pansou_url = str(getattr(self, "_pansou_url", "") or "").strip()
-            if pansou_url:
-                client = PanSouClient(
-                    base_url=pansou_url,
-                    auth_enabled=False,
-                    proxy=getattr(self, "_search_proxy", None),
-                    search_timeout=5,
-                )
-                try:
-                    health = client.health(timeout=2)
-                except Exception as error:
-                    logger.debug(f"读取 PanSou 配置选项失败：{error}")
-                    health = {"status": "error", "error": str(error)}
-                pansou_options.update({
-                    "status": str(health.get("status") or "error"),
-                    "error": str(health.get("error") or ""),
-                    "plugins": [
-                        {"title": value, "value": value}
-                        for value in health.get("plugins", [])
-                    ],
-                    "channels": [
-                        {"title": value, "value": value}
-                        for value in health.get("channels", [])
-                    ],
-                })
+            from ...search.pansou.definition import PanSouSourceDefinition
+            plugin_cfg = self._get_plugin_config()
+            pansou_options = PanSouSourceDefinition.get_dynamic_options(
+                plugin_cfg,
+                {"proxy": getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy")},
+            )
             result = {"success": True, "data": {"pansou": pansou_options}}
             _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
             return result
@@ -393,6 +380,7 @@ class PageApi(OwnerDelegator):
                 "success": True,
                 "data": {
                     "subscribes": UIConfig.get_subscribe_options_grouped(),
+                    "transfer_cloud_drives": cloud_drives,
                     "cloud_drives": cloud_drives,
                     "target_cloud_drive": target_key,
                     "enable_cloud_upgrade": bool(
@@ -415,6 +403,33 @@ class PageApi(OwnerDelegator):
             )
             if normalized_scope == "base":
                 from ..checkin_manager import get_checkin_schemas
+                provider_map = {p.key: p for p in providers}
+                cloud_drives = []
+                for def_cls in DriverRegistry.get_definitions():
+                    p = provider_map.get(def_cls.id)
+                    if p:
+                        caps = sorted(capability.value for capability in p.capabilities)
+                        rtypes = sorted(p.resource_types)
+                        policy = {
+                            "pagination_mode": p.policy.pagination_mode,
+                            "max_page_size": p.policy.max_page_size,
+                            "supports_batch": p.policy.supports_batch,
+                            "max_batch_size": p.policy.max_batch_size,
+                            "supports_cancel": p.policy.supports_cancel,
+                            "max_concurrency": p.policy.max_concurrency,
+                            "cache_ttl_seconds": dict(p.policy.cache_ttl_seconds),
+                        }
+                    else:
+                        caps = [c.value for c in getattr(def_cls, "capabilities", ())]
+                        rtypes = list(getattr(def_cls, "resource_types", ()))
+                        policy = {}
+                    cloud_drives.append({
+                        "title": def_cls.name,
+                        "value": def_cls.id,
+                        "capabilities": caps,
+                        "resource_types": rtypes,
+                        "policy": policy,
+                    })
                 result = {
                     "success": True,
                     "data": {
@@ -422,29 +437,7 @@ class PageApi(OwnerDelegator):
                         "defaults": UIConfig.normalize_config(UIConfig.get_default_config()),
                         "mediaservers": UIConfig.get_media_server_options(),
                         "checkin_schemas": get_checkin_schemas(),
-                        "cloud_drives": [
-                            {
-                                "title": provider.name,
-                                "value": provider.key,
-                                "capabilities": sorted(
-                                    capability.value
-                                    for capability in provider.capabilities
-                                ),
-                                "resource_types": sorted(provider.resource_types),
-                                "policy": {
-                                    "pagination_mode": provider.policy.pagination_mode,
-                                    "max_page_size": provider.policy.max_page_size,
-                                    "supports_batch": provider.policy.supports_batch,
-                                    "max_batch_size": provider.policy.max_batch_size,
-                                    "supports_cancel": provider.policy.supports_cancel,
-                                    "max_concurrency": provider.policy.max_concurrency,
-                                    "cache_ttl_seconds": dict(
-                                        provider.policy.cache_ttl_seconds
-                                    ),
-                                },
-                            }
-                            for provider in providers
-                        ],
+                        "cloud_drives": cloud_drives,
                     },
                 }
             else:
@@ -509,18 +502,12 @@ class PageApi(OwnerDelegator):
                     "error": f"配置并保存 {def_cls.name} 账户后读取账户信息",
                 },
             )
-        pansou_options = {
-            "status": "unavailable",
-            "plugins": [],
-            "channels": [],
-            "cloud_types": [
-                {
-                    "title": resource_type_name(value, value),
-                    "value": value,
-                }
-                for value in PANSOU_RESOURCE_TYPES
-            ],
-        }
+        from ...search.pansou.definition import PanSouSourceDefinition
+        plugin_cfg = self._get_plugin_config()
+        pansou_options = PanSouSourceDefinition.get_dynamic_options(
+            plugin_cfg,
+            {"proxy": getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy")},
+        )
         available_sources = []
         search_handler = getattr(self, "_search_handler", None)
         if search_handler and hasattr(search_handler, "get_available_sources_meta"):
@@ -530,6 +517,7 @@ class PageApi(OwnerDelegator):
             "success": True,
             "data": {
                 **_display_catalog(),
+                "defaults": UIConfig.normalize_config(UIConfig.get_default_config()),
                 "search_accounts": search_accounts,
                 "pansou": pansou_options,
                 "available_sources": available_sources,
@@ -1051,51 +1039,32 @@ class PageApi(OwnerDelegator):
                 try:
                     raw_seasons = media_item.pop("_rec_seasons", None)
                     tot_ep = media_item.pop("_rec_total_episodes", None)
-                    if not raw_seasons and not tot_ep:
-                        t_id = media_item.get("tmdb_id")
-                        if t_id and str(t_id).isdigit():
-                            meta_obj = MetaInfo(str(media_item.get("title") or ""))
-                            meta_obj.type = MediaType.TV
-                            m_info = recognize_media(
-                                media_chain,
-                                meta=meta_obj,
-                                mtype=MediaType.TV,
-                                tmdb_id=int(t_id),
-                                cache=True,
-                            )
-                            if m_info:
-                                raw_seasons = getattr(m_info, "seasons", None)
-                                tot_ep = getattr(m_info, "total_episodes", None)
-                            if isinstance(raw_seasons, dict):
-                                for s_k, s_v in raw_seasons.items():
-                                    try:
-                                        meta_seasons_info[int(s_k)] = s_v
-                                    except Exception:
-                                        pass
-                            elif isinstance(raw_seasons, list):
-                                for s_item in raw_seasons:
-                                    if isinstance(s_item, dict):
-                                        s_n = s_item.get("season_number") if s_item.get(
-                                            "season_number") is not None else s_item.get("season")
-                                        ep_c = s_item.get("episode_count") or s_item.get(
-                                            "total_episodes") or s_item.get("episodes")
-                                    else:
-                                        s_n = getattr(s_item, "season_number", None) or getattr(s_item, "season", None)
-                                        ep_c = getattr(s_item, "episode_count", None) or getattr(s_item,
-                                                                                                 "total_episodes",
-                                                                                                 None) or getattr(
-                                            s_item, "episodes", None)
-                                    if s_n is not None:
-                                        try:
-                                            meta_seasons_info[int(s_n)] = ep_c
-                                        except Exception:
-                                            pass
-                            # 若各季未列出具体集数，尝试全局总集数作为兜底
-                            if not meta_seasons_info:
-                                tot_ep = getattr(m_info, "total_episodes", None) or getattr(m_info, "episodes_count",
-                                                                                            None)
-                                if tot_ep and str(tot_ep).isdigit() and int(tot_ep) > 0:
-                                    meta_seasons_info[1] = int(tot_ep)
+                    if isinstance(raw_seasons, dict):
+                        for s_k, s_v in raw_seasons.items():
+                            try:
+                                meta_seasons_info[int(s_k)] = s_v
+                            except Exception:
+                                pass
+                    elif isinstance(raw_seasons, list):
+                        for s_item in raw_seasons:
+                            if isinstance(s_item, dict):
+                                s_n = s_item.get("season_number") if s_item.get(
+                                    "season_number") is not None else s_item.get("season")
+                                ep_c = s_item.get("episode_count") or s_item.get("total_episodes") or s_item.get(
+                                    "episodes")
+                            else:
+                                s_n = getattr(s_item, "season_number", None) or getattr(s_item, "season", None)
+                                ep_c = getattr(s_item, "episode_count", None) or getattr(s_item, "total_episodes",
+                                                                                         None) or getattr(s_item,
+                                                                                                          "episodes",
+                                                                                                          None)
+                            if s_n is not None:
+                                try:
+                                    meta_seasons_info[int(s_n)] = ep_c
+                                except Exception:
+                                    pass
+                    if not meta_seasons_info and tot_ep and str(tot_ep).isdigit() and int(tot_ep) > 0:
+                        meta_seasons_info[1] = int(tot_ep)
                 except Exception:
                     pass
 

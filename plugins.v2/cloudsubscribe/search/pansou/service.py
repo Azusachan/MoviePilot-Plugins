@@ -11,12 +11,62 @@ from app.schemas.types import MediaType
 from ..magnet import clear_cache, normalize_magnets
 from ..matching import normalize_season
 from ..types import PANSOU_RESOURCE_TYPES, normalize_resource_type, resource_type_name
-from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
+from ...core import SearchQuery
 
 
-class PanSouSearchService(OwnerDelegator):
+class PanSouSearchService:
     """将 PanSou 协议响应转换为统一搜索候选。"""
 
+    def __init__(
+            self,
+            client: Any = None,
+            resource_types: Any = (),
+            channels: Any = None,
+            plugins: Any = None,
+            filter_config: Any = None,
+            concurrency: Any = None,
+            result_limit: int = 10,
+            refresh: bool = True,
+            owner: Any = None,
+    ):
+        if client is not None and not hasattr(client, "_pansou_client"):
+            self._client = client
+            self._owner = owner
+        else:
+            self._owner = client or owner
+            self._client = getattr(self._owner, "_pansou_client", None)
+
+        self._resource_types = (
+            tuple(resource_types)
+            if resource_types
+            else tuple(getattr(self._owner, "_resource_type_order_config", ()) or ())
+        )
+        self._channels = (
+            list(channels)
+            if channels is not None
+            else list(getattr(self._owner, "_pansou_channels", ()) or ())
+        )
+        self._plugins = (
+            list(plugins)
+            if plugins is not None
+            else list(getattr(self._owner, "_pansou_plugins", ()) or ())
+        )
+        self._filter = (
+            dict(filter_config)
+            if filter_config is not None
+            else dict(getattr(self._owner, "_pansou_filter", {}) or {})
+        )
+        self._concurrency = (
+            concurrency
+            if concurrency is not None
+            else getattr(self._owner, "_pansou_concurrency", None)
+        )
+        self._result_limit = max(1, int(result_limit or 10))
+        self._refresh = bool(
+            refresh
+            if refresh is not None
+            else getattr(self._owner, "_pansou_refresh", True)
+        )
     _PUNCT_GAP_RE = re.compile(
         r"[\s\u3000:：·•.,，。!！?？（）【】\[\]/／\\＼-]+"
     )
@@ -231,14 +281,18 @@ class PanSouSearchService(OwnerDelegator):
             if media_type == MediaType.TV else
             f"{mediainfo.title} {mediainfo.year or ''}".strip()
         )
-        prefix = format_search_log_prefix(query, "pansou")
-        if not self._pansou_client:
+        media_title = str(getattr(mediainfo, "title", None) or "").strip()
+        year_str = f" ({mediainfo.year})" if getattr(mediainfo, "year", None) else ""
+        season_str = f" S{season:02d}" if season is not None else ""
+        prefix = f"[{media_title}{year_str}{season_str}][PANSOU]"
+        client = self._client or getattr(self._owner, "_pansou_client", None)
+        if not client:
             logger.warning(f"{prefix} 客户端未初始化，跳过查询")
             return []
         titles = self._media_titles(mediainfo)
         limit = (
-            max(1, int(query.result_limit or self._pansou_result_limit))
-            if query.resource_list_mode else self._pansou_result_limit
+            max(1, int(query.result_limit or self._result_limit))
+            if query.resource_list_mode else self._result_limit
         )
         allowed_types = (
             [
@@ -247,13 +301,13 @@ class PanSouSearchService(OwnerDelegator):
             ] if query.resource_list_mode else
             [
                 "aliyun" if value == "alipan" else value
-                for value in self._resource_type_order_config
+                for value in (self._resource_types or getattr(self._owner, "_resource_type_order_config", ()))
             ]
         )
         if not query.resource_list_mode and query.subscribe is not None:
-            target_drive = str(getattr(self, "_cloud_drive_key", "") or "").strip().lower()
+            target_drive = str(getattr(self._owner, "_cloud_drive_key", "") or "").strip().lower()
             if target_drive:
-                supported = set(getattr(self, "_cloud_drive_resource_types", ()) or ())
+                supported = set(getattr(self._owner, "_cloud_drive_resource_types", ()) or ())
                 if not supported:
                     supported = {target_drive} | ({"magnet", "ed2k"} if target_drive == "115" else set())
                 allowed_types = [
@@ -262,28 +316,28 @@ class PanSouSearchService(OwnerDelegator):
                 ]
                 if not allowed_types:
                     return []
-        response = self._pansou_client.request_search(
+        response = client.request_search(
             keyword=keyword,
             cloud_types=allowed_types,
-            channels=[] if query.resource_list_mode else self._pansou_channels,
-            plugins=[] if query.resource_list_mode else self._pansou_plugins,
-            filter_config={} if query.resource_list_mode else self._pansou_filter,
-            refresh=self._pansou_refresh,
-            concurrency=self._pansou_concurrency,
+            channels=[] if query.resource_list_mode else self._channels,
+            plugins=[] if query.resource_list_mode else self._plugins,
+            filter_config={} if query.resource_list_mode else self._filter,
+            refresh=self._refresh,
+            concurrency=self._concurrency,
             response_mode="merge" if query.resource_list_mode else "results",
         )
         raw_items = (response or {}).get("results") or []
         pure_title = str(mediainfo.title or "").strip()
         if (not raw_items) and keyword != pure_title and pure_title:
             logger.debug(f"{prefix} 带年份关键词 '{keyword}' 无结果，降级尝试纯标题 '{pure_title}'")
-            fallback_res = self._pansou_client.request_search(
+            fallback_res = client.request_search(
                 keyword=pure_title,
                 cloud_types=allowed_types,
-                channels=[] if query.resource_list_mode else self._pansou_channels,
-                plugins=[] if query.resource_list_mode else self._pansou_plugins,
-                filter_config={} if query.resource_list_mode else self._pansou_filter,
-                refresh=self._pansou_refresh,
-                concurrency=self._pansou_concurrency,
+                channels=[] if query.resource_list_mode else self._channels,
+                plugins=[] if query.resource_list_mode else self._plugins,
+                filter_config={} if query.resource_list_mode else self._filter,
+                refresh=self._refresh,
+                concurrency=self._concurrency,
                 response_mode="merge" if query.resource_list_mode else "results",
             )
             if fallback_res and fallback_res.get("results"):
@@ -302,12 +356,16 @@ class PanSouSearchService(OwnerDelegator):
             allowed_types, limit, strict_year=strict_year,
         )
         # 用 candidate 的 resource_type 字段标准化后与配置对比。
-        # groups.key 是中文显示名，不能直接匹配 _resource_type_order_config。
-        resource_type_set = set(self._resource_type_order_config)
+        resource_type_set = {
+            normalize_resource_type(t)
+            for t in (allowed_types or self._resource_types or ())
+            if t
+        }
         grouped = [
             group for group in groups.values()
             if group and (
                 query.resource_list_mode
+                or not resource_type_set
                 or normalize_resource_type(group[0].get("resource_type", "")) in resource_type_set
             )
         ]
@@ -345,4 +403,5 @@ class PanSouSearchService(OwnerDelegator):
         return not (has_movie and not has_tv)
 
     def clear_cache(self) -> int:
-        return clear_cache(self._pansou_client)
+        client = self._client or getattr(self._owner, "_pansou_client", None)
+        return clear_cache(client)

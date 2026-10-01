@@ -32,40 +32,30 @@ _HDHIVE_OAUTH_LOCK = RLock()
 class AccountApi(OwnerDelegator):
 
     def _search_runtime_value(self, name: str, default: Any = None) -> Any:
-        """从搜索处理器读取已归一化的渠道运行参数。"""
-        handler = self._search_handler
-        return getattr(handler, name, default) if handler else default
-    
+        return getattr(self, name, default) or getattr(getattr(self, "_owner", None), name, default)
+
     def _search_account_card(
             self, source: str, info: Dict[str, Any]
     ) -> Dict[str, Any]:
         """将搜索渠道账户数据转换为通用信息卡片。"""
         badge = str(info.get("level") or info.get("role") or "").strip()
-        if badge.lower() == "vip":
-            badge = "VIP"
-        if source == "hdhive" and info.get("is_vip"):
+        if badge.lower() == "vip" or info.get("is_vip"):
             badge = "VIP"
 
         details = []
+        seen_labels = set()
 
-        def _format_detail_val(val: Any) -> str:
-            if not val:
-                return ""
-            val_str = str(val).strip()
-            if not val_str:
-                return ""
-            if "T" in val_str:
-                val_str = val_str.replace("T", " ")
+        def add_detail(label: str, value: Any) -> None:
+            if value is None or value == "" or label in seen_labels:
+                return
+            val_str = str(value).strip().replace("T", " ")
             if val_str.endswith("Z"):
                 val_str = val_str[:-1].strip()
             if "." in val_str:
                 val_str = val_str.split(".")[0].strip()
-            return val_str
-
-        def add_detail(label: str, value: Any) -> None:
-            text = _format_detail_val(value)
-            if text:
-                details.append({"label": label, "value": text})
+            if val_str:
+                details.append({"label": label, "value": val_str})
+                seen_labels.add(label)
 
         channel_name = source.upper()
         search_handler = getattr(self, "_search_handler", None)
@@ -79,6 +69,7 @@ class AccountApi(OwnerDelegator):
         if not name or "@" in name or (email and name.lower() == email):
             name = f"{channel_name}用户"
 
+        # 核心基础状态字段
         if "is_vip" in info:
             add_detail("会员状态", "VIP会员" if info.get("is_vip") else "普通用户")
         if info.get("level_name") or info.get("level"):
@@ -90,55 +81,50 @@ class AccountApi(OwnerDelegator):
         if info.get("expires_at"):
             add_detail("会员到期", info.get("expires_at"))
 
-        if info.get("consecutive_signin") is not None:
-            add_detail("连续签到", f"{int(info.get('consecutive_signin') or 0)} 天")
-        elif info.get("signin_days") is not None:
-            add_detail("累计签到", f"{int(info.get('signin_days') or 0)} 天")
-        elif info.get("checkin_days") is not None:
-            add_detail("累计签到", f"{int(info.get('checkin_days') or 0)} 天")
+        days = info.get("signin_days") if info.get("signin_days") is not None else info.get("checkin_days")
+        if days is None:
+            days = info.get("consecutive_signin")
+        if days is not None:
+            days_str = f"{days} 天" if not str(days).endswith("天") else str(days)
+            add_detail("签到天数", days_str)
 
-        if info.get("share_count") is not None:
-            add_detail("分享数量", f"{int(info.get('share_count') or 0)} 个")
-        if info.get("upload_count") is not None:
-            add_detail("上传资源", f"{int(info.get('upload_count') or 0)} 个")
-        if info.get("favorite_count") is not None:
-            add_detail("收藏资源", f"{int(info.get('favorite_count') or 0)} 个")
-        if info.get("unlock_count") is not None:
-            add_detail("已解锁", f"{int(info.get('unlock_count') or 0)} 次")
-        if info.get("invite_count") is not None:
-            add_detail("邀请用户", info.get("invite_count"))
-
-        if info.get("status"):
-            status_map = {
-                "active": "正常",
-                "inactive": "未激活",
-                "suspended": "已停用",
-            }
-            raw_status = str(info.get("status") or "").lower()
-            add_detail("账户状态", status_map.get(raw_status, raw_status))
-
+        # 字典自定义属性（自动映射常见英文键名，杜绝重复与英文泄露）
+        label_map = {
+            "level": "用户等级",
+            "points": "可用积分",
+            "signin_days": "签到天数",
+            "checkin_days": "签到天数",
+            "registered_at": "注册日期",
+            "created_at": "注册日期",
+            "expires_at": "会员到期",
+            "vip_expires_at": "会员到期",
+            "quota": "今日配额",
+            "remaining_quota": "剩余配额",
+            "quota_usage": "配额使用",
+            "account_count": "账号数量",
+            "vip_level": "VIP等级",
+            "share_count": "分享数量",
+            "upload_count": "上传资源",
+            "favorite_count": "收藏资源",
+            "unlock_count": "已解锁",
+            "invite_count": "邀请用户",
+        }
         extra_details = info.get("details")
         if isinstance(extra_details, dict):
             for k, v in extra_details.items():
-                if k not in ("会员到期", "VIP 到期", "注册日期", "今日解锁配额"):
-                    add_detail(k, v)
+                label = label_map.get(str(k).strip(), str(k).strip())
+                add_detail(label, v)
         elif isinstance(extra_details, list):
             for item in extra_details:
                 if isinstance(item, dict) and item.get("label") and item.get("value"):
-                    add_detail(item["label"], item["value"])
+                    label = label_map.get(str(item["label"]).strip(), str(item["label"]).strip())
+                    add_detail(label, item["value"])
 
-        points_info = info.get("points")
+        points_avail = info.get("quota_text") or info.get("points") or 0
         points_label = str(
             info.get("points_label")
             or ("今日解锁配额" if info.get("quota_text") else "可用积分")
         )
-        if info.get("quota_text"):
-            points_avail = info.get("quota_text")
-        else:
-            try:
-                points_avail = max(0, int(points_info or 0))
-            except (TypeError, ValueError):
-                points_avail = points_info or 0
 
         return {
             "connected": True,
@@ -172,32 +158,24 @@ class AccountApi(OwnerDelegator):
             }
         try:
             client = provider.require(SearchCapability.ACCOUNT)
-            if source == "hdhive" and getattr(self, "_hdhive_query_mode", "web") == "api":
-                if not client or not client.is_ready:
-                    return {
-                        "connected": False,
-                        "error": "请先完成 HDHive OpenAPI 用户授权并保存配置",
-                    }
-                data = client.get_me().get("data") or {}
-                level = str(data.get("level") or "").strip().lower()
-                return self._search_account_card(source, {
-                    "name": data.get("nickname") or data.get("username"),
-                    "avatar": data.get("avatar_url"),
-                    "points": data.get("points"),
-                    "level": level,
-                    "is_vip": level in {"vip", "forever_vip"},
-                    "signin_days": data.get("signin_days_total"),
-                    "share_count": data.get("share_num"),
-                    "status": "suspended" if data.get("is_blocked") else "active",
-                })
-            return self._search_account_card(source, client.get_account_info())
+            if not client:
+                return {
+                    "connected": False,
+                    "error": "渠道客户端未初始化，请检查配置",
+                }
+            if hasattr(client, "is_ready") and not client.is_ready:
+                return {
+                    "connected": False,
+                    "error": "渠道授权尚未完成，请先保存配置并授权",
+                }
+            info = client.get_account_info()
+            return self._search_account_card(source, info)
         except Exception as error:
             logger.debug(f"读取{source}搜索账户信息失败：{error}")
             return {
                 "connected": False,
-                "error": "账户信息读取失败，请检查登录凭据或稍后重试",
+                "error": f"账户信息读取失败：{error}",
             }
-
     def _load_drive_account(
             self, provider_key: str, force: bool = False
     ) -> Dict[str, Any]:
@@ -281,17 +259,8 @@ class AccountApi(OwnerDelegator):
     ) -> bool:
         """用签到结果更新搜索渠道账户快照，避免重复请求第三方接口。"""
         account_key = f"search:{str(source or '').strip().lower()}"
-        try:
-            normalized_points = max(0, int(points))
-        except (TypeError, ValueError):
+        if points is None:
             return False
-        try:
-            normalized_days = (
-                max(0, int(signin_days))
-                if signin_days is not None else None
-            )
-        except (TypeError, ValueError):
-            normalized_days = None
 
         with _ACCOUNT_INFO_LOCK:
             account = (
@@ -302,16 +271,19 @@ class AccountApi(OwnerDelegator):
                 return False
             account = copy.deepcopy(account)
             point_info = dict(account.get("points") or {})
-            point_info["available"] = normalized_points
+            point_info["available"] = points
             account["points"] = point_info
-            details = list(account.get("details") or [])
-            for item in details:
-                if isinstance(item, dict):
-                    if item.get("label") == "今日签到":
-                        item["value"] = "已签到"
-                    elif normalized_days is not None and item.get("label") in {"累计签到", "连续签到"}:
-                        item["value"] = f"{normalized_days} 天"
-            account["details"] = details
+            if signin_days is not None:
+                days_text = f"{signin_days} 天" if not str(signin_days).endswith("天") else str(signin_days)
+                details = list(account.get("details") or [])
+                updated = False
+                for item in details:
+                    if isinstance(item, dict) and item.get("label") in {"签到天数", "累计签到", "连续签到"}:
+                        item["value"] = days_text
+                        updated = True
+                if not updated:
+                    details.append({"label": "签到天数", "value": days_text})
+                account["details"] = details
             account["refreshed_at"] = int(time.time())
             _ACCOUNT_INFO_CACHE.set(account_key, account)
             _ACCOUNT_REFRESH_GUARD.set(account_key, True)

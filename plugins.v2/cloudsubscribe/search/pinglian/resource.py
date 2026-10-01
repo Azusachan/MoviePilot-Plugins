@@ -223,20 +223,25 @@ class PinglianResourceService:
                 "pinglian_quota_exceeded",
             )
 
-        # 第一步：获取解锁凭证 (link-ticket)
-        try:
-            ticket_payload = self._client.request_json(
+        # 第一步：获取解锁凭证 (link-ticket)，受每分钟解锁频次门控保护
+        def _fetch_ticket():
+            return self._client.request_json(
                 "/api/videos/link-ticket",
                 method="POST",
                 json={"link_id": int(target_id) if target_id.isdigit() else target_id},
             )
+
+        try:
+            if hasattr(self._client, "_unlock_gate") and self._client._unlock_gate:
+                ticket_payload = self._client._unlock_gate.run(_fetch_ticket)
+            else:
+                ticket_payload = _fetch_ticket()
         except Exception as error:
             if any(w in str(error).lower() for w in ("配额", "上限", "quota", "limit")):
                 self.mark_quota_exhausted()
             raise PinglianError(
                 f"获取盘链资源解锁凭证失败：{error}", "pinglian_ticket_failed"
             ) from error
-
         ticket_data = ticket_payload.get("data") if isinstance(ticket_payload, dict) else {}
         ticket = str((ticket_data or {}).get("ticket") or "").strip()
         ticket_code = str((ticket_data or {}).get("code") or "").strip()
