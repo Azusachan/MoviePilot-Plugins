@@ -11,6 +11,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
 from ..magnet import clear_cache, normalize_magnets
+from ..mikan.titles import metadata_aliases, unique_titles
 from ..types import PANSOU_RESOURCE_TYPES, normalize_resource_type, resource_type_name
 from ...core import OwnerDelegator, SearchQuery, format_search_log_prefix
 
@@ -103,7 +104,7 @@ class PanSouSearchService(OwnerDelegator):
 
     @staticmethod
     def _media_titles(mediainfo: MediaInfo) -> List[str]:
-        return list(dict.fromkeys(
+        return unique_titles([
             value for value in (
                 str(getattr(mediainfo, "title", "") or "").strip(),
                 str(
@@ -112,7 +113,7 @@ class PanSouSearchService(OwnerDelegator):
                     or ""
                 ).strip(),
             ) if value
-        ))
+        ] + metadata_aliases(mediainfo))
 
     @staticmethod
     def _resource_type(resource: Dict[str, Any]) -> str:
@@ -263,23 +264,15 @@ class PanSouSearchService(OwnerDelegator):
                 ]
                 if not allowed_types:
                     return []
-        response = self._pansou_client.request_search(
-            keyword=keyword,
-            cloud_types=allowed_types,
-            channels=[] if query.resource_list_mode else self._pansou_channels,
-            plugins=[] if query.resource_list_mode else self._pansou_plugins,
-            filter_config={} if query.resource_list_mode else self._pansou_filter,
-            refresh=self._pansou_refresh,
-            concurrency=self._pansou_concurrency,
-            response_mode="merge" if query.resource_list_mode else "results",
-        )
-        raw_items = (response or {}).get("results") or []
-        # 如果带年份搜索结果为空，尝试以纯标题降级检索
-        pure_title = str(mediainfo.title or "").strip()
-        if (not raw_items) and keyword != pure_title and pure_title:
-            logger.debug(f"{prefix} 带年份关键词 '{keyword}' 无结果，降级尝试纯标题 '{pure_title}'")
-            fallback_res = self._pansou_client.request_search(
-                keyword=pure_title,
+        # Only trusted metadata supplies aliases. Bound requests independently of
+        # raw result count: unrelated Chinese hits must not suppress other names.
+        keywords = unique_titles([keyword, *titles])[:6]
+        groups = {}
+        seen = set()
+        raw_count = 0
+        for search_key in keywords:
+            response = self._pansou_client.request_search(
+                keyword=search_key,
                 cloud_types=allowed_types,
                 channels=[] if query.resource_list_mode else self._pansou_channels,
                 plugins=[] if query.resource_list_mode else self._pansou_plugins,
@@ -288,22 +281,23 @@ class PanSouSearchService(OwnerDelegator):
                 concurrency=self._pansou_concurrency,
                 response_mode="merge" if query.resource_list_mode else "results",
             )
-            if fallback_res and fallback_res.get("results"):
-                response = fallback_res
-                keyword = pure_title
-
-        if not response or response.get("error"):
-            reason = response.get("error") if response else "接口未返回结果"
-            logger.debug(f"{prefix} 搜索失败：关键词 '{keyword}'，原因：{reason}")
-            return []
-        # 剧集搜索放宽年份约束：剧集关键词不含年份，不应因标题年份差异而误杀资源
-        strict_year = (media_type != MediaType.TV)
-        groups = self._normalize_results(
-            response.get("results"), keyword, titles,
-            None if query.resource_list_mode else getattr(mediainfo, "year", None),
-            allowed_types, limit,
-            strict_year=strict_year,
-        )
+            if not response or response.get("error"):
+                continue
+            raw_count += int(response.get('raw_count') or 0)
+            # Later seasons can carry a year different from the show's debut.
+            strict_year = media_type != MediaType.TV or season == 1
+            found = self._normalize_results(
+                response.get("results"), search_key, titles,
+                None if query.resource_list_mode else getattr(mediainfo, "year", None),
+                allowed_types, limit, strict_year=strict_year,
+            )
+            for group_name, rows in found.items():
+                for resource in rows:
+                    identity = (resource.get('resource_type'), resource.get('url'))
+                    if not identity[1] or identity in seen:
+                        continue
+                    seen.add(identity)
+                    groups.setdefault(group_name, []).append(resource)
         # 用 candidate 的 resource_type 字段标准化后与配置对比。
         # groups.key 是中文显示名，不能直接匹配 _resource_type_order_config。
         resource_type_set = set(self._resource_type_order_config)
@@ -326,7 +320,7 @@ class PanSouSearchService(OwnerDelegator):
                and self._media_type_matches(resource, media_type)
         ]
         logger.debug(
-            f"{prefix} 渠道统计：原始条目={int(response.get('raw_count') or 0)}，"
+            f"{prefix} 渠道统计：关键词数={len(keywords)}，原始条目={raw_count}，"
             f"匹配链接={sum(len(group) for group in groups.values())}，"
             f"有效返回={len(usable)}"
         )
