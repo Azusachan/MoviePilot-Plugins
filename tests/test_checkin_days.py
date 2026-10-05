@@ -37,42 +37,42 @@ mock_core = MagicMock()
 mock_core.__path__ = []
 mock_core.OwnerDelegator = OwnerDelegator
 
-sys.modules["cloudsubscribe"] = MagicMock()
-sys.modules["cloudsubscribe"].__path__ = []
-sys.modules["cloudsubscribe.core"] = mock_core
-sys.modules["cloudsubscribe.core.checkin_manager"] = MagicMock()
-sys.modules["cloudsubscribe.core.definitions"] = MagicMock()
-sys.modules["cloudsubscribe.core.search"] = MagicMock()
-sys.modules["cloudsubscribe.core.services"] = MagicMock()
-sys.modules["cloudsubscribe.core.services"].__path__ = []
-sys.modules["cloudsubscribe.search"] = MagicMock()
-sys.modules["cloudsubscribe.search"].__path__ = []
-sys.modules["cloudsubscribe.search.hdhaven"] = MagicMock()
-sys.modules["cloudsubscribe.search.hdhaven"].__path__ = []
-sys.modules["cloudsubscribe.search.hdhaven.security"] = MagicMock()
-sys.modules["cloudsubscribe.search.cloudflare"] = MagicMock()
-sys.modules["cloudsubscribe.search.http_client"] = MagicMock()
+sys.modules["cloudsubscribefork"] = MagicMock()
+sys.modules["cloudsubscribefork"].__path__ = []
+sys.modules["cloudsubscribefork.core"] = mock_core
+sys.modules["cloudsubscribefork.core.checkin_manager"] = MagicMock()
+sys.modules["cloudsubscribefork.core.definitions"] = MagicMock()
+sys.modules["cloudsubscribefork.core.search"] = MagicMock()
+sys.modules["cloudsubscribefork.core.services"] = MagicMock()
+sys.modules["cloudsubscribefork.core.services"].__path__ = []
+sys.modules["cloudsubscribefork.search"] = MagicMock()
+sys.modules["cloudsubscribefork.search"].__path__ = []
+sys.modules["cloudsubscribefork.search.hdhaven"] = MagicMock()
+sys.modules["cloudsubscribefork.search.hdhaven"].__path__ = []
+sys.modules["cloudsubscribefork.search.hdhaven.security"] = MagicMock()
+sys.modules["cloudsubscribefork.search.cloudflare"] = MagicMock()
+sys.modules["cloudsubscribefork.search.http_client"] = MagicMock()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 plugins_v2_path = os.path.join(project_root, "plugins.v2")
 
 # 加载 hdhaven client
-hdhaven_client_path = os.path.join(plugins_v2_path, "cloudsubscribe/search/hdhaven/client.py")
-spec_h = importlib.util.spec_from_file_location("cloudsubscribe.search.hdhaven.client", hdhaven_client_path)
+hdhaven_client_path = os.path.join(plugins_v2_path, "cloudsubscribefork/search/hdhaven/client.py")
+spec_h = importlib.util.spec_from_file_location("cloudsubscribefork.search.hdhaven.client", hdhaven_client_path)
 mod_h = importlib.util.module_from_spec(spec_h)
-mod_h.__package__ = "cloudsubscribe.search.hdhaven"
-sys.modules["cloudsubscribe.search.hdhaven.client"] = mod_h
+mod_h.__package__ = "cloudsubscribefork.search.hdhaven"
+sys.modules["cloudsubscribefork.search.hdhaven.client"] = mod_h
 spec_h.loader.exec_module(mod_h)
 HDHavenClient = mod_h.HDHavenClient
 HDHavenError = mod_h.HDHavenError
 
 # 加载 checkin service
-checkin_service_path = os.path.join(plugins_v2_path, "cloudsubscribe/core/services/checkin.py")
-spec_c = importlib.util.spec_from_file_location("cloudsubscribe.core.services.checkin", checkin_service_path)
+checkin_service_path = os.path.join(plugins_v2_path, "cloudsubscribefork/core/services/checkin.py")
+spec_c = importlib.util.spec_from_file_location("cloudsubscribefork.core.services.checkin", checkin_service_path)
 mod_c = importlib.util.module_from_spec(spec_c)
-mod_c.__package__ = "cloudsubscribe.core.services"
-sys.modules["cloudsubscribe.core.services.checkin"] = mod_c
+mod_c.__package__ = "cloudsubscribefork.core.services"
+sys.modules["cloudsubscribefork.core.services.checkin"] = mod_c
 mod_c.settings = MagicMock()
 mod_c.settings.TZ = "Asia/Shanghai"
 spec_c.loader.exec_module(mod_c)

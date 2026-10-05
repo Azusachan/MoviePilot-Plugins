@@ -34,11 +34,11 @@ class OwnerDelegator:
 
 mock_core = MagicMock()
 mock_core.OwnerDelegator = OwnerDelegator
-sys.modules["cloudsubscribe"] = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
-sys.modules["cloudsubscribe.core.delegation"] = mock_core
-sys.modules["cloudsubscribe.search"] = MagicMock()
-sys.modules["cloudsubscribe.search.types"] = MagicMock()
+sys.modules["cloudsubscribefork"] = MagicMock()
+sys.modules["cloudsubscribefork.core"] = mock_core
+sys.modules["cloudsubscribefork.core.delegation"] = mock_core
+sys.modules["cloudsubscribefork.search"] = MagicMock()
+sys.modules["cloudsubscribefork.search.types"] = MagicMock()
 
 
 # mock resource_type_from_url
@@ -52,15 +52,15 @@ def fake_resource_type_from_url(url: str) -> str:
     return ""
 
 
-sys.modules["cloudsubscribe.search.types"].resource_type_from_url = fake_resource_type_from_url
+sys.modules["cloudsubscribefork.search.types"].resource_type_from_url = fake_resource_type_from_url
 
 import importlib.util
 
 hook_file = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/core/hook/message.py"))
-spec = importlib.util.spec_from_file_location("cloudsubscribe.core.hook.message", hook_file)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/core/hook/message.py"))
+spec = importlib.util.spec_from_file_location("cloudsubscribefork.core.hook.message", hook_file)
 mod = importlib.util.module_from_spec(spec)
-mod.__package__ = "cloudsubscribe.core.hook"
+mod.__package__ = "cloudsubscribefork.core.hook"
 spec.loader.exec_module(mod)
 
 MessageRoutingHook = mod.MessageRoutingHook

@@ -379,11 +379,24 @@ def anime_file_candidates(
     for file in files:
         name = str(file.get("name") or "")
         episodes = release_episodes(name, season)
+        policy_name = name
+        # A validated bilingual release may abbreviate its embedded subtitles
+        # to SRTx2/ASSx2 in files. Inherit only within the same named group;
+        # explicit no-subtitle markers remain rejected by the normal policy.
+        release_group = extract_fansub_from_title(release_title)
+        file_group = extract_fansub_from_title(name)
+        if (
+                release_group and file_group
+                and release_group.casefold() == file_group.casefold()
+                and fansub_priority(release_title, config={**(config or {}), "_target_season": season}, prefix=prefix) is not None
+                and re.search(r"\b(?:SRT|ASS)x[1-9]\d*\b", name, re.I)
+        ):
+            policy_name += " [CHS]"
         if (
                 len(episodes) != 1
                 or episodes[0] not in candidates
                 or not release_season_matches(name, season)
-                or fansub_priority(name, config={**(config or {}), "_target_season": season}, prefix=prefix) is None
+                or fansub_priority(policy_name, config={**(config or {}), "_target_season": season}, prefix=prefix) is None
                 or not release_matches(name, aliases, season)
         ):
             continue

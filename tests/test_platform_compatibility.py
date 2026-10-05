@@ -40,18 +40,18 @@ class OwnerDelegator:
 mock_core = MagicMock()
 mock_core.OwnerDelegator = OwnerDelegator
 
-sys.modules["cloudsubscribe"] = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
-sys.modules["cloudsubscribe.core.hook"] = MagicMock()
+sys.modules["cloudsubscribefork"] = MagicMock()
+sys.modules["cloudsubscribefork.core"] = mock_core
+sys.modules["cloudsubscribefork.core.hook"] = MagicMock()
 
 import importlib.util
 
 hook_file_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/core/hook/subscription.py"))
-spec = importlib.util.spec_from_file_location("cloudsubscribe.core.hook.subscription", hook_file_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/core/hook/subscription.py"))
+spec = importlib.util.spec_from_file_location("cloudsubscribefork.core.hook.subscription", hook_file_path)
 subscription_mod = importlib.util.module_from_spec(spec)
-subscription_mod.__package__ = "cloudsubscribe.core.hook"
-sys.modules["cloudsubscribe.core.hook.subscription"] = subscription_mod
+subscription_mod.__package__ = "cloudsubscribefork.core.hook"
+sys.modules["cloudsubscribefork.core.hook.subscription"] = subscription_mod
 spec.loader.exec_module(subscription_mod)
 
 SubscriptionSearchHook = subscription_mod.SubscriptionSearchHook

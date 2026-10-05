@@ -46,9 +46,9 @@ for mod_name in [
     m.__path__ = []
     sys.modules[mod_name] = m
 
-mock_drive = types.ModuleType("cloudsubscribe.drive")
+mock_drive = types.ModuleType("cloudsubscribefork.drive")
 mock_drive.__path__ = []
-mock_drive_common = MockModule("cloudsubscribe.drive.common")
+mock_drive_common = MockModule("cloudsubscribefork.drive.common")
 
 
 def iter_transfer_batches(values, batch_size, batch_interval, provider_limit):
@@ -81,30 +81,30 @@ mock_drive_common.iter_transfer_batches = iter_transfer_batches
 mock_drive_common.extract_list = extract_list
 mock_drive_common.CloudDriveFileServiceBase = object
 
-core_cloud_path = os.path.join(plugins_v2_path, "cloudsubscribe/core/cloud.py")
-spec_c = importlib.util.spec_from_file_location("cloudsubscribe.core.cloud", core_cloud_path)
+core_cloud_path = os.path.join(plugins_v2_path, "cloudsubscribefork/core/cloud.py")
+spec_c = importlib.util.spec_from_file_location("cloudsubscribefork.core.cloud", core_cloud_path)
 mod_core_cloud = importlib.util.module_from_spec(spec_c)
-mod_core_cloud.__package__ = "cloudsubscribe.core"
+mod_core_cloud.__package__ = "cloudsubscribefork.core"
 spec_c.loader.exec_module(mod_core_cloud)
 
-mock_core = types.ModuleType("cloudsubscribe.core")
+mock_core = types.ModuleType("cloudsubscribefork.core")
 mock_core.__path__ = []
 
-core_defs_path = os.path.join(plugins_v2_path, "cloudsubscribe/core/definitions.py")
-spec_defs = importlib.util.spec_from_file_location("cloudsubscribe.core.definitions", core_defs_path)
+core_defs_path = os.path.join(plugins_v2_path, "cloudsubscribefork/core/definitions.py")
+spec_defs = importlib.util.spec_from_file_location("cloudsubscribefork.core.definitions", core_defs_path)
 mod_core_defs = importlib.util.module_from_spec(spec_defs)
-mod_core_defs.__package__ = "cloudsubscribe.core"
-sys.modules["cloudsubscribe.core.definitions"] = mod_core_defs
+mod_core_defs.__package__ = "cloudsubscribefork.core"
+sys.modules["cloudsubscribefork.core.definitions"] = mod_core_defs
 spec_defs.loader.exec_module(mod_core_defs)
 
-mock_utils = types.ModuleType("cloudsubscribe.utils")
+mock_utils = types.ModuleType("cloudsubscribefork.utils")
 mock_utils.__path__ = []
-mock_utils_cache = types.ModuleType("cloudsubscribe.utils.cache")
+mock_utils_cache = types.ModuleType("cloudsubscribefork.utils.cache")
 mock_utils_cache.create_platform_ttl_cache = MagicMock()
 
-mock_search = types.ModuleType("cloudsubscribe.search")
+mock_search = types.ModuleType("cloudsubscribefork.search")
 mock_search.__path__ = []
-mock_search_types = types.ModuleType("cloudsubscribe.search.types")
+mock_search_types = types.ModuleType("cloudsubscribefork.search.types")
 mock_search_types.RESOURCE_TYPE_DISPLAY = {
     "115": {"name": "115网盘"},
     "123": {"name": "123云盘"},
@@ -120,88 +120,88 @@ mock_search_types.RESOURCE_TYPE_DISPLAY = {
     "ed2k": {"name": "电驴链接"},
 }
 
-sys.modules["cloudsubscribe"] = MagicMock()
-sys.modules["cloudsubscribe"].__path__ = []
-sys.modules["cloudsubscribe.drive"] = mock_drive
-sys.modules["cloudsubscribe.drive.common"] = mock_drive_common
-sys.modules["cloudsubscribe.core"] = mock_core
-sys.modules["cloudsubscribe.core.cloud"] = mod_core_cloud
-sys.modules["cloudsubscribe.core.definitions"] = mod_core_defs
-sys.modules["cloudsubscribe.core.transfer"] = MagicMock()
-sys.modules["cloudsubscribe.utils"] = mock_utils
-sys.modules["cloudsubscribe.utils.cache"] = mock_utils_cache
-sys.modules["cloudsubscribe.search"] = mock_search
-sys.modules["cloudsubscribe.search.types"] = mock_search_types
+sys.modules["cloudsubscribefork"] = MagicMock()
+sys.modules["cloudsubscribefork"].__path__ = []
+sys.modules["cloudsubscribefork.drive"] = mock_drive
+sys.modules["cloudsubscribefork.drive.common"] = mock_drive_common
+sys.modules["cloudsubscribefork.core"] = mock_core
+sys.modules["cloudsubscribefork.core.cloud"] = mod_core_cloud
+sys.modules["cloudsubscribefork.core.definitions"] = mod_core_defs
+sys.modules["cloudsubscribefork.core.transfer"] = MagicMock()
+sys.modules["cloudsubscribefork.utils"] = mock_utils
+sys.modules["cloudsubscribefork.utils.cache"] = mock_utils_cache
+sys.modules["cloudsubscribefork.search"] = mock_search
+sys.modules["cloudsubscribefork.search.types"] = mock_search_types
 
 # 注册各驱动子包到 sys.modules 以支持相对导入
-mod_pkg_tianyi = types.ModuleType("cloudsubscribe.drive.tianyi")
-mod_pkg_tianyi.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribe/drive/tianyi")]
-sys.modules["cloudsubscribe.drive.tianyi"] = mod_pkg_tianyi
+mod_pkg_tianyi = types.ModuleType("cloudsubscribefork.drive.tianyi")
+mod_pkg_tianyi.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribefork/drive/tianyi")]
+sys.modules["cloudsubscribefork.drive.tianyi"] = mod_pkg_tianyi
 
-mod_pkg_yun139 = types.ModuleType("cloudsubscribe.drive.yun139")
-mod_pkg_yun139.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribe/drive/yun139")]
-sys.modules["cloudsubscribe.drive.yun139"] = mod_pkg_yun139
-sys.modules["cloudsubscribe.drive.yun139.client"] = MagicMock()
+mod_pkg_yun139 = types.ModuleType("cloudsubscribefork.drive.yun139")
+mod_pkg_yun139.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribefork/drive/yun139")]
+sys.modules["cloudsubscribefork.drive.yun139"] = mod_pkg_yun139
+sys.modules["cloudsubscribefork.drive.yun139.client"] = MagicMock()
 
-mod_pkg_guangya = types.ModuleType("cloudsubscribe.drive.guangya")
-mod_pkg_guangya.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribe/drive/guangya")]
-sys.modules["cloudsubscribe.drive.guangya"] = mod_pkg_guangya
-sys.modules["cloudsubscribe.drive.guangya.client"] = MagicMock()
+mod_pkg_guangya = types.ModuleType("cloudsubscribefork.drive.guangya")
+mod_pkg_guangya.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribefork/drive/guangya")]
+sys.modules["cloudsubscribefork.drive.guangya"] = mod_pkg_guangya
+sys.modules["cloudsubscribefork.drive.guangya.client"] = MagicMock()
 
-mod_pkg_online_docs = types.ModuleType("cloudsubscribe.search.online_docs")
-mod_pkg_online_docs.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribe/search/online_docs")]
-sys.modules["cloudsubscribe.search.online_docs"] = mod_pkg_online_docs
-sys.modules["cloudsubscribe.search.online_docs.client"] = MagicMock()
-sys.modules["cloudsubscribe.search.online_docs.provider"] = MagicMock()
+mod_pkg_online_docs = types.ModuleType("cloudsubscribefork.search.online_docs")
+mod_pkg_online_docs.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribefork/search/online_docs")]
+sys.modules["cloudsubscribefork.search.online_docs"] = mod_pkg_online_docs
+sys.modules["cloudsubscribefork.search.online_docs.client"] = MagicMock()
+sys.modules["cloudsubscribefork.search.online_docs.provider"] = MagicMock()
 
 # 加载 tianyi share service
-tianyi_share_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/tianyi/share.py")
-spec_t = importlib.util.spec_from_file_location("cloudsubscribe.drive.tianyi.share", tianyi_share_path)
+tianyi_share_path = os.path.join(plugins_v2_path, "cloudsubscribefork/drive/tianyi/share.py")
+spec_t = importlib.util.spec_from_file_location("cloudsubscribefork.drive.tianyi.share", tianyi_share_path)
 mod_t = importlib.util.module_from_spec(spec_t)
-mod_t.__package__ = "cloudsubscribe.drive.tianyi"
+mod_t.__package__ = "cloudsubscribefork.drive.tianyi"
 spec_t.loader.exec_module(mod_t)
 TianyiShareService = mod_t.TianyiShareService
-sys.modules["cloudsubscribe.drive.tianyi.share"] = mod_t
+sys.modules["cloudsubscribefork.drive.tianyi.share"] = mod_t
 
 # 加载 yun139 share service
-yun139_share_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/yun139/share.py")
-spec_y = importlib.util.spec_from_file_location("cloudsubscribe.drive.yun139.share", yun139_share_path)
+yun139_share_path = os.path.join(plugins_v2_path, "cloudsubscribefork/drive/yun139/share.py")
+spec_y = importlib.util.spec_from_file_location("cloudsubscribefork.drive.yun139.share", yun139_share_path)
 mod_y = importlib.util.module_from_spec(spec_y)
-mod_y.__package__ = "cloudsubscribe.drive.yun139"
+mod_y.__package__ = "cloudsubscribefork.drive.yun139"
 spec_y.loader.exec_module(mod_y)
 Yun139ShareService = mod_y.Yun139ShareService
-sys.modules["cloudsubscribe.drive.yun139.share"] = mod_y
+sys.modules["cloudsubscribefork.drive.yun139.share"] = mod_y
 
 # 加载 guangya share service
-guangya_share_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/guangya/share.py")
-spec_g = importlib.util.spec_from_file_location("cloudsubscribe.drive.guangya.share", guangya_share_path)
+guangya_share_path = os.path.join(plugins_v2_path, "cloudsubscribefork/drive/guangya/share.py")
+spec_g = importlib.util.spec_from_file_location("cloudsubscribefork.drive.guangya.share", guangya_share_path)
 mod_g = importlib.util.module_from_spec(spec_g)
-mod_g.__package__ = "cloudsubscribe.drive.guangya"
+mod_g.__package__ = "cloudsubscribefork.drive.guangya"
 spec_g.loader.exec_module(mod_g)
 GuangyaShareService = mod_g.GuangyaShareService
-sys.modules["cloudsubscribe.drive.guangya.share"] = mod_g
+sys.modules["cloudsubscribefork.drive.guangya.share"] = mod_g
 
 # 注册并加载 alipan share service
-mod_pkg_alipan = types.ModuleType("cloudsubscribe.drive.alipan")
-mod_pkg_alipan.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribe/drive/alipan")]
-sys.modules["cloudsubscribe.drive.alipan"] = mod_pkg_alipan
+mod_pkg_alipan = types.ModuleType("cloudsubscribefork.drive.alipan")
+mod_pkg_alipan.__path__ = [os.path.join(plugins_v2_path, "cloudsubscribefork/drive/alipan")]
+sys.modules["cloudsubscribefork.drive.alipan"] = mod_pkg_alipan
 
-alipan_share_path = os.path.join(plugins_v2_path, "cloudsubscribe/drive/alipan/share.py")
-spec_a = importlib.util.spec_from_file_location("cloudsubscribe.drive.alipan.share", alipan_share_path)
+alipan_share_path = os.path.join(plugins_v2_path, "cloudsubscribefork/drive/alipan/share.py")
+spec_a = importlib.util.spec_from_file_location("cloudsubscribefork.drive.alipan.share", alipan_share_path)
 mod_a = importlib.util.module_from_spec(spec_a)
-mod_a.__package__ = "cloudsubscribe.drive.alipan"
+mod_a.__package__ = "cloudsubscribefork.drive.alipan"
 spec_a.loader.exec_module(mod_a)
 AliPanShareService = mod_a.AliPanShareService
-sys.modules["cloudsubscribe.drive.alipan.share"] = mod_a
+sys.modules["cloudsubscribefork.drive.alipan.share"] = mod_a
 
 # 加载 online_docs definition
-online_docs_def_path = os.path.join(plugins_v2_path, "cloudsubscribe/search/online_docs/definition.py")
-spec_o = importlib.util.spec_from_file_location("cloudsubscribe.search.online_docs.definition", online_docs_def_path)
+online_docs_def_path = os.path.join(plugins_v2_path, "cloudsubscribefork/search/online_docs/definition.py")
+spec_o = importlib.util.spec_from_file_location("cloudsubscribefork.search.online_docs.definition", online_docs_def_path)
 mod_o = importlib.util.module_from_spec(spec_o)
-mod_o.__package__ = "cloudsubscribe.search.online_docs"
+mod_o.__package__ = "cloudsubscribefork.search.online_docs"
 spec_o.loader.exec_module(mod_o)
 OnlineDocsSourceDefinition = mod_o.OnlineDocsSourceDefinition
-sys.modules["cloudsubscribe.search.online_docs.definition"] = mod_o
+sys.modules["cloudsubscribefork.search.online_docs.definition"] = mod_o
 
 
 class TestTianyiShareRelativePath(unittest.TestCase):

@@ -13,12 +13,12 @@ sys.modules.setdefault("app.log", MagicMock())
 sys.modules.setdefault("app.schemas", MagicMock())
 sys.modules.setdefault("app.schemas.types", MagicMock())
 
-# 构造 cloudsubscribe 包结构
-pkg = types.ModuleType("cloudsubscribe")
+# 构造 cloudsubscribefork 包结构
+pkg = types.ModuleType("cloudsubscribefork")
 pkg.__path__ = []
-sys.modules["cloudsubscribe"] = pkg
+sys.modules["cloudsubscribefork"] = pkg
 
-mock_core = types.ModuleType("cloudsubscribe.core")
+mock_core = types.ModuleType("cloudsubscribefork.core")
 mock_core.__path__ = []
 
 
@@ -31,30 +31,33 @@ mock_core.CloudDriveCapability = MagicMock()
 mock_core.CloudDriveProvider = MagicMock()
 mock_core.CloudFile = MagicMock()
 mock_core.SearchCapability = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
+sys.modules["cloudsubscribefork.core"] = mock_core
+mock_media = types.ModuleType("cloudsubscribefork.core.media")
+mock_media.normalize_season = lambda value, default=1: max(0, int(default if value is None or value == "" else value))
+sys.modules["cloudsubscribefork.core.media"] = mock_media
 
-mock_search = types.ModuleType("cloudsubscribe.search")
+mock_search = types.ModuleType("cloudsubscribefork.search")
 mock_search.__path__ = []
-sys.modules["cloudsubscribe.search"] = mock_search
+sys.modules["cloudsubscribefork.search"] = mock_search
 mock_search_types = MagicMock()
-sys.modules["cloudsubscribe.search.types"] = mock_search_types
+sys.modules["cloudsubscribefork.search.types"] = mock_search_types
 
-mock_handlers = types.ModuleType("cloudsubscribe.handlers")
+mock_handlers = types.ModuleType("cloudsubscribefork.handlers")
 mock_handlers.__path__ = []
-sys.modules["cloudsubscribe.handlers"] = mock_handlers
+sys.modules["cloudsubscribefork.handlers"] = mock_handlers
 
-mock_sync = types.ModuleType("cloudsubscribe.handlers.sync")
+mock_sync = types.ModuleType("cloudsubscribefork.handlers.sync")
 mock_sync.__path__ = []
-sys.modules["cloudsubscribe.handlers.sync"] = mock_sync
+sys.modules["cloudsubscribefork.handlers.sync"] = mock_sync
 
-mock_utils = types.ModuleType("cloudsubscribe.utils")
+mock_utils = types.ModuleType("cloudsubscribefork.utils")
 mock_utils.__path__ = []
-sys.modules["cloudsubscribe.utils"] = mock_utils
+sys.modules["cloudsubscribefork.utils"] = mock_utils
 
 # 加载实际的 MediaFileParser
 parser_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/utils/file_parser.py"))
-spec_parser = importlib.util.spec_from_file_location("cloudsubscribe.utils.file_parser", parser_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/utils/file_parser.py"))
+spec_parser = importlib.util.spec_from_file_location("cloudsubscribefork.utils.file_parser", parser_path)
 mod_parser = importlib.util.module_from_spec(spec_parser)
 spec_parser.loader.exec_module(mod_parser)
 MediaFileParser = mod_parser.MediaFileParser
@@ -63,11 +66,11 @@ mock_utils.parse_magnet_metadata = MagicMock()
 
 # 加载 resources.py 中的 SyncResourceManager
 resources_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/handlers/sync/resources.py"))
-spec_res = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.resources", resources_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/resources.py"))
+spec_res = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.resources", resources_path)
 mod_res = importlib.util.module_from_spec(spec_res)
-mod_res.__package__ = "cloudsubscribe.handlers.sync"
-sys.modules["cloudsubscribe.handlers.sync.resources"] = mod_res
+mod_res.__package__ = "cloudsubscribefork.handlers.sync"
+sys.modules["cloudsubscribefork.handlers.sync.resources"] = mod_res
 spec_res.loader.exec_module(mod_res)
 ResourceTransferService = mod_res.ResourceTransferService
 

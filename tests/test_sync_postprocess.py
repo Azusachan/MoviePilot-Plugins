@@ -17,12 +17,12 @@ sys.modules.setdefault("app.log", MagicMock())
 sys.modules.setdefault("app.schemas", MagicMock())
 sys.modules.setdefault("app.schemas.types", MagicMock())
 
-# 构造 cloudsubscribe 包结构
-pkg = types.ModuleType("cloudsubscribe")
+# 构造 cloudsubscribefork 包结构
+pkg = types.ModuleType("cloudsubscribefork")
 pkg.__path__ = []
-sys.modules["cloudsubscribe"] = pkg
+sys.modules["cloudsubscribefork"] = pkg
 
-mock_core = types.ModuleType("cloudsubscribe.core")
+mock_core = types.ModuleType("cloudsubscribefork.core")
 mock_core.__path__ = []
 
 
@@ -43,46 +43,49 @@ class OwnerDelegator:
 
 mock_core.OwnerDelegator = OwnerDelegator
 mock_core.CloudDriveCapability = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
+sys.modules["cloudsubscribefork.core"] = mock_core
+mock_media = types.ModuleType("cloudsubscribefork.core.media")
+mock_media.normalize_season = lambda value, default=1: max(0, int(default if value is None or value == "" else value))
+sys.modules["cloudsubscribefork.core.media"] = mock_media
 
-mock_search = types.ModuleType("cloudsubscribe.search")
+mock_search = types.ModuleType("cloudsubscribefork.search")
 mock_search.__path__ = []
 mock_search.subs_filter = MagicMock()
-sys.modules["cloudsubscribe.search"] = mock_search
-sys.modules["cloudsubscribe.search.subs_filter"] = mock_search.subs_filter
+sys.modules["cloudsubscribefork.search"] = mock_search
+sys.modules["cloudsubscribefork.search.subs_filter"] = mock_search.subs_filter
 
 # 加载 file_parser
 parser_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/utils/file_parser.py"))
-spec_p = importlib.util.spec_from_file_location("cloudsubscribe.utils.file_parser", parser_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/utils/file_parser.py"))
+spec_p = importlib.util.spec_from_file_location("cloudsubscribefork.utils.file_parser", parser_path)
 mod_p = importlib.util.module_from_spec(spec_p)
 spec_p.loader.exec_module(mod_p)
-mock_utils = types.ModuleType("cloudsubscribe.utils")
+mock_utils = types.ModuleType("cloudsubscribefork.utils")
 mock_utils.MediaFileParser = mod_p.MediaFileParser
-sys.modules["cloudsubscribe.utils"] = mock_utils
-sys.modules["cloudsubscribe.utils.file_parser"] = mod_p
+sys.modules["cloudsubscribefork.utils"] = mock_utils
+sys.modules["cloudsubscribefork.utils.file_parser"] = mod_p
 
-mock_handlers = types.ModuleType("cloudsubscribe.handlers")
+mock_handlers = types.ModuleType("cloudsubscribefork.handlers")
 mock_handlers.__path__ = []
-sys.modules["cloudsubscribe.handlers"] = mock_handlers
+sys.modules["cloudsubscribefork.handlers"] = mock_handlers
 
-mock_sync = types.ModuleType("cloudsubscribe.handlers.sync")
+mock_sync = types.ModuleType("cloudsubscribefork.handlers.sync")
 mock_sync.__path__ = []
-sys.modules["cloudsubscribe.handlers.sync"] = mock_sync
+sys.modules["cloudsubscribefork.handlers.sync"] = mock_sync
 
 utils_sync_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/handlers/sync/utils.py"))
-spec_u = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.utils", utils_sync_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/utils.py"))
+spec_u = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.utils", utils_sync_path)
 mod_u = importlib.util.module_from_spec(spec_u)
 spec_u.loader.exec_module(mod_u)
-sys.modules["cloudsubscribe.handlers.sync.utils"] = mod_u
+sys.modules["cloudsubscribefork.handlers.sync.utils"] = mod_u
 
 postprocess_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/handlers/sync/postprocess.py"))
-spec_post = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.postprocess", postprocess_path)
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/postprocess.py"))
+spec_post = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.postprocess", postprocess_path)
 mod_post = importlib.util.module_from_spec(spec_post)
-mod_post.__package__ = "cloudsubscribe.handlers.sync"
-sys.modules["cloudsubscribe.handlers.sync.postprocess"] = mod_post
+mod_post.__package__ = "cloudsubscribefork.handlers.sync"
+sys.modules["cloudsubscribefork.handlers.sync.postprocess"] = mod_post
 spec_post.loader.exec_module(mod_post)
 
 DirectoryFileIndex = mod_post.DirectoryFileIndex
