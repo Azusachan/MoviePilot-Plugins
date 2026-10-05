@@ -53,6 +53,17 @@ class BracketMatchingTests(unittest.TestCase):
     def test_plain_title_unchanged(self):
         self.assertEqual(policy.release_titles('[SweetSub] Example / 例子 - 08 [1080p][CHS]'), ['Example', '例子'])
 
+    def test_actual_lolihouse_pack_embedded_subtitle_filenames(self):
+        release = '[LoliHouse] Nukitashi The Animation / 住在拔作岛上的贫乳该如何是好？ [01-11 合集][WebRip 1080p HEVC-10bit AAC][简繁内封字幕][Fin]'
+        files = [{'name': f'[LoliHouse] Nukitashi The Animation - {ep:02} [WebRip 1080p HEVC-10bit AAC SRTx2].mkv'} for ep in (9, 10, 11)]
+        self.assertEqual(policy.anime_file_candidates(files, release, 1, [9, 10, 11]),
+                         {ep: [file] for ep, file in zip((9, 10, 11), files)})
+        for name in ('[Unknown] Nukitashi The Animation - 09 [SRTx2].mkv',
+                     '[LoliHouse] Other Show - 09 [SRTx2].mkv',
+                     '[LoliHouse] Nukitashi The Animation - 09 [SRTx2][无字幕].mkv',
+                     '[LoliHouse] Nukitashi The Animation - 09 [AAC].mkv'):
+            self.assertEqual(policy.anime_file_candidates([{'name': name}], release, 1, [9]), {9: []})
+
     def test_specials_are_explicit_and_season_scoped(self):
         for title, expected in (('[SweetSub] Example OVA_01 [CHS]', [1]),
                                 ('[SweetSub] Example - EX01~EX02 [CHS]', [1, 2]),
