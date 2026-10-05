@@ -791,11 +791,11 @@ class P115FileService(OwnerDelegator):
     def list_offline_task_files(self, task: Any, path: str) -> List[dict]:
         """精确定位离线任务生成的文件或目录，避免全盘递归扫描。"""
         if not isinstance(task, dict):
-            return []
+            raise RuntimeError("离线任务元数据缺失，拒绝扫描网盘")
         file_id = str(task.get("file_id") or "").strip()
         parent_id = task.get("parent_id")
         if not file_id or parent_id in (None, ""):
-            return []
+            raise RuntimeError("离线任务文件或父目录标识缺失，拒绝扫描网盘")
         checked, items = self.list_files_by_cid_checked(parent_id)
         if not checked:
             return []
@@ -807,13 +807,11 @@ class P115FileService(OwnerDelegator):
             if fid != file_id and cid != file_id:
                 continue
             name = str(raw_dict.get("name") or raw_dict.get("n") or "").strip()
-            is_dir = bool(
-                raw_dict.get("is_dir")
-                or (str(raw_dict.get("fid") or "0") == "0" and raw_dict.get("cid"))
-            )
+            normalized = cloud_file(raw_dict)
+            is_dir = bool(normalized and normalized.is_directory)
             raw_dict["is_dir"] = is_dir
             if is_dir:
-                dir_id = raw_dict.get("cid") or raw_dict.get("id")
+                dir_id = normalized.id
                 return self._list_files_recursive_by_cid(dir_id, f"{base}/{name}", 6)
             raw_dict["_parent_cid"] = str(parent_id)
             raw_dict["_cloud_dir"] = base or "/"
