@@ -1,7 +1,5 @@
 """蜜柑计划（Mikan）搜索服务层、番剧过滤与快速订阅匹配逻辑。"""
 
-from ...core.media import normalize_season
-
 import time
 from threading import RLock
 from typing import Any, Dict, List, Optional
@@ -13,6 +11,9 @@ from .titles import metadata_aliases, search_keywords
 from ..magnet import media_titles, normalize_magnets
 from ..matching import (
     extract_mikan_rss_params,
+    media_aliases,
+    normalize_season,
+    search_keyword_candidates,
     unique_texts,
 )
 from ..subs_filter import (

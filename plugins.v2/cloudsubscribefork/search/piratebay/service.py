@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 from app.schemas.types import MediaType
 
 from .client import PirateBayClient, PirateBayError
-from ..magnet import clear_cache, normalize_magnets
-from ..matching import extract_season, extract_year, unique_texts
+from ..magnet import clear_cache, media_titles, normalize_magnets
+from ..matching import extract_season, extract_year, resource_title_matches, unique_texts
 from ...core.search import SearchQuery
 
 
@@ -33,7 +33,11 @@ class PirateBaySearchService:
             elif year:
                 keywords.append(f"{t} {year}")
             keywords.append(t)
-        return unique_texts(keywords)
+        valid_keywords = [
+            kw for kw in unique_texts(keywords)
+            if any("a" <= c.lower() <= "z" for c in kw)
+        ]
+        return valid_keywords
 
     def search(self, query: SearchQuery) -> List[Dict[str, Any]]:
         mediainfo = query.mediainfo
@@ -45,6 +49,8 @@ class PirateBaySearchService:
             return []
 
         limit = query.result_limit or self._result_limit
+        exp_titles = media_titles(mediainfo)
+        expected_year = extract_year(getattr(mediainfo, "year", None))
         cat = 200  # 200 is Video category in PirateBay
         collected = []
         seen_hashes = set()
@@ -61,18 +67,25 @@ class PirateBaySearchService:
                     continue
 
                 # 季号匹配
+                cand_season = extract_season(item.get("title"))
                 if query.media_type == MediaType.TV and query.season:
-                    cand_season = extract_season(item.get("title"))
                     if cand_season is not None and cand_season != query.season:
+                        continue
+                elif query.media_type == MediaType.MOVIE:
+                    if cand_season is not None:
                         continue
 
                 # 电影年份检查（如果资源标题中包含4位年份，且与mediainfo年份不符，跳过）
                 if query.media_type == MediaType.MOVIE:
-                    expected_year = extract_year(getattr(mediainfo, "year", None))
                     cand_year = extract_year(item.get("title"))
                     if expected_year and cand_year and cand_year != expected_year:
                         continue
 
+                # 标题校验：资源标题必须包含媒体目标标题中的至少一个
+                if exp_titles and not resource_title_matches(
+                        item.get("title"), exp_titles, expected_year=expected_year
+                ):
+                    continue
                 seen_hashes.add(h)
                 collected.append(item)
                 if len(collected) >= limit:

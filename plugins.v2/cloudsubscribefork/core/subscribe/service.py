@@ -405,8 +405,20 @@ class AutoSubscribeService:
             if key.startswith(prefix)
         }
         options.setdefault("min_month", datetime.datetime.now().month)
+        global_media_types = config.get("auto_subscribe_media_types")
+        if global_media_types is None:
+            raw_gt = config.get("auto_subscribe_media_type")
+            if raw_gt:
+                global_media_types = ["movie", "tv"] if raw_gt == "all" else [raw_gt]
+            else:
+                global_media_types = ["movie", "tv"]
+        options["media_types"] = global_media_types
+        if not options.get("media_type") or options.get("media_type") == "all":
+            options["media_type"] = (
+                "all" if set(global_media_types) >= {"movie", "tv"}
+                else (list(global_media_types)[0] if global_media_types else "all")
+            )
         return options
-
     @staticmethod
     def _debug_provider_options(options: dict[str, Any]) -> dict[str, Any]:
         """日志中保留连接诊断字段，避免输出代理密码等敏感配置。"""

@@ -6,7 +6,6 @@ from ...core.media import normalize_season
 import datetime
 import re
 from concurrent.futures import Future
-from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
@@ -18,6 +17,7 @@ from app.log import logger
 from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 
+from .utils import normalize_season
 from ...core import OwnerDelegator
 from ...core.media import (
     apply_media_identity,
@@ -29,85 +29,6 @@ from ...core.media import (
     tmdb_identity_update,
 )
 from ...utils.cache import normalize_platform_cache_key
-
-
-class _TmdbSeasonPageParser(HTMLParser):
-    """解析 TMDB 季页面中服务端渲染的剧集卡片。"""
-
-    def __init__(self, season: int):
-        super().__init__(convert_charrefs=True)
-        self.season = int(season)
-        self.episodes: Dict[int, str] = {}
-        self._card_depth = 0
-        self._card_episode = 0
-        self._episode_depth = 0
-        self._date_depth = 0
-        self._text: List[str] = []
-        self._field = ""
-
-    @staticmethod
-    def _classes(attrs) -> Set[str]:
-        return set(str(dict(attrs).get("class") or "").split())
-
-    def _finish_card(self) -> None:
-        if self._card_episode > 0 and self._text:
-            raw = "".join(self._text).strip()
-            match = re.search(r"(\d{4})\s*[年/-]\s*(\d{1,2})\s*[月/-]\s*(\d{1,2})", raw)
-            if match:
-                self.episodes[self._card_episode] = (
-                    f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
-                )
-        self._card_episode = 0
-        self._text = []
-        self._field = ""
-
-    def handle_starttag(self, tag, attrs):
-        attrs_dict = dict(attrs)
-        classes = self._classes(attrs)
-        if tag == "div" and "card" in classes:
-            if self._card_depth:
-                self._finish_card()
-            self._card_depth = 1
-            url = str(attrs_dict.get("data-url") or "")
-            match = re.search(r"/season/(\d+)/episode/(\d+)", url)
-            self._card_episode = int(match.group(2)) if match and int(match.group(1)) == self.season else 0
-            return
-        if not self._card_depth:
-            return
-        if tag == "div":
-            self._card_depth += 1
-        if tag in {"span", "div"} and "episode_number" in classes:
-            self._episode_depth = self._card_depth
-            self._field = "episode"
-            self._text = []
-        elif tag in {"span", "div"} and "date" in classes:
-            self._date_depth = self._card_depth
-            self._field = "date"
-            self._text = []
-
-    def handle_endtag(self, tag):
-        if not self._card_depth:
-            return
-        if self._field == "episode" and self._card_depth == self._episode_depth:
-            try:
-                self._card_episode = int("".join(self._text).strip())
-            except ValueError:
-                self._card_episode = 0
-            self._field = ""
-        elif self._field == "date" and self._card_depth == self._date_depth:
-            self._field = ""
-        if tag == "div":
-            self._card_depth -= 1
-            if not self._card_depth:
-                self._finish_card()
-
-    def handle_data(self, data):
-        if self._field in {"episode", "date"}:
-            self._text.append(data)
-
-    def close(self):
-        super().close()
-        self._finish_card()
 
 
 class SyncMetadataService(OwnerDelegator):
@@ -175,181 +96,13 @@ class SyncMetadataService(OwnerDelegator):
                     return dict(entry)
                 self._subscribe_defer_cache.delete(cache_key)
         return None
-
-    def _tmdb_season_web_episodes(self, tmdb_id: int, season: int) -> Dict[int, str]:
-        """读取 TMDB 季网页的真实卡片，绕过 API/平台缓存的滞后。"""
-        url = f"https://www.themoviedb.org/tv/{int(tmdb_id)}/season/{int(season)}"
-        response = RequestUtils(
-            proxies=settings.PROXY,
-            timeout=5,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                              "AppleWebKit/537.36 Chrome/136.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            },
-        ).get_res(url=url)
-        status = int(getattr(response, "status_code", 0) or 0)
-        if not response or status != 200:
-            logger.debug(
-                f"TMDB 季网页请求失败：S{season:02d}，HTTP {status or '-'}"
-            )
-            return {}
-        parser = _TmdbSeasonPageParser(season)
-        parser.feed(str(getattr(response, "text", "") or ""))
-        parser.close()
-        logger.debug(
-            f"TMDB 季网页解析完成：TV {tmdb_id} S{season:02d}，"
-            f"获取 {len(parser.episodes)} 集，最大集数 E{max(parser.episodes, default=0):02d}"
-        )
-        return parser.episodes
-
     def get_tv_subscribe_calendar(
             self,
             subscribe: Any,
             tmdb_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        """读取 TMDB 季网页并缓存当前订阅目标集的播出状态。"""
-        if str(getattr(subscribe, "type", "") or "") != MediaType.TV.value:
-            return None
-        tmdb_id = int(tmdb_id or tmdb_id_of(subscribe) or 0)
-        season = normalize_season(getattr(subscribe, "season", 1))
-        start_episode = int(getattr(subscribe, "start_episode", 1) or 1)
-        total_episode = int(getattr(subscribe, "total_episode", 0) or 0)
-        if tmdb_id <= 0 or total_episode < start_episode:
-            return None
-
-        cache_key = normalize_platform_cache_key(
-            (*self._subscribe_defer_key(subscribe), tmdb_id)
-        )
-        today = datetime.date.today()
-        checked_on = today.isoformat()
-        with self._subscribe_defer_lock:
-            entry = self._subscribe_calendar_cache.get(cache_key)
-            if (
-                    entry
-                    and entry.get("checked_on") == checked_on
-                    and entry.get("source") == "tmdb_web"
-            ):
-                return dict(entry)
-            if entry:
-                self._subscribe_calendar_cache.delete(cache_key)
-
-        try:
-            web_air_dates = self._timed_sync_call(
-                "tmdb_season_web",
-                self._tmdb_season_web_episodes,
-                tmdb_id,
-                season,
-            )
-        except Exception as error:
-            logger.debug(
-                f"{getattr(subscribe, 'name', '')} S{season:02d} "
-                f"读取 TMDB 季网页失败：{error}"
-            )
-            return None
-        if not web_air_dates:
-            logger.debug(
-                f"{getattr(subscribe, 'name', '')} S{season:02d} "
-                "TMDB 季网页未解析到剧集播出日期，跳过播出过滤"
-            )
-            return None
-
-        expected_episodes = set(range(start_episode, total_episode + 1))
-        season_known_air_dates: Dict[int, str] = {}
-        season_aired_episodes: Set[int] = set()
-        known_air_dates: Dict[int, str] = {}
-        aired_episodes: Set[int] = set()
-        for episode_number, raw_air_date in web_air_dates.items():
-            try:
-                episode_number = int(episode_number)
-            except (TypeError, ValueError):
-                continue
-            air_date = self._calendar_date(raw_air_date)
-            if episode_number <= 0 or not air_date:
-                continue
-            season_known_air_dates[episode_number] = air_date.isoformat()
-            if air_date <= today:
-                season_aired_episodes.add(episode_number)
-            if episode_number not in expected_episodes:
-                continue
-            known_air_dates[episode_number] = air_date.isoformat()
-            if air_date <= today:
-                aired_episodes.add(episode_number)
-
-        future_air_dates = {
-            episode: air_date
-            for episode, value in known_air_dates.items()
-            if (air_date := self._calendar_date(value)) and air_date > today
-        }
-        last_aired_episode = max(season_aired_episodes, default=0)
-        future_boundary_episode = min(
-            (
-                episode
-                for episode in future_air_dates
-                if episode > last_aired_episode
-            ),
-            default=0,
-        )
-        # TMDB 只返回到当前已公布集数时，订阅总集数后面的未知尾部同样不能搜索。
-        # 只在至少存在一条可靠播出日期时建立边界，避免 TMDB 整季无数据时误跳过。
-        unreleased_boundary_episode = min(
-            (
-                episode
-                for episode in expected_episodes
-                if season_known_air_dates and episode > last_aired_episode
-            ),
-            default=0,
-        )
-        boundary_reason = ""
-        if unreleased_boundary_episode:
-            boundary_reason = (
-                "future"
-                if unreleased_boundary_episode in future_air_dates
-                else "unknown_tail"
-            )
-        unreleased_episodes = {
-            episode
-            for episode in expected_episodes
-            if episode in future_air_dates
-               or (
-                       unreleased_boundary_episode > 0
-                       and episode >= unreleased_boundary_episode
-               )
-        }
-        all_targets_future = bool(
-            expected_episodes and unreleased_episodes == expected_episodes
-        )
-        next_air_date = min(future_air_dates.values(), default=None)
-        defer_until = next_air_date if all_targets_future else None
-        entry = {
-            "source": "tmdb_web",
-            "checked_on": checked_on,
-            "known_air_dates": known_air_dates,
-            "aired_episodes": sorted(aired_episodes),
-            "aired_episode_air_dates": {
-                episode: known_air_dates[episode]
-                for episode in sorted(aired_episodes)
-            },
-            "unknown_episodes": sorted(expected_episodes - set(known_air_dates)),
-            "unreleased_episodes": sorted(unreleased_episodes),
-            "future_boundary_episode": future_boundary_episode,
-            "unreleased_boundary_episode": unreleased_boundary_episode,
-            "unreleased_boundary_reason": boundary_reason,
-            "next_air_date": next_air_date.isoformat() if next_air_date else "",
-            "all_targets_future": all_targets_future,
-            "defer_until": defer_until.isoformat() if defer_until else "",
-        }
-        with self._subscribe_defer_lock:
-            self._subscribe_calendar_cache.set(cache_key, entry)
-
-        if defer_until:
-            self.defer_subscribe_until(
-                subscribe,
-                defer_until,
-                f"目标剧集最早于 {defer_until.isoformat()} 播出",
-            )
-        return dict(entry)
+        """剧集搜索直接通过各渠道检索结果自适应感知更新，不再请求与解析 TMDB 季网页。"""
+        return None
 
     @staticmethod
     def _tmdb_id_from_media(value: Any) -> int:
@@ -607,8 +360,33 @@ class SyncMetadataService(OwnerDelegator):
         )
         return True
 
+    @staticmethod
+    def _idle_search_state() -> Dict[str, Any]:
+        """清理仅用于搜索阶段实时展示的渠道与中间状态。"""
+        return {
+            "search_active": False,
+            "search_channels": [],
+            "search_total_results": 0,
+        }
+
+    def _clear_task_search_state(self, subscribe: Any) -> None:
+        """显式清理指定订阅任务的搜索中间态。"""
+        if self._task_update:
+            task_id = (
+                f"media:{self.subscription_budget_key(subscribe)}"
+                if bool(getattr(subscribe, "_transient_target", False))
+                   and hasattr(self, "subscription_budget_key")
+                else f"subscribe:{getattr(subscribe, 'id', '')}"
+            )
+            self._task_update(task_id, **self._idle_search_state())
+
     def _set_task_phase(
-            self, subscribe: Any, phase: str, progress: int, **extra_kwargs
+            self,
+            subscribe: Any,
+            phase: Optional[str] = None,
+            progress: Optional[int] = None,
+            clear_search: bool = False,
+            **extra_kwargs,
     ) -> None:
         """回写订阅任务的真实处理阶段。"""
         if self._task_update:
@@ -618,12 +396,15 @@ class SyncMetadataService(OwnerDelegator):
                    and hasattr(self, "subscription_budget_key")
                 else f"subscribe:{getattr(subscribe, 'id', '')}"
             )
-            self._task_update(
-                task_id,
-                phase=phase,
-                progress=max(0, min(100, int(progress))),
-                **extra_kwargs,
-            )
+            update_data = dict(extra_kwargs)
+            if phase is not None:
+                update_data["phase"] = str(phase)
+            if progress is not None:
+                update_data["progress"] = max(0, min(100, int(progress)))
+            if clear_search:
+                for key, val in self._idle_search_state().items():
+                    update_data.setdefault(key, val)
+            self._task_update(task_id, **update_data)
 
     def _subscribe_mediainfo(
             self,

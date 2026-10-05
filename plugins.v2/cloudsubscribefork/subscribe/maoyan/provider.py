@@ -42,34 +42,14 @@ class MaoyanSubscribeProvider(SubscribeProvider):
                     item.source_meta["rank_key"] = "movie_box"
                     seen.add(item.unique_seed)
                     yield item
-        mapping = options.get("web_platform_map")
-        if options.get("platforms") is not None or options.get("categories") is not None:
-            mapping = {
-                platform: list(options.get("categories") or ["tv"])
-                for platform in (options.get("platforms") or ["all"])
-            }
-        elif not isinstance(mapping, dict) or not mapping:
-            mapping = {"all": ["tv"]}
-        for platform, categories in mapping.items():
-            if context.stopped():
-                return
-            if platform not in PLATFORMS:
-                continue
-            if isinstance(categories, dict):
-                categories = categories.get("cats", []) if categories.get("on", True) else []
-            for category in categories or []:
-                if category not in SERIES_TYPES:
-                    continue
-                path = (
-                    "/dashboard/webHeatData?seriesType="
-                    f"{SERIES_TYPES[category]}&platformType={PLATFORMS[platform]}&showDate=2"
-                )
-                for item in self.service.web_heat(client.get_json(path, proxy), scan_limit, platform):
-                    if item.unique_seed not in seen:
-                        item.source_meta["rank_key"] = f"web_heat:{platform}:{category}"
-                        seen.add(item.unique_seed)
-                        yield item
-
+        # 剧集/网播热度榜
+        html = client.get_text("/web-heat", proxy=proxy)
+        if html:
+            for item in self.service.web_heat(html, scan_limit, "all"):
+                if item.unique_seed not in seen:
+                    item.source_meta["rank_key"] = "web_heat:all"
+                    seen.add(item.unique_seed)
+                    yield item
 
 def create_maoyan_provider() -> MaoyanSubscribeProvider:
     return MaoyanSubscribeProvider()

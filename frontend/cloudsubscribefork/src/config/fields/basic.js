@@ -101,7 +101,6 @@ export function createBasicSection(cloudDriveItems, options = {}) {
             label: "当前转存网盘",
             type: "select",
             items: cloudDriveItems,
-            disabled: () => cloudDriveItems.length <= 1,
             cols: 4,
           },
           {

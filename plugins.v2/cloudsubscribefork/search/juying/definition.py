@@ -78,6 +78,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                         key="juying_base_url",
                         label="服务地址",
                         placeholder="https://juying.tv",
+                        default="https://juying.tv",
                         cols=12,
                     ),
                     FieldSpec(
@@ -111,6 +112,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                         label="候选上限",
                         hint="最大保留候选数量",
                         type="number",
+                        default=5,
                         min=1,
                         max=20,
                         cols=4,
@@ -120,6 +122,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                         label="请求访问间隔",
                         hint="接口请求基础间隔秒数",
                         type="number",
+                        default=1.0,
                         min=0.5,
                         max=10,
                         step=0.5,
@@ -131,6 +134,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                         label="搜索超时",
                         hint="单次搜索超时秒数，默认 60 秒",
                         type="number",
+                        default=60,
                         min=5,
                         max=120,
                         suffix="秒",
@@ -147,7 +151,7 @@ class JuyingSourceDefinition(SearchSourceDefinition):
         ctx = context or {}
         owner = ctx.get("owner")
         resources = JuyingResourceService(client) if client else None
-        r_types = getattr(owner, "_juying_resource_types", ())
+        r_types = ctx.get("resource_types", ()) or getattr(owner, "_juying_resource_types", ())
         if not client or not resources or not r_types or not getattr(client, "is_configured", False):
             return None
         limit = int(cls.config_value(config, "juying_result_limit", 20) or 20)

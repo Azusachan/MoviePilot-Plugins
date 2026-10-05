@@ -100,7 +100,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.8.48.587528776.15"
+    plugin_version = "1.6.1.51.1558850929.16"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -364,6 +364,12 @@ class CloudSubscribeFork(_PluginBase):
     @eventmanager.register(EventType.WebhookMessage)
     def on_media_server_webhook(self, event: Event):
         event_info = getattr(event, "event_data", None) if event else None
+        event_name = str(getattr(event_info, "event", None) or (
+            event_info.get("event") if isinstance(event_info, dict) else "") or "")
+        channel = str(getattr(event_info, "channel", None) or (
+            event_info.get("channel") if isinstance(event_info, dict) else "") or "")
+        logger.info(
+            f"收到平台媒体服务器 WebhookMessage 事件: channel={channel or '未知'}, event={event_name or '未知'}")
         return self._get_component(MediaLibraryApi).handle_platform_media_webhook(
             event_info
         )
@@ -563,14 +569,20 @@ class CloudSubscribeFork(_PluginBase):
             "auto_subscribe_netflix_enabled", "auto_subscribe_mikan_enabled",
             "auto_subscribe_tmdb_enabled", "auto_subscribe_bangumi_enabled", "auto_subscribe_anilist_enabled",
             "checkin_cron", "checkin_auto_retry", "checkin_retry_count",
-            "p115_checkin_enabled", "hdhive_checkin_enabled",
-            "dian115_checkin_enabled", "juying_checkin_enabled",
-            "quark_checkin_enabled", "quark_checkin_url",
             "takeover_new_subscribes",
             "block_start_time", "block_end_time", "block_system_subscribe",
             "platform_download_policy", "block_platform_downloads",
             "takeover_platform_downloads",
         }
+        try:
+            from .core.checkin_manager import get_checkin_definitions
+            for defn in get_checkin_definitions().values():
+                service_config_keys.add(f"{defn.key}_checkin_enabled")
+                service_config_keys.add(f"{defn.key}_checkin_mode")
+                if getattr(defn, "credential_keys", None):
+                    service_config_keys.update(defn.credential_keys)
+        except Exception as error:
+            logger.debug(f"动态收集服务签到配置键异常: {error}")
         if reset_runtime or changed_keys & service_config_keys:
             self._refresh_platform_services()
         self._install_subscribe_search_takeover()

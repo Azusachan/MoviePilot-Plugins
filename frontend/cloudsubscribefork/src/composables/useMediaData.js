@@ -192,7 +192,6 @@ export function useMediaData({api, pluginId, showMessage}) {
         });
         nextTick(() => {
           setupSentinelObserver();
-          setTimeout(() => checkAndTriggerNextPage(), 150);
         });
       } else {
         showMessage(res?.message || "获取推荐榜单失败", "error");
@@ -227,7 +226,7 @@ export function useMediaData({api, pluginId, showMessage}) {
     if (!scrollSentinel.value) return;
     const rect = scrollSentinel.value.getBoundingClientRect();
     const windowHeight = window.innerHeight || document.documentElement.clientHeight || 800;
-    if (rect.top <= windowHeight + 600) loadNextPage(isSearchMode);
+    if (rect.top > 0 && rect.top <= windowHeight + 200) loadNextPage(isSearchMode);
   }
 
   let scrollThrottleTimer = null;
@@ -250,7 +249,7 @@ export function useMediaData({api, pluginId, showMessage}) {
       (entries) => {
         if (entries[0]?.isIntersecting) loadNextPage(isSearchMode);
       },
-      {root: null, rootMargin: "500px"},
+      {root: null, rootMargin: "200px"},
     );
     sentinelObserver.observe(scrollSentinel.value);
   }

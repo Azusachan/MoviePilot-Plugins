@@ -1,4 +1,4 @@
-from typing import Any, Iterable, Set
+from typing import Any, Iterable
 from urllib.parse import unquote
 
 try:
@@ -41,3 +41,11 @@ def format_episode_ranges(episodes: Iterable[Any]) -> str:
         start = previous = number
     ranges.append(f"E{start:02d}" if start == previous else f"E{start:02d}-E{previous:02d}")
     return "、".join(ranges)
+
+
+def normalize_season(value: Any, default: int = 1) -> int:
+    """规范化季号：None 或空字符串回退默认季号；0 表示特别篇 S00。"""
+    try:
+        return max(0, int(default if value is None or value == "" else value))
+    except (TypeError, ValueError):
+        return default

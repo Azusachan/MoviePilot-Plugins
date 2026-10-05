@@ -23,10 +23,11 @@ from ...utils.cache import create_platform_ttl_cache
 try:
     from p115client import P115Client, check_response
     from p115client.const import APP_TO_SSOENT
-
+    from urllib3_future.util import Timeout as _Urllib3Timeout
     PAVAILABLE = True
 except ImportError:
     PAVAILABLE = False
+    _Urllib3Timeout = None
     logger.warning("p115client 未安装，115网盘功能不可用，请安装: pip install p115client")
 
 IOS_USER_AGENT = (
@@ -34,7 +35,6 @@ IOS_USER_AGENT = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
     "115wangpan_ios/36.2.20"
 )
-
 
 class P115CheckinError(RuntimeError):
     """115 签到接口错误。"""
@@ -69,7 +69,7 @@ def _bounded_p115_request(*args, **kwargs):
 
 
 class P115ClientWithTimeout(P115Client if PAVAILABLE else object):
-    """参考 p115disk，为 p115client API 统一注入连接和读取超时。"""
+    """p115client 统一注入连接和读取超时。"""
 
     SLOW_METHODS = {
         "share_receive",
@@ -91,8 +91,20 @@ class P115ClientWithTimeout(P115Client if PAVAILABLE else object):
             slow_timeout: Optional[Dict[str, float]] = None,
     ):
         super().__init__(cookies)
-        self._default_timeout = default_timeout
-        self._slow_timeout = slow_timeout
+        self._default_timeout = self._parse_timeout(default_timeout)
+        self._slow_timeout = self._parse_timeout(slow_timeout)
+
+    @staticmethod
+    def _parse_timeout(timeout_spec: Any) -> Any:
+        if not timeout_spec:
+            return None
+        if isinstance(timeout_spec, dict):
+            connect = timeout_spec.get("connect", 30)
+            read = timeout_spec.get("read", 60)
+            if _Urllib3Timeout is not None:
+                return _Urllib3Timeout(connect=connect, read=read)
+            return (connect, read)
+        return timeout_spec
 
     def __getattribute__(self, name: str):
         if name.startswith("_") or name in {"__class__", "__dict__"}:
@@ -112,12 +124,8 @@ class P115ClientWithTimeout(P115Client if PAVAILABLE else object):
             return attr
 
         def wrapper(*args, **kwargs):
-            if timeout:
-                extensions = kwargs.get("extensions")
-                if not isinstance(extensions, dict):
-                    extensions = {}
-                    kwargs["extensions"] = extensions
-                extensions.setdefault("timeout", timeout)
+            if timeout is not None:
+                kwargs.setdefault("timeout", timeout)
                 if kwargs.get("request") is None:
                     kwargs["request"] = _bounded_p115_request
             return attr(*args, **kwargs)
@@ -451,34 +459,50 @@ class P115ClientManager:
             if not self.client:
                 return False
 
-            try:
-                user_info = self._rate_limited_call(self.client.user_my_info)
-                if user_info.get("state"):
-                    data = user_info.get("data") or {}
-                    vip_data = data.get("vip") or {}
-                    uname = data.get("uname", "未知")
-                    self.is_vip = (
-                            self._as_bool(vip_data.get("is_vip"))
-                            or self._as_bool(vip_data.get("is_forever"))
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    user_info = self._rate_limited_call(self.client.user_my_info)
+                    if isinstance(user_info, dict) and user_info.get("state"):
+                        data = user_info.get("data") or {}
+                        vip_data = data.get("vip") or {}
+                        uname = data.get("uname", "未知")
+                        self.is_vip = (
+                                self._as_bool(vip_data.get("is_vip"))
+                                or self._as_bool(vip_data.get("is_forever"))
+                        )
+                        self.vip_expire_date = "永久" if self._as_bool(vip_data.get("is_forever")) \
+                            else str(vip_data.get("expire_str") or "")
+                        vip_text = "会员" if self.is_vip else "非会员"
+                        if self.is_vip and self.vip_expire_date:
+                            vip_text = f"{vip_text}（有效期：{self.vip_expire_date}）"
+                        self._login_checked = True
+                        logger.info(f"115 登录成功: {uname}，会员状态: {vip_text}")
+                        return True
+                    error_msg = str(
+                        (user_info or {}).get("error")
+                        or (user_info or {}).get("message")
+                        or "接口未返回原因"
                     )
-                    self.vip_expire_date = "永久" if self._as_bool(vip_data.get("is_forever")) \
-                        else str(vip_data.get("expire_str") or "")
-                    vip_text = "会员" if self.is_vip else "非会员"
-                    if self.is_vip and self.vip_expire_date:
-                        vip_text = f"{vip_text}（有效期：{self.vip_expire_date}）"
-                    self._login_checked = True
-                    logger.info(f"115 登录成功: {uname}，会员状态: {vip_text}")
-                    return True
-                logger.error(
-                    f"115 登录状态无效：ssoent={self._login_ssoent()}，"
-                    f"{user_info.get('error') or user_info.get('message') or '接口未返回原因'}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"检查 115 登录状态失败："
-                    f"HTTP={self._http_status_code(e) or 'unknown'}，"
-                    f"ssoent={self._login_ssoent()}，{self._error_summary(e)}"
-                )
+                    if any(kw in error_msg for kw in ("未登录", "重新登录", "已过期", "invalid", "login")):
+                        logger.error(f"115 登录凭证无效：{error_msg}")
+                        return False
+                    last_error = error_msg
+                except Exception as e:
+                    last_error = e
+                    logger.debug(
+                        f"检查 115 登录网络波动（第 {attempt}/3 次）："
+                        f"{self._error_summary(e)}"
+                    )
+                    if attempt < 3:
+                        time.sleep(0.5 * attempt)
+                        continue
+            logger.error(
+                f"检查 115 登录状态失败（已重试 3 次）："
+                f"HTTP={self._http_status_code(last_error) if isinstance(last_error, Exception) else 'unknown'}，"
+                f"ssoent={self._login_ssoent()}，"
+                f"{self._error_summary(last_error) if isinstance(last_error, Exception) else last_error}"
+            )
             return False
 
     def get_account_info(self, cache_ttl: int = 3600) -> Dict[str, Any]:
@@ -600,36 +624,133 @@ class P115ClientManager:
         })
         return counts
 
+    def get_points_balance(self) -> Optional[int]:
+        """获取 115 账号当前累积的枫叶积分总额。"""
+        if not self.client:
+            return None
+
+        # 1. 优先通过 user_points_balance 读取精准余额
+        if hasattr(self.client, "user_points_balance"):
+            try:
+                resp = check_response(self.client.user_points_balance())
+                data = resp.get("data") if isinstance(resp, dict) else resp
+                if isinstance(data, dict):
+                    for key in ("balance", "total_points", "points", "surplus", "all_points", "point"):
+                        val = data.get(key)
+                        if val is not None:
+                            try:
+                                return int(val)
+                            except (TypeError, ValueError):
+                                pass
+                elif data is not None:
+                    try:
+                        return int(data)
+                    except (TypeError, ValueError):
+                        pass
+            except Exception as error:
+                logger.debug(f"读取 115 枫叶余额失败: {error}")
+
+        # 2. 备选通过 user_points_sign 签到数据读取
+        if hasattr(self.client, "user_points_sign"):
+            try:
+                resp = check_response(self.client.user_points_sign())
+                data = resp.get("data") if isinstance(resp, dict) else resp
+                if isinstance(data, dict):
+                    for key in ("total_points", "balance", "points", "all_points", "user_points"):
+                        val = data.get(key)
+                        if val is not None:
+                            try:
+                                return int(val)
+                            except (TypeError, ValueError):
+                                pass
+            except Exception as error:
+                logger.debug(f"读取 115 枫叶余额失败: {error}")
+
+        return None
+
     def checkin(self, mode: str = "normal") -> Dict[str, Any]:
         """每日签到并领取枫叶。"""
         if not PAVAILABLE:
             raise P115CheckinError("p115client 未安装，无法执行 115 签到")
         if not self.client:
             raise P115CheckinError("115 客户端未初始化")
+
+        # 1. 查询签到状态
         status = check_response(self.client.user_points_sign())
         data = status.get("data") or {}
-        if int(data.get("is_sign_today") or 0) == 1:
+
+        already_checked_in = (int(data.get("is_sign_today") or 0) == 1)
+        days = data.get("continuous_day")
+
+        # 尝试从状态响应中提取当前总积分
+        current_points = None
+        for key in ("total_points", "balance", "points", "all_points", "user_points"):
+            val = data.get(key)
+            if val is not None:
+                try:
+                    current_points = int(val)
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+        if already_checked_in:
+            if current_points is None:
+                current_points = self.get_points_balance()
+            points_display = f"，当前枫叶: {current_points}" if current_points is not None else ""
+            days_display = f"，连续签到 {days} 天" if days else ""
             return {
                 "success": True,
                 "already_checked_in": True,
                 "status": "今日已签到",
-                "message": "今日已签到，无需重复签到",
+                "message": f"今日已签到{days_display}{points_display}",
                 "signin_points": 0,
                 "points_change": 0,
-                "signin_days": data.get("continuous_day"),
+                "points_after": current_points,
+                "signin_days": days,
                 "status_code": 200,
+                "details": {
+                    "status": "今日已签到",
+                    "current_points": current_points,
+                    "continuous_days": days or 0,
+                },
             }
+
+        # 2. 尚未签到，执行签到
         result = check_response(self.client.user_points_sign_post())
         result_data = result.get("data") or {}
         points = int(result_data.get("points_num") or 0)
-        days = result_data.get("continuous_day")
+        days = result_data.get("continuous_day") or days
+
+        after_points = None
+        for key in ("total_points", "balance", "points", "all_points", "user_points"):
+            val = result_data.get(key)
+            if val is not None:
+                try:
+                    after_points = int(val)
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+        if after_points is None:
+            after_points = self.get_points_balance()
+
+        if after_points is None and current_points is not None:
+            after_points = current_points + points
+
+        points_display = f"，当前枫叶: {after_points}" if after_points is not None else ""
         return {
             "success": True,
             "status": "签到成功",
-            "message": f"签到成功，连续签到 {days or 0} 天，获得 {points} 枫叶",
+            "message": f"签到成功，获得 {points} 枫叶{points_display}，连续签到 {days or 0} 天",
             "signin_points": points,
             "points_change": points,
-            "points_after": result_data.get("points") or result_data.get("balance"),
+            "points_after": after_points,
             "signin_days": days,
             "status_code": 200,
+            "details": {
+                "status": "签到成功",
+                "reward_points": points,
+                "current_points": after_points,
+                "continuous_days": days or 0,
+            },
         }

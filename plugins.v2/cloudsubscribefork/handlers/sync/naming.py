@@ -13,6 +13,8 @@ from app.modules.filemanager import FileManagerModule
 from app.modules.filemanager.transhandler import TransHandler
 from app.schemas.types import MediaType
 
+from .utils import normalize_season
+
 try:
     from app.helper.directory import DirectoryHelper
 except Exception:

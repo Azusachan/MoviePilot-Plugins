@@ -16,9 +16,9 @@ from ...core import OwnerDelegator
 
 class UpgradeService(OwnerDelegator):
     def _set_upgrade_phase(
-            self, subscribe, phase: str, progress: int, **extra_kwargs
+            self, subscribe, phase: str, progress: int, clear_search: bool = False, **extra_kwargs
     ) -> None:
-        self._set_task_phase(subscribe, phase, progress, **extra_kwargs)
+        self._set_task_phase(subscribe, phase, progress, clear_search=clear_search, **extra_kwargs)
 
     def _process_tv_subscribe_upgrade(
             self,
@@ -166,61 +166,7 @@ class UpgradeService(OwnerDelegator):
 
             episodes_to_search = sorted(episodes_to_search)
 
-            # TMDB 播出日期过滤，并保留目标集播出日期供资源筛选。
             target_episode_air_dates: Dict[int, str] = {}
-            if mediainfo.tmdb_id:
-                preparation = getattr(
-                    subscribe, "_cloudsubscribefork_preparation", {}
-                ) or {}
-                calendar_entry = preparation.get("calendar")
-                if not calendar_entry:
-                    calendar_entry = self.get_tv_subscribe_calendar(
-                        subscribe, tmdb_id=mediainfo.tmdb_id
-                    )
-                if calendar_entry:
-                    target_episode_air_dates = {
-                        int(episode): str(air_date)
-                        for episode, value in (
-                                calendar_entry.get("aired_episode_air_dates") or {}
-                        ).items()
-                        if (air_date := str(value or "").strip())
-                    }
-                    unreleased_episodes = {
-                        int(episode)
-                        for episode in (
-                                calendar_entry.get("unreleased_episodes") or []
-                        )
-                    }
-                    not_aired = [
-                        episode
-                        for episode in episodes_to_search
-                        if episode in unreleased_episodes
-                    ]
-                    if not_aired:
-                        not_aired_set = set(not_aired)
-                        episodes_to_search = [
-                            episode
-                            for episode in episodes_to_search
-                            if episode not in not_aired_set
-                        ]
-                        logger.debug(
-                            f"{upgrade_log_prefix} 跳过 {len(not_aired)} 集未播出"
-                        )
-                        defer_until = self._calendar_date(
-                            calendar_entry.get("next_air_date")
-                        )
-                        if (
-                                not episodes_to_search
-                                and defer_until
-                                and defer_until > datetime.date.today()
-                                and not manual_upgrade
-                        ):
-                            self.defer_subscribe_until(
-                                subscribe,
-                                defer_until,
-                                f"洗版目标最早于 {defer_until.isoformat()} 播出",
-                            )
-
             if not episodes_to_search:
                 logger.info(f"{upgrade_log_prefix} 无可搜索的集数")
                 return transferred_count
@@ -443,6 +389,7 @@ class UpgradeService(OwnerDelegator):
                         )
                         if not pending_key:
                             continue
+                        self._clear_task_search_state(subscribe)
                         self._append_magnet_pending_history(
                             history=history,
                             mediainfo=mediainfo,
@@ -584,7 +531,7 @@ class UpgradeService(OwnerDelegator):
                     if not matched_items:
                         continue
 
-                    self._set_upgrade_phase(subscribe, "提交替换", 80)
+                    self._set_upgrade_phase(subscribe, "提交替换", 80, clear_search=True)
                     transfer_results = self._transfer_episode_items(
                         matched_items,
                         share_url,

@@ -99,16 +99,29 @@
         <div :key="activeSubtab || 'main'" class="subtab-pane">
           <template v-for="(group, index) in visibleGroups" :key="group.title">
             <section class="config-group">
-          <div v-if="!group.hideHeading" class="group-heading">
-            <v-icon :icon="group.icon" color="primary" size="small" class="group-heading-icon" />
-            <div class="group-heading-content">
-              <span class="group-title text-subtitle-2 font-weight-medium">
-                {{ group.title }}
-              </span>
-              <span v-if="group.hint" class="group-hint text-caption text-medium-emphasis">
-                {{ group.hint }}
-              </span>
-            </div>
+              <div v-if="!group.hideHeading" class="group-heading d-flex align-center justify-space-between">
+                <div class="d-flex align-center min-w-0 flex-grow-1">
+                  <v-icon :icon="group.icon" color="primary" size="small" class="group-heading-icon" />
+                  <div class="group-heading-content">
+                <span class="group-title text-subtitle-2 font-weight-medium">
+                  {{ group.title }}
+                </span>
+                    <span v-if="group.hint" class="group-hint text-caption text-medium-emphasis">
+                  {{ group.hint }}
+                </span>
+                  </div>
+                </div>
+                <v-btn
+                  v-if="index === 0 && canResetCurrentSubtab"
+                  variant="tonal"
+                  size="x-small"
+                  color="error"
+                  prepend-icon="mdi-restore"
+                  class="subtab-reset-btn ml-2 flex-shrink-0"
+                  :title="`仅恢复当前【${currentSubtabTitle}】配置项为默认值`"
+                  @click="promptResetSubtab">
+                  恢复默认值
+                </v-btn>
           </div>
 
               <v-row dense class="config-fields-row">
@@ -490,6 +503,15 @@
         </div>
       </transition>
     </div>
+    <ConfirmDialog
+      v-model="resetDialogVisible"
+      :title="`确认恢复【${currentSubtabTitle}】默认值？`"
+      confirm-text="恢复默认值"
+      alert-type="error"
+      alert-text="仅将当前渠道的相关配置项恢复为默认值，不会影响其他渠道与全局设置。"
+      @confirm="executeResetSubtab">
+      <div>确认将【<strong>{{ currentSubtabTitle }}</strong>】的所有配置项恢复为初始默认值？</div>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -499,6 +521,7 @@ import AccountInfo from "./AccountInfo.vue";
 import CheckinTimeline from "./CheckinTimeline.vue";
 import RegionMediaMapField from "./RegionMediaMapField.vue";
 import MultiSelectDialogField from "./MultiSelectDialogField.vue";
+import ConfirmDialog from "../dialogs/ConfirmDialog.vue";
 
 const props = defineProps({
   section: { type: Object, required: true },
@@ -546,10 +569,65 @@ const emit = defineEmits([
   "copy-text",
   "load-options",
   "refresh-options",
+  "notify",
 ])
-
 const hasText = (value) => Boolean(String(value || "").trim())
 
+const resetDialogVisible = ref(false);
+const isSearchSection = computed(() => props.section?.value === "search");
+const currentSubtabTitle = computed(() => {
+  const current = (props.section?.subtabs || []).find((t) => t.value === activeSubtab.value);
+  return current?.title || activeSubtab.value || "该项";
+});
+const canResetCurrentSubtab = computed(() => {
+  if (!activeSubtab.value) return false;
+  if (isSearchSection.value && activeSubtab.value === "common") return false;
+  return visibleGroups.value.some((g) =>
+    (g.fields || []).some((f) => f.key && !["account", "test-source", "hdhive-oauth"].includes(f.type)),
+  );
+});
+
+function promptResetSubtab() {
+  resetDialogVisible.value = true;
+}
+
+function executeResetSubtab() {
+  resetDialogVisible.value = false;
+  const fieldsToReset = [];
+  visibleGroups.value.forEach((group) => {
+    (group.fields || []).forEach((field) => {
+      if (field.key && !["account", "test-source", "hdhive-oauth"].includes(field.type)) {
+        fieldsToReset.push(field);
+      }
+    });
+  });
+
+  let count = 0;
+  fieldsToReset.forEach((field) => {
+    let defVal = field.default;
+    if (defVal === undefined || defVal === null) {
+      defVal = props.options?.defaults?.[field.key];
+    }
+    if (defVal === undefined || defVal === null) {
+      if (field.type === "switch") defVal = false;
+      else if (field.type === "number") defVal = field.min ?? 0;
+      else if (field.type === "cloud-directory") defVal = "/";
+      else if (field.type === "select" && Array.isArray(field.options) && field.options.length) {
+        defVal = field.options[0].value;
+      } else if (["priority-order", "tags", "channels", "plugins"].includes(field.type)) {
+        defVal = [];
+      } else if (field.type === "online-documents") {
+        defVal = [{url: "", resource_types: []}];
+      } else {
+        defVal = "";
+      }
+    }
+    props.config[field.key] = JSON.parse(JSON.stringify(defVal));
+    count++;
+  });
+
+  emit("notify", `已恢复【${currentSubtabTitle.value}】默认值（共重置 ${count} 项）`);
+}
 function isTestSourceConfigured(source) {
   // 通用原则：前端不耦合具体渠道配置，仅检查是否配置了资源类型优先级
   return Array.isArray(props.config.resource_type_order) && props.config.resource_type_order.length > 0;
@@ -1364,6 +1442,14 @@ function mediaLibraryWebhookUrl(field, serverName) {
   .online-document-row :deep(.v-select) {
     grid-column: 1;
   }
+}
+
+.subtab-reset-btn {
+  font-size: 11px !important;
+  height: 24px !important;
+  padding: 0 8px !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
 }
 
 :deep(input:-webkit-autofill),

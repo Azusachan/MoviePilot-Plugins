@@ -204,7 +204,8 @@
                   @checkin-result="handleCheckinResult"
                   @copy-text="copyText"
                   @load-options="loadDynamicOptions"
-                  @refresh-options="refreshDynamicOptions" />
+                  @refresh-options="refreshDynamicOptions"
+                  @notify="notify" />
               </div>
             </transition>
           </div>
@@ -1088,15 +1089,46 @@ function applyOptions(data) {
   }
   if ("driver_schemas" in data) {
     options.driverSchemas = Array.isArray(data.driver_schemas) ? data.driver_schemas : [];
+    options.driverSchemas.forEach((schema) => {
+      (schema.groups || []).forEach((group) => {
+        (group.fields || []).forEach((field) => {
+          if (field.key && field.default !== undefined && field.default !== null) {
+            if (!(field.key in config) || config[field.key] === "" || config[field.key] === null || config[field.key] === undefined) {
+              config[field.key] = field.default;
+            }
+          }
+        });
+      });
+    });
   }
   if ("search_schemas" in data) {
     options.searchSchemas = Array.isArray(data.search_schemas) ? data.search_schemas : [];
+    options.searchSchemas.forEach((schema) => {
+      (schema.groups || []).forEach((group) => {
+        (group.fields || []).forEach((field) => {
+          if (field.key && field.default !== undefined && field.default !== null) {
+            if (!(field.key in config) || config[field.key] === "" || config[field.key] === null || config[field.key] === undefined) {
+              config[field.key] = field.default;
+            }
+          }
+        });
+      });
+    });
   }
   if ("checkin_schemas" in data) {
     options.checkinSchemas =
       data.checkin_schemas && typeof data.checkin_schemas === "object"
         ? data.checkin_schemas
         : {providers: [], groups: []};
+    (options.checkinSchemas.groups || []).forEach((group) => {
+      (group.fields || []).forEach((field) => {
+        if (field.key && field.default !== undefined && field.default !== null) {
+          if (!(field.key in config) || config[field.key] === "" || config[field.key] === null || config[field.key] === undefined) {
+            config[field.key] = field.default;
+          }
+        }
+      });
+    });
   }
 }
 

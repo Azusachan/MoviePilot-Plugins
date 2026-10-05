@@ -1,7 +1,5 @@
 """离线任务完成检测与文件后处理。"""
 
-from ...core.media import normalize_season
-
 import copy
 import time
 import uuid
@@ -15,7 +13,7 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from .utils import extract_ed2k_filename
+from .utils import extract_ed2k_filename, normalize_season
 from ...core import CloudDriveCapability, OwnerDelegator
 from ...search.subs_filter import anime_file_candidates
 from ...utils import MediaFileParser

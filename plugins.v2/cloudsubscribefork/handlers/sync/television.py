@@ -10,6 +10,7 @@ from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
+from .utils import normalize_season
 from ..notification import MediaServerResolver
 from ...core import OwnerDelegator
 
@@ -90,57 +91,6 @@ class TelevisionSyncProcessor(OwnerDelegator):
             missing_episodes: List[int] = []
             discovered_manual_episodes: Set[int] = set()
             target_episode_air_dates: Dict[int, str] = {}
-            calendar_entry: Optional[Dict[str, Any]] = None
-            # 收集阶段已读取 TMDB 季网页；这里复用结果，避免重复请求网页。
-            if expected_episodes and mediainfo.tmdb_id and not manual_resources:
-                preparation = getattr(
-                    subscribe, "_cloudsubscribefork_preparation", {}
-                ) or {}
-                calendar_entry = preparation.get("calendar")
-                if not calendar_entry:
-                    calendar_entry = self.get_tv_subscribe_calendar(
-                        subscribe, tmdb_id=mediainfo.tmdb_id
-                    )
-                if calendar_entry:
-                    target_episode_air_dates = {
-                        int(episode): str(air_date)
-                        for episode, value in (
-                                calendar_entry.get("aired_episode_air_dates") or {}
-                        ).items()
-                        if (air_date := str(value or "").strip())
-                    }
-                    if calendar_entry.get("all_targets_future"):
-                        logger.debug(
-                            f"{mediainfo.title_year} S{season:02d} "
-                            "所有目标集均未播出，跳过物理校验"
-                        )
-                        return transferred_count
-                    if calendar_entry.get("unknown_episodes"):
-                        boundary = int(
-                            calendar_entry.get("unreleased_boundary_episode") or 0
-                        )
-                        boundary_reason = str(
-                            calendar_entry.get("unreleased_boundary_reason") or ""
-                        )
-                        boundary_text = ""
-                        if boundary:
-                            boundary_text = (
-                                f"，TMDB 网页仅返回至 E{boundary - 1:02d}，"
-                                f"按 E{boundary:02d} 未播边界过滤"
-                                if boundary_reason == "unknown_tail"
-                                else f"，按 E{boundary:02d} 未播边界过滤"
-                            )
-                        logger.debug(
-                            f"{mediainfo.title_year} S{season:02d} "
-                            f"目标集播出日期不完整"
-                            f"{boundary_text}，"
-                            "继续物理校验"
-                        )
-                else:
-                    logger.info(
-                        f"{mediainfo.title_year} S{season:02d} "
-                        "TMDB 季网页未返回剧集信息，跳过播出过滤"
-                    )
             # 1. 先读取媒体服务器实际剧集，不混入订阅 note。
             self._set_task_phase(subscribe, "检查媒体库内容", 30)
             media_server_valid, media_server_episodes = self._timed_sync_call(
@@ -237,46 +187,6 @@ class TelevisionSyncProcessor(OwnerDelegator):
                     episode for episode in missing_episodes
                     if episode >= subscribe.start_episode
                 ]
-
-            # 物理校验完成后，仅对已播出且实际缺失的集数继续搜索。
-            if calendar_entry:
-                unreleased_episodes = {
-                    int(episode)
-                    for episode in (
-                            calendar_entry.get("unreleased_episodes") or []
-                    )
-                }
-                not_aired = [
-                    episode
-                    for episode in missing_episodes
-                    if episode in unreleased_episodes
-                ]
-                if not_aired:
-                    not_aired_set = set(not_aired)
-                    missing_episodes = [
-                        episode
-                        for episode in missing_episodes
-                        if episode not in not_aired_set
-                    ]
-                    logger.debug(
-                        f"{mediainfo.title_year} S{season:02d} 跳过未播出剧集："
-                        f"{self._format_episode_ranges(not_aired_set)}"
-                    )
-                    if not missing_episodes:
-                        defer_until = self._calendar_date(
-                            calendar_entry.get("next_air_date")
-                        )
-                        if defer_until and defer_until > datetime.date.today():
-                            self.defer_subscribe_until(
-                                subscribe,
-                                defer_until,
-                                f"缺失剧集最早于 {defer_until.isoformat()} 播出",
-                            )
-                        logger.debug(
-                            f"{mediainfo.title_year} S{season} "
-                            "所有缺失剧集均未播出，跳过"
-                        )
-                        return transferred_count
 
             logger.debug(
                 f"{mediainfo.title_year} S{season:02d} 待转存剧集："
@@ -673,6 +583,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             "登记网盘剧集整理"
                             if direct_cloud_resource else "转存匹配剧集",
                             92,
+                            clear_search=True,
                         )
                         logger.debug(
                             f"准备批量整理：{mediainfo.title_year} S{season:02d}，"
@@ -809,6 +720,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         continue
 
                 if offline_submit_queue:
+                    self._clear_task_search_state(subscribe)
                     successful_pending_keys = self._submit_offline_packages(
                         offline_submit_queue
                     )
