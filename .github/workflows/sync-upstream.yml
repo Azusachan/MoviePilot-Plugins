@@ -51,7 +51,7 @@ jobs:
         if: steps.prepare.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          python3 -m pip install beautifulsoup4 pycryptodome
+          python3 -m pip install beautifulsoup4 pycryptodome qrcode torf httpx apscheduler
           python3 -m unittest discover -s tests -v
           python3 -m compileall -q plugins.v2/cloudsubscribefork
           python3 .github/scripts/get_plugin_meta.py >/dev/null

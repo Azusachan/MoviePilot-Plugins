@@ -19,7 +19,7 @@ from app.schemas.types import MediaType
 
 assert CloudSubscribeFork.plugin_config_prefix == 'cloudsubscribefork_'
 sources = {definition.id for definition in SearchSourceRegistry.get_definitions()}
-assert {'mikan', 'pansou', 'hdhive', 'seedhub', 'animegarden'} <= sources, sources
+assert {'mikan', 'pansou', 'hdhive', 'seedhub', 'animegarden', 'woniu'} <= sources, sources
 assert '115' in {definition.id for definition in DriverRegistry.get_definitions()}
 config = dict(enabled=False, takeover_new_subscribes=True,
               search_source_order=['mikan', 'pansou'], mikan_base_url='https://mikanani.me',

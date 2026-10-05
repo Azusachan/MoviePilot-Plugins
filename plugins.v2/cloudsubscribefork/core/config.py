@@ -23,11 +23,11 @@ DEFAULT_AUTO_SUBSCRIBE_USERNAME = "网盘订阅助手"
 class UIConfig:
     """提供 Vue 配置页所需的数据，不再保留旧 iframe/Vuetify 表单。"""
 
-    @staticmethod
-    def get_default_config() -> Dict[str, Any]:
+    @classmethod
+    def get_default_config(cls) -> Dict[str, Any]:
         current_year = datetime.datetime.now().year
         current_month = datetime.datetime.now().month
-        return {
+        config: Dict[str, Any] = {
             "enabled": False,
             "show_sidebar_nav": True,
             "agent_enabled": True,
@@ -51,6 +51,8 @@ class UIConfig:
             "auto_subscribe_proxy": "",
             "auto_subscribe_proxy_username": "",
             "auto_subscribe_proxy_password": "",
+            "auto_subscribe_media_types": ["movie", "tv"],
+            "auto_subscribe_media_type": "all",
             "auto_subscribe_douban_enabled": False,
             "auto_subscribe_douban_ranks": ["movie-showing", "movie-hot"],
             "auto_subscribe_douban_rsshub_base": "https://rsshub.app",
@@ -123,31 +125,6 @@ class UIConfig:
             "auto_subscribe_mikan_base_urls": [
                 "https://mikanani.me", "https://mikanime.tv"
             ],
-            "cookies": "",
-            "p115_checkin_enabled": False,
-            "p115_checkin_mode": "normal",
-            "p123_token": "",
-            "p123_request_timeout": 30,
-            "quark_cookie": "",
-            "quark_checkin_enabled": False,
-            "quark_checkin_url": "",
-            "quark_checkin_mode": "normal",
-            "quark_request_timeout": 30,
-            "guangya_access_token": "",
-            "guangya_refresh_token": "",
-            "guangya_client_id": "",
-            "guangya_device_id": "",
-            "guangya_request_timeout": 30,
-            "tianyi_cookie": "",
-            "tianyi_access_token": "",
-            "tianyi_refresh_token": "",
-            "tianyi_session_key": "",
-            "tianyi_request_timeout": 60,
-            "yun139_authorization": "",
-            "yun139_request_timeout": 60,
-            "alipan_access_token": "",
-            "alipan_refresh_token": "",
-            "alipan_request_timeout": 60,
             "cloud_drive": "115",
             "organize_after_transfer": True,
             "organize_subtitles": True,
@@ -180,120 +157,6 @@ class UIConfig:
             "timeout_slow_pool": 15,
             "timeout_slow_read": 300,
             "timeout_slow_write": 300,
-            "pansou_url": "https://so.252035.xyz/",
-            "hdhive_base_url": "https://re0.me",
-            "dian115_base_url": "https://m.dian115.com",
-            "hdhaven_base_url": "https://hdhaven.com",
-            "juying_base_url": "https://www.jying.top",
-            "seedhub_base_url": "https://www.seedhub.cc",
-            "piratebay_base_url": "https://apibay.org",
-            "uindex_base_url": "https://uindex.org",
-            "pinglian_base_url": "https://pinglian.lol",
-            "online_docs_urls": [],
-            "online_docs_resource_types": ["115", "123", "quark", "alipan"],
-            "online_docs": [{"url": "", "resource_types": []}],
-            "pansou_username": "",
-            "pansou_password": "",
-            "pansou_auth_enabled": False,
-            "pansou_channels": [],
-            "pansou_plugins": [],
-            "pansou_filter_include": [],
-            "pansou_filter_exclude": [],
-            "resource_type_order": ["115", "ed2k"],
-            "magnet_metadata_url_template": "https://itorrents.org/torrent/{info_hash}.torrent",
-            "pansou_concurrency": None,
-            "pansou_result_limit": 10,
-            "pansou_refresh": True,
-            "pansou_timeout": 60,
-            "seedhub_result_limit": 20,
-            "seedhub_request_interval": 1.0,
-            "seedhub_timeout": 60,
-            "piratebay_result_limit": 20,
-            "piratebay_request_interval": 1.0,
-            "piratebay_timeout": 60,
-            "mikan_base_url": "https://mikanani.me",
-            "mikan_result_limit": 10,
-            "mikan_request_interval": 2.0,
-            "mikan_timeout": 60,
-            "mikan_fansub_order": [
-                "LoliHouse",
-                "VCB-Studio",
-                "喵萌奶茶|Nekomoe",
-                "Nix-Raws",
-                r"\bANI\b|ANi",
-            ],
-            "mikan_fansub_exclude": "",
-            "mikan_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
-            "mikan_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
-            "mikan_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
-            "animegarden_base_url": "https://animes.garden/",
-
-            "animegarden_fansub_order": [
-                "LoliHouse",
-                "VCB-Studio",
-                "喵萌奶茶|Nekomoe",
-                "Nix-Raws",
-                r"\bANI\b|ANi",
-            ],
-            "animegarden_exclude_re": "720[pP]|480[pP]|特别篇|特別篇|\\b(?:SP|OVA|OAD)\\d*|\\b\\d+\\s*-\\s*\\d+\\b",
-            "animegarden_no_subs_re": "无字幕|無字幕|无字版|無字版|生肉|\\b(?:unsubbed|no[ ._-]*subs?|subtitle[ ._-]*free)\\b",
-            "animegarden_chinese_re": "简[体體繁中]|簡[体體繁中]|繁[体體简簡中]|中[日英双雙文]|[简簡繁]日|\\b(?:CHS|CHT|BIG5|GB|SC|TC|ZH|CHI|ZHO)(?:\\b|_)",
-            "animegarden_result_limit": 10,
-            "animegarden_request_interval": 1.0,
-            "animegarden_timeout": 60,
-            "uindex_result_limit": 20,
-            "uindex_request_interval": 1.0,
-            "uindex_timeout": 60,
-            "juying_username": "",
-            "juying_password": "",
-            "juying_checkin_enabled": False,
-            "juying_result_limit": 5,
-            "juying_request_interval": 1.0,
-            "pinglian_username": "",
-            "pinglian_password": "",
-            "pinglian_result_limit": 20,
-            "pinglian_request_interval": 1.0,
-            "pinglian_timeout": 60,
-            "hdhive_query_mode": "web",
-            "hdhive_api_key": "",
-            "hdhive_client_id": "",
-            "hdhive_redirect_uri": "",
-            "hdhive_response_mode": "redirect",
-            "hdhive_auth_code": "",
-            "hdhive_access_token": "",
-            "hdhive_refresh_token": "",
-            "hdhive_token_expires_at": 0,
-            "hdhive_auto_unlock": False,
-            "hdhive_max_unlock_points": 50,
-            "hdhive_max_points_per_sub": 20,
-            "hdhive_username": "",
-            "hdhive_password": "",
-            "hdhive_checkin_enabled": False,
-            "hdhive_checkin_mode": "normal",
-            "checkin_cron": "0 8 * * *",
-            "checkin_auto_retry": True,
-            "checkin_retry_count": 2,
-            "dian115_email": "",
-            "dian115_password": "",
-            "dian115_checkin_enabled": False,
-            "dian115_checkin_mode": "normal",
-            "dian115_lottery_enabled": False,
-            "dian115_lottery_count": 1,
-            "dian115_auto_unlock": False,
-            "dian115_max_unlock_points": 50,
-            "dian115_max_points_per_sub": 20,
-            "hdhaven_username": "",
-            "hdhaven_password": "",
-            "hdhaven_auto_unlock": True,
-            "hdhaven_max_unlock_points": 50,
-            "hdhaven_max_points_per_sub": 20,
-            "hdhaven_checkin_enabled": False,
-            "hdhaven_checkin_mode": "gambler",
-            "hdhaven_candidate_limit": 4,
-            "hdhaven_request_interval": 2.0,
-            "hdhaven_unlocks_per_minute": 5,
-            "hdhaven_timeout": 60,
-            "hdhaven_magnet_enabled": False,
             "search_source_order": ["pansou"],
             "search_proxy": "",
             "search_proxy_username": "",
@@ -305,17 +168,6 @@ class UIConfig:
             "search_circuit_breaker_enabled": True,
             "search_circuit_breaker_threshold": 3,
             "search_circuit_breaker_cooldown": 60,
-            "hdhive_timeout": 60,
-            "dian115_timeout": 60,
-            "juying_timeout": 60,
-            "hdhive_candidate_limit": 4,
-            "hdhive_request_interval": 5,
-            "hdhive_unlocks_per_minute": 2,
-            "dian115_candidate_limit": 4,
-            "dian115_request_interval": 1,
-            "dian115_unlocks_per_minute": 6,
-            "hdhive_torrentclaw_enabled": False,
-            "hdhive_torrentclaw_subtitle_languages": ["zh"],
             "subscribe_filter_mode": "exclude",
             "exclude_subscribes": [],
             "include_subscribes": [],
@@ -340,25 +192,90 @@ class UIConfig:
             "upgrade_mode": "largest",
             "upgrade_subscribe_ids": [],
             "local_resource_path": "",
-            "p115_transfer_path": "/",
-            "p123_transfer_path": "/",
-            "quark_transfer_path": "/",
-            "guangya_transfer_path": "/",
-            "tianyi_transfer_path": "/",
-            "yun139_transfer_path": "/",
-            "alipan_transfer_path": "/",
-            "p115_media_path": "/",
-            "p123_media_path": "/",
-            "quark_media_path": "/",
-            "guangya_media_path": "/",
-            "tianyi_media_path": "/",
-            "yun139_media_path": "/",
-            "alipan_media_path": "/",
             "self_heal_interval": 10,
             "anime_pack_preferred": True,
             "offline_timeout": 30,
         }
+        try:
+            dynamic_defaults = cls.collect_definitions_defaults()
+            for key, val in dynamic_defaults.items():
+                config.setdefault(key, val)
+        except Exception as error:
+            logger.debug(f"合并自描述渠道默认配置异常: {error}")
+        return config
 
+    @classmethod
+    def collect_definitions_defaults(cls) -> Dict[str, Any]:
+        """根据已注册的网盘驱动、搜索渠道和签到契约定义，自动收集所有字段的默认值配置。"""
+        defaults: Dict[str, Any] = {}
+
+        # 1. 扫描网盘驱动声明的字段默认值
+        try:
+            from ..drive.scanner import DriverRegistry
+            for driver_cls in DriverRegistry.get_definitions():
+                for group in driver_cls.get_config_groups():
+                    for field in group.fields:
+                        cls._extract_field_default(defaults, field)
+        except Exception as error:
+            logger.debug(f"从网盘驱动提取默认配置异常: {error}")
+
+        # 2. 扫描搜索渠道声明的字段默认值
+        try:
+            from ..search.scanner import SearchSourceRegistry
+            for source_cls in SearchSourceRegistry.get_definitions():
+                for group in source_cls.get_config_groups():
+                    for field in group.fields:
+                        cls._extract_field_default(defaults, field)
+        except Exception as error:
+            logger.debug(f"从搜索渠道提取默认配置异常: {error}")
+
+        # 3. 扫描签到提供方声明的契约与字段默认值
+        try:
+            from .checkin_manager import get_checkin_definitions
+            for defn in get_checkin_definitions().values():
+                if defn.key:
+                    defaults.setdefault(f"{defn.key}_checkin_enabled", False)
+                    if getattr(defn, "modes", None):
+                        defaults.setdefault(f"{defn.key}_checkin_mode", defn.modes[0] if defn.modes else "normal")
+                if defn.group and defn.group.fields:
+                    for field in defn.group.fields:
+                        cls._extract_field_default(defaults, field)
+        except Exception as error:
+            logger.debug(f"从签到契约提取默认配置异常: {error}")
+
+        return defaults
+
+    @staticmethod
+    def _extract_field_default(defaults: Dict[str, Any], field: Any) -> None:
+        key = getattr(field, "key", "")
+        if not key or key in defaults:
+            return
+        ftype = getattr(field, "type", "text")
+        if ftype in ("account", "test-source", "hdhive-oauth"):
+            return
+
+        if getattr(field, "default", None) is not None:
+            defaults[key] = field.default
+            return
+
+        if ftype == "switch":
+            defaults[key] = False
+        elif ftype == "cloud-directory":
+            defaults[key] = "/"
+        elif ftype in ("priority-order", "tags", "channels", "plugins"):
+            defaults[key] = []
+        elif ftype == "online-documents":
+            defaults[key] = [{"url": "", "resource_types": []}]
+        elif ftype == "select":
+            options = getattr(field, "options", None)
+            if options and isinstance(options, list) and options[0].get("value") is not None:
+                defaults[key] = options[0]["value"]
+            else:
+                defaults[key] = ""
+        elif ftype == "number":
+            defaults[key] = getattr(field, "min", 0) or 0
+        else:
+            defaults[key] = ""
     @staticmethod
     def normalize_auto_subscribe_dates(config: Dict[str, Any]) -> None:
         current_year = datetime.datetime.now().year
@@ -600,13 +517,14 @@ class UIConfig:
         target["online_docs_urls"] = []
         target["online_docs_resource_types"] = []
 
-        for key in ("search_source_order", "pansou_channels", "pansou_plugins", "pansou_filter_include",
-                    "pansou_filter_exclude"):
-            val = target.get(key)
-            if isinstance(val, str):
-                target[key] = [v.strip() for v in re.split(r"[,，\n]+", val) if v.strip()]
-            elif not isinstance(val, list):
-                target[key] = []
+        for key in list(target.keys()):
+            if key == "search_source_order" or key.endswith(
+                    ("_channels", "_plugins", "_filter_include", "_filter_exclude")):
+                val = target.get(key)
+                if isinstance(val, str):
+                    target[key] = [v.strip() for v in re.split(r"[,，\n]+", val) if v.strip()]
+                elif not isinstance(val, list):
+                    target[key] = []
 
         def _clean_ext_list(raw_val, defaults):
             if isinstance(raw_val, str):

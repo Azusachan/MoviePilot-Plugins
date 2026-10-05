@@ -51,6 +51,38 @@ def extract_fansub_from_title(title: str) -> Optional[str]:
     return None
 
 
+def is_special_release(title: str) -> bool:
+    """判定是否为特别篇、SP、OVA 等非正片季度资源。"""
+    return bool(
+        re.search(
+            r"(?<![A-Za-z0-9])(?:OVA|OAD|SP|EX)(?=[\W_\d]|$)|S00E|特别篇|特別篇",
+            str(title or ""),
+            re.I,
+        )
+    )
+
+
+def special_episodes(title: str) -> List[int]:
+    """提取 S00 特别篇集数。"""
+    found = set()
+    for match in re.finditer(
+            r"(?<![A-Za-z0-9])(?:S00E|OVA|OAD|SP|EX)[ ._-]*0*(\d{1,3})|(?:特别篇|特別篇)[ ._-]*0*(\d{1,3})",
+            str(title or ""),
+            re.I,
+    ):
+        ep = match.group(1) or match.group(2)
+        if ep:
+            found.add(int(ep))
+    return sorted(found)
+
+
+def release_season_matches(title: str, season: Optional[int]) -> bool:
+    """判断资源标题是否属于当前目标季度（严防正片与特别篇互相误选）。"""
+    if season == 0:
+        return bool(special_episodes(title))
+    return not is_special_release(title)
+
+
 def anime_is_excluded(
         title: str,
         config: Optional[Dict[str, Any]] = None,
@@ -67,6 +99,7 @@ def anime_is_excluded(
     if not title:
         return False
     cfg = config or {}
+    target_season = cfg.get("_target_season")
     if cfg.get("_target_season") != 0 and is_special_release(title):
         return True
     pattern = (
@@ -79,6 +112,8 @@ def anime_is_excluded(
                 or DEFAULT_ANIME_EXCLUDE_RE
         )
     )
+    if target_season == 0 and pattern == DEFAULT_ANIME_EXCLUDE_RE:
+        pattern = r"720[pP]|480[pP]"
     # 若是合法完结合集/打包资源，剥离其自身的合集范围标签（如 [01-12 合集]），避免被 \d-\d 等跨度规则误排除
     check_title = title
     # Only a real S00 subscription may admit explicitly numbered specials.

@@ -118,6 +118,9 @@ class P115FileQuery:
     def list_files_recursive(self, path: str, **kwargs: Any) -> list[CloudFile]:
         return cloud_files(self.manager.list_files_recursive(path, **kwargs))
 
+    def list_offline_task_files(self, task: Any, path: str) -> list[CloudFile]:
+        return cloud_files(self.manager.list_offline_task_files(task, path))
+
     def find_file(self, path: str, file_name: str, **kwargs: Any) -> CloudFile | None:
         return cloud_file(self.manager.find_file_by_exact_name(path, file_name, **kwargs))
 
@@ -744,39 +747,7 @@ class P115FileService(OwnerDelegator):
             logger.error(f"列出文件失败: {e}")
             return False, []
 
-    def list_files_recursive(self, path: str, max_depth: int = 5) -> List[dict]:
-        """下载完成后按目录批次读取真实文件树，并保留源父目录。"""
-        root_cid = self.get_pid_by_path(path, mkdir=False)
-        if root_cid == -1:
-            return []
-        return self._list_files_recursive_by_cid(root_cid, path, max_depth)
-
-    def list_offline_task_files(self, task: Mapping[str, Any], path: str) -> List[dict]:
-        """Locate only the object identified by the completed offline task.
-
-        Missing/expired task metadata must never trigger a whole-drive scan.
-        The normalized iterator uses `id` and `parent_id`, not legacy `fid/cid`.
-        """
-        file_id = str(task.get("file_id") or "")
-        parent_id = task.get("parent_id")
-        if not file_id or parent_id in (None, ""):
-            raise RuntimeError("115 离线任务缺少文件定位信息，保留任务等待重试")
-        checked, items = self.list_files_by_cid_checked(parent_id)
-        if not checked:
-            raise RuntimeError("115 离线任务目录读取失败，保留任务等待重试")
-        for raw in items:
-            file = cloud_file(raw)
-            if file is None or file.id != file_id:
-                continue
-            base = str(path or "/").rstrip("/")
-            if file.is_directory:
-                return self._list_files_recursive_by_cid(
-                    file.id, f"{base}/{file.name}", 6
-                )
-            return [{**raw, "_parent_cid": str(parent_id), "_cloud_dir": base or "/"}]
-        return []
-
-    def _list_files_recursive_by_cid(self, root_cid: Any, path: str, max_depth: int) -> List[dict]:
+    def _list_files_recursive_by_cid(self, root_cid: Any, path: str, max_depth: int = 5) -> List[dict]:
         result = []
         visited = set()
         queue = deque([(root_cid, str(path).rstrip("/"), 0)])
@@ -809,6 +780,43 @@ class P115FileService(OwnerDelegator):
                 else:
                     result.append(item)
         return result
+
+    def list_files_recursive(self, path: str, max_depth: int = 5) -> List[dict]:
+        """下载完成后按目录批次读取真实文件树，并保留源父目录。"""
+        root_cid = self.get_pid_by_path(path, mkdir=False)
+        if root_cid == -1:
+            return []
+        return self._list_files_recursive_by_cid(root_cid, path, max_depth)
+
+    def list_offline_task_files(self, task: Any, path: str) -> List[dict]:
+        """精确定位离线任务生成的文件或目录，避免全盘递归扫描。"""
+        if not isinstance(task, dict):
+            raise RuntimeError("离线任务元数据缺失，拒绝扫描网盘")
+        file_id = str(task.get("file_id") or "").strip()
+        parent_id = task.get("parent_id")
+        if not file_id or parent_id in (None, ""):
+            raise RuntimeError("离线任务文件或父目录标识缺失，拒绝扫描网盘")
+        checked, items = self.list_files_by_cid_checked(parent_id)
+        if not checked:
+            return []
+        base = str(path or "/").rstrip("/")
+        for raw in items:
+            raw_dict = dict(raw)
+            fid = str(raw_dict.get("id") or raw_dict.get("fid") or "")
+            cid = str(raw_dict.get("cid") or "")
+            if fid != file_id and cid != file_id:
+                continue
+            name = str(raw_dict.get("name") or raw_dict.get("n") or "").strip()
+            normalized = cloud_file(raw_dict)
+            is_dir = bool(normalized and normalized.is_directory)
+            raw_dict["is_dir"] = is_dir
+            if is_dir:
+                dir_id = normalized.id
+                return self._list_files_recursive_by_cid(dir_id, f"{base}/{name}", 6)
+            raw_dict["_parent_cid"] = str(parent_id)
+            raw_dict["_cloud_dir"] = base or "/"
+            return [raw_dict]
+        return []
 
     def move_and_rename_file(
             self, item: Dict[str, Any], save_path: str, target_name: str

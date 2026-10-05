@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 from .client import AliPanClient
 from .provider import AliPanDrive, create_alipan_provider
+from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 
 
 class AliPanDriverDefinition(DriverDefinition):
@@ -58,6 +58,7 @@ class AliPanDriverDefinition(DriverDefinition):
                         label="网盘转存路径",
                         type="cloud-directory",
                         placeholder="/",
+                        default="/",
                         drive_provider="alipan",
                         hint="分享转存和跨盘上传先保存到此路径。",
                         cols=6,
@@ -67,6 +68,7 @@ class AliPanDriverDefinition(DriverDefinition):
                         label="媒体库目录",
                         type="cloud-directory",
                         placeholder="/",
+                        default="/",
                         drive_provider="alipan",
                         hint="最终媒体目录；默认 / 表示网盘根目录。",
                         cols=6,
@@ -83,6 +85,7 @@ class AliPanDriverDefinition(DriverDefinition):
                         key="alipan_request_timeout",
                         label="请求超时（秒）",
                         type="number",
+                        default=60,
                         min=10,
                         max=300,
                         cols=6,

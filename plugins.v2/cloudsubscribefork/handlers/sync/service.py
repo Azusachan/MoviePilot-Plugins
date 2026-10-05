@@ -941,55 +941,86 @@ class SyncHandler:
                         logger.warning(f"整包分享转存未成功，将尝试按文件列表转存：{share_err}")
 
                 if not share_transferred:
-                    # 转存前预检转存目录：若转存路径下已存在待转存文件，直接复用并跳过向网盘发起重复转存，防止网盘报错或重复转存卡死
-                    staging_valid, staging_index = self._cloud_directory_snapshot(self._cloud_transfer_path)
-                    if staging_valid and staging_index:
-                        for item in selected_items:
-                            file_id = str(item["file"]["id"])
-                            target_name = str(item.get("target_name") or "").strip()
-                            raw_name = str(item["file"].get("name") or "").strip()
-                            file_size = int(item["file"].get("size") or 0)
-                            file_sha1 = str(item["file"].get("sha1") or "").upper()
-                            matched_staging_file = None
-                            if target_name and target_name in staging_index:
-                                matched_staging_file = staging_index[target_name]
-                            elif raw_name and raw_name in staging_index:
-                                matched_staging_file = staging_index[raw_name]
-                            elif file_sha1:
-                                matched_staging_file = next(
-                                    (f for f in staging_index.values() if
-                                     str(getattr(f, "sha1", "") or "").upper() == file_sha1),
-                                    None
-                                )
-                            elif file_size > 0:
-                                matched_staging_file = next(
-                                    (f for f in staging_index.values() if
-                                     int(getattr(f, "size", 0) or 0) == file_size and (
-                                             target_name and getattr(f, "name", "").startswith(Path(target_name).stem)
-                                             or raw_name and getattr(f, "name", "").startswith(Path(raw_name).stem)
-                                     )),
-                                    None
-                                )
-                            if matched_staging_file:
-                                pre_existing_ids.add(file_id)
-                                item["file"]["staging_name"] = matched_staging_file.name
-                                logger.debug(
-                                    f"转存目录已存在目标资源，复用并跳过重复转存：{self._cloud_transfer_path}/{matched_staging_file.name}"
-                                )
+                    # 确定每个文件转存的目标路径：关闭整理时按母文件夹保留层级，开启整理时使用统一转存根目录
+                    def _item_target_dir(file_dict: Dict[str, Any]) -> str:
+                        if not organize_enabled:
+                            return self._resource_staging_dir(str(file_dict.get("url") or share_url), file_dict)
+                        return self._cloud_transfer_path
+
+                    # 本地快照缓存，避免多集同目录时重复列目录
+                    staging_snapshots: Dict[str, Tuple[bool, Dict[str, Any]]] = {}
+
+                    def _get_snapshot(dir_path: str) -> Tuple[bool, Dict[str, Any]]:
+                        if dir_path not in staging_snapshots:
+                            staging_snapshots[dir_path] = self._cloud_directory_snapshot(dir_path)
+                        return staging_snapshots[dir_path]
+
+                    # 转存前预检：若对应目标目录已存在待转存文件，直接复用并跳过重复转存
+                    for item in selected_items:
+                        file_id = str(item["file"]["id"])
+                        target_dir = _item_target_dir(item["file"])
+                        staging_valid, staging_index = _get_snapshot(target_dir)
+                        if not staging_valid or not staging_index:
+                            continue
+                        raw_name = str(item["file"].get("name") or "").strip()
+                        file_size = int(item["file"].get("size") or 0)
+                        file_sha1 = str(item["file"].get("sha1") or "").upper()
+                        matched_staging_file = None
+                        if raw_name and raw_name in staging_index:
+                            matched_staging_file = staging_index[raw_name]
+                        elif file_sha1:
+                            matched_staging_file = next(
+                                (f for f in staging_index.values() if
+                                 str(getattr(f, "sha1", "") or "").upper() == file_sha1),
+                                None
+                            )
+                        elif file_size > 0:
+                            matched_staging_file = next(
+                                (f for f in staging_index.values() if
+                                 int(getattr(f, "size", 0) or 0) == file_size and
+                                 raw_name and getattr(f, "name", "").startswith(Path(raw_name).stem)),
+                                None
+                            )
+                        if matched_staging_file:
+                            pre_existing_ids.add(file_id)
+                            item["file"]["staging_name"] = matched_staging_file.name
+                            logger.debug(
+                                f"转存目录已存在目标资源，复用并跳过重复转存：{target_dir}/{matched_staging_file.name}"
+                            )
 
                     remaining_file_ids = [fid for fid in file_ids if fid not in pre_existing_ids]
                     if remaining_file_ids:
-                        success_ids, failed_ids = self._timed_sync_call(
-                            "share_transfer",
-                            self._share_transfer.transfer_files_batch,
-                            share_url=share_url,
-                            file_ids=remaining_file_ids,
-                            save_path=self._cloud_transfer_path,
-                            batch_size=self._batch_size,
-                            batch_interval=self._batch_interval,
-                            risk_cooldown=self._transfer_risk_cooldown,
-                            rename_items=rename_items,
-                        )
+                        # 按目标保存目录分组转存（关闭整理时按母文件夹分目录，开启整理时统一为转存根目录）
+                        dir_groups: Dict[str, List[str]] = {}
+                        for item in selected_items:
+                            fid = str(item["file"]["id"])
+                            if fid in pre_existing_ids:
+                                continue
+                            save_dir = _item_target_dir(item["file"])
+                            dir_groups.setdefault(save_dir, []).append(fid)
+
+                        success_ids_set = set()
+                        failed_ids_list = []
+                        for dir_path, group_ids in dir_groups.items():
+                            if not organize_enabled:
+                                logger.debug(
+                                    f"整理关闭：分目录转存 {len(group_ids)} 个文件 -> {dir_path}"
+                                )
+                            grp_success, grp_failed = self._timed_sync_call(
+                                "share_transfer",
+                                self._share_transfer.transfer_files_batch,
+                                share_url=share_url,
+                                file_ids=group_ids,
+                                save_path=dir_path,
+                                batch_size=self._batch_size,
+                                batch_interval=self._batch_interval,
+                                risk_cooldown=self._transfer_risk_cooldown,
+                                rename_items=rename_items,
+                            )
+                            success_ids_set.update(grp_success or [])
+                            failed_ids_list.extend(grp_failed or [])
+                        success_ids = list(success_ids_set)
+                        failed_ids = failed_ids_list
                     else:
                         success_ids, failed_ids = [], []
 
@@ -997,15 +1028,22 @@ class SyncHandler:
 
                     # 对网盘转存返回失败的项进行转存目录复核自愈（防止网盘因已存在报错等返回假失败）
                     if failed_ids:
-                        _, post_staging_index = self._cloud_directory_snapshot(self._cloud_transfer_path)
                         recheck_success = []
+                        refreshed_snapshots: Dict[str, Dict[str, Any]] = {}
                         for fid in failed_ids:
                             target_item = next((it for it in selected_items if str(it["file"]["id"]) == fid), None)
                             if not target_item:
                                 continue
+                            check_path = _item_target_dir(target_item["file"])
+                            if check_path not in refreshed_snapshots:
+                                _, check_index = self._cloud_directory_snapshot(check_path)
+                                refreshed_snapshots[check_path] = check_index or {}
+                            check_index = refreshed_snapshots[check_path]
                             t_name = str(target_item.get("target_name") or "")
                             r_name = str(target_item["file"].get("name") or "")
-                            if (t_name and t_name in post_staging_index) or (r_name and r_name in post_staging_index):
+                            if check_index and (
+                                    (t_name and t_name in check_index) or (r_name and r_name in check_index)
+                            ):
                                 recheck_success.append(fid)
                                 logger.debug(f"转存虽返回失败但转存目录已核验到文件，自愈恢复：{t_name or r_name}")
                         if recheck_success:
@@ -1461,9 +1499,23 @@ class SyncHandler:
                 f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
             )
             return ""
+        if season is None and title_seasons:
+            logger.debug(
+                "电影离线资源包含剧集季数，预过滤排除："
+                f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
+                f"标题={magnet_title or info_hash}"
+            )
+            return ""
         title_episodes = self._magnet_title_episodes(
             resource, normalize_season(season)
         )
+        if season is None and title_episodes:
+            logger.debug(
+                "电影离线资源包含剧集集数，预过滤排除："
+                f"标题集数={self._format_episode_ranges(title_episodes)}，"
+                f"标题={magnet_title or info_hash}"
+            )
+            return ""
         preview_episodes = (
                 title_episodes
                 or self._resource_preview_episodes(resource, normalize_season(season))
@@ -1494,10 +1546,16 @@ class SyncHandler:
                 and not preview_episodes
                 and not metadata.get("torrent_files")
         ):
-            logger.debug(
-                "Magnet 标题未识别明确集数，开始获取远端内容元数据："
-                f"{magnet_title or info_hash}"
-            )
+            if season is not None:
+                logger.debug(
+                    "Magnet 标题未识别明确集数，开始获取远端内容元数据："
+                    f"{magnet_title or info_hash}"
+                )
+            else:
+                logger.debug(
+                    "Magnet 开始获取远端内容元数据："
+                    f"{magnet_title or info_hash}"
+                )
             magnet_info = self._offline_download.parse_magnet_link(
                 share_url, fetch_metadata=True
             )
@@ -1524,6 +1582,13 @@ class SyncHandler:
                         f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
                     )
                     return ""
+                if season is None and title_seasons:
+                    logger.debug(
+                        "Magnet 远端内容元数据包含剧集季数，与电影订阅不匹配，已跳过："
+                        f"内容季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
+                        f"标题={magnet_title or info_hash}"
+                    )
+                    return ""
                 title_episodes = self._magnet_title_episodes(
                     resource, normalize_season(season)
                 )
@@ -1541,9 +1606,11 @@ class SyncHandler:
                 or not self._get_data
                 or (
                 self._is_magnet_url(share_url)
-                and not bool(metadata.get("metadata_available"))
-                and not bool(title_episodes)
-                and not bool(preview_episodes)
+                and (
+                        (season is not None and not bool(metadata.get("metadata_available")) and not bool(
+                            title_episodes) and not bool(preview_episodes))
+                        or (season is None and not bool(metadata.get("metadata_available")) and not bool(magnet_title))
+                )
         )
         ):
             logger.debug(
@@ -1595,7 +1662,7 @@ class SyncHandler:
                 "status": "submitting",
                 "subscribe_id": subscribe_id,
                 "season": season,
-                "target_episodes": sorted({int(value) for value in target_episodes if int(value) > 0}),
+                "target_episodes": sorted({int(value) for value in (target_episodes or []) if int(value) > 0}),
                 "mediainfo": self._serialize_mediainfo(mediainfo),
                 "target_subscribe": {
                     "tmdbid": tmdb_id_of(subscribe) if subscribe else None,

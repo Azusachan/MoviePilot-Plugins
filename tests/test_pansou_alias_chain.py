@@ -51,6 +51,10 @@ class PanSouAliasChainTests(unittest.TestCase):
             _cloud_drive_key='115', _cloud_drive_resource_types={'115', 'ed2k', 'magnet'},
             _pansou_channels=[], _pansou_plugins=[], _pansou_filter={},
             _pansou_refresh=False, _pansou_concurrency=2)
+        self.service._owner = self.service
+        self.service._client = self.service._pansou_client
+        self.service._resource_types = ('115', 'ed2k', 'magnet')
+        self.service._result_limit = 20
         self.query = SimpleNamespace(mediainfo=self.media, media_type=media_type.TV,
                                      season=1, subscribe=object(),
                                      resource_list_mode=False, result_limit=None)

@@ -186,6 +186,7 @@
                     'rank-badge--first': index === 0,
                     'rank-badge--second': index === 1,
                     'rank-badge--third': index === 2,
+                    'rank-badge--fourth': index === 3,
                   }">
                   #{{ index + 1 }}
                 </span>
@@ -549,6 +550,7 @@ function rankClass(index) {
   if (index === 0) return "rank-badge--first";
   if (index === 1) return "rank-badge--second";
   if (index === 2) return "rank-badge--third";
+  if (index === 3) return "rank-badge--fourth";
   return "";
 }
 
@@ -959,6 +961,11 @@ function onDragEnd() {
   color: #fff;
 }
 
+.rank-badge--fourth {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+}
+
 /* 模式二：字典映射列表（网播热度平台×类型） */
 .map-cards-container {
   display: flex;
@@ -1142,6 +1149,11 @@ function onDragEnd() {
 
 .echo-pill-rank.rank-badge--third {
   background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: #fff;
+}
+
+.echo-pill-rank.rank-badge--fourth {
+  background: linear-gradient(135deg, #10b981, #059669);
   color: #fff;
 }
 

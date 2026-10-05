@@ -28,6 +28,7 @@ except ImportError:
 from app.schemas.types import MediaType
 from sqlalchemy import func, or_
 from ...core import CloudFile, OwnerDelegator
+from .utils import normalize_season
 from ...core.history import history_group_key
 from ...drive.common import format_size, positive_int
 from ...core.media import (
@@ -332,14 +333,8 @@ class HistoryService(OwnerDelegator):
                 identity = self._history_record_identity(incoming)
                 index = record_index.get(identity) if identity else None
                 scope = self._upgrade_scope_identity(incoming)
-                if index is None and self._is_upgrade_history(incoming) and scope:
+                if index is None and scope:
                     index = upgrade_scope_index.get(scope)
-                if index is None and scope and self._is_workflow_history(incoming):
-                    index = workflow_scope_index.get(scope)
-                # 换源重试可能改变分享链接和源文件名；只复用同媒体季集的失败记录，
-                # 成功记录与普通多版本记录仍按精确身份隔离。
-                if index is None and scope and not self._is_upgrade_history(incoming):
-                    index = failed_scope_index.get(scope)
                 if index is None:
                     history.append(incoming)
                     platform_records.append(copy.deepcopy(incoming))
@@ -675,8 +670,29 @@ class HistoryService(OwnerDelegator):
     def prepare_history_group(group: Dict[str, Any]) -> Dict[str, Any]:
         """补充单个数据库媒体组的展示字段，不在应用层重新分组。"""
         prepared = copy.deepcopy(group)
-        records = prepared.get("records") or []
-        first = records[0] if records else {}
+        raw_records = prepared.get("records") or []
+        first = raw_records[0] if raw_records else {}
+        is_tv = (prepared.get("type") or first.get("type")) != "电影"
+        records = []
+        seen_episodes = set()
+        for record in raw_records:
+            if is_tv:
+                season = int(record.get("season") or 0)
+                episode = int(record.get("episode") or 0)
+                ep_key = (season, episode)
+                if episode > 0:
+                    if ep_key in seen_episodes:
+                        continue
+                    seen_episodes.add(ep_key)
+            records.append(record)
+        prepared["records"] = records
+        prepared["success_count"] = sum(1 for r in records if r.get("status") == "成功")
+        prepared["pending_count"] = sum(1 for r in records if r.get("status") in {"处理中", "下载中"})
+        prepared["failed_count"] = sum(
+            1 for r in records
+            if r.get("status") == "失败" or (r.get("status") not in {"成功", "处理中", "下载中"})
+        )
+        prepared["total_size"] = sum(int(r.get("file_size") or 0) for r in records)
         prepared.update({
             "tmdb_id": first.get("tmdb_id"),
             "title": first.get("title") or "未知媒体",

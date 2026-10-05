@@ -13,13 +13,42 @@ sys.modules.setdefault("app.log", MagicMock())
 sys.modules.setdefault("app.schemas", MagicMock())
 sys.modules.setdefault("app.schemas.types", MagicMock())
 
-# 构造 cloudsubscribefork 包结构
-pkg = types.ModuleType("cloudsubscribefork")
-pkg.__path__ = []
-sys.modules["cloudsubscribefork"] = pkg
 
-mock_core = types.ModuleType("cloudsubscribefork.core")
-mock_core.__path__ = []
+class AutoMockModule(types.ModuleType):
+    def __getattr__(self, name):
+        val = MagicMock()
+        setattr(self, name, val)
+        return val
+
+
+def _ensure_mock_package(name):
+    if name not in sys.modules or not isinstance(sys.modules[name], AutoMockModule):
+        m = AutoMockModule(name)
+        m.__path__ = []
+        if name in sys.modules:
+            for k, v in list(sys.modules[name].__dict__.items()):
+                setattr(m, k, v)
+        sys.modules[name] = m
+    return sys.modules[name]
+
+
+for pkg_name in [
+    "app", "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
+    "app.db", "app.db.subscribe_oper", "app.log", "app.modules",
+    "app.modules.filemanager", "app.modules.filemanager.transhandler",
+    "app.schemas", "app.schemas.types", "app.utils", "app.utils.http",
+    "app.helper", "app.application", "app.adapters",
+    "cloudsubscribefork", "cloudsubscribefork.core", "cloudsubscribefork.core.media",
+    "cloudsubscribefork.drive", "cloudsubscribefork.drive.scanner",
+    "cloudsubscribefork.handlers", "cloudsubscribefork.handlers.sync",
+    "cloudsubscribefork.handlers.notification", "cloudsubscribefork.handlers.search",
+    "cloudsubscribefork.handlers.subscription", "cloudsubscribefork.utils",
+    "cloudsubscribefork.utils.cache",
+    "cloudsubscribefork.search.types"
+]:
+    _ensure_mock_package(pkg_name)
+
+mock_core = sys.modules["cloudsubscribefork.core"]
 
 
 class OwnerDelegator:
@@ -27,32 +56,8 @@ class OwnerDelegator:
 
 
 mock_core.OwnerDelegator = OwnerDelegator
-mock_core.CloudDriveCapability = MagicMock()
-mock_core.CloudDriveProvider = MagicMock()
-mock_core.CloudFile = MagicMock()
-mock_core.SearchCapability = MagicMock()
-sys.modules["cloudsubscribefork.core"] = mock_core
-mock_media = types.ModuleType("cloudsubscribefork.core.media")
-mock_media.normalize_season = lambda value, default=1: max(0, int(default if value is None or value == "" else value))
-sys.modules["cloudsubscribefork.core.media"] = mock_media
-
-mock_search = types.ModuleType("cloudsubscribefork.search")
-mock_search.__path__ = []
-sys.modules["cloudsubscribefork.search"] = mock_search
-mock_search_types = MagicMock()
-sys.modules["cloudsubscribefork.search.types"] = mock_search_types
-
-mock_handlers = types.ModuleType("cloudsubscribefork.handlers")
-mock_handlers.__path__ = []
-sys.modules["cloudsubscribefork.handlers"] = mock_handlers
-
-mock_sync = types.ModuleType("cloudsubscribefork.handlers.sync")
-mock_sync.__path__ = []
-sys.modules["cloudsubscribefork.handlers.sync"] = mock_sync
-
-mock_utils = types.ModuleType("cloudsubscribefork.utils")
-mock_utils.__path__ = []
-sys.modules["cloudsubscribefork.utils"] = mock_utils
+mock_utils = sys.modules["cloudsubscribefork.utils"]
+sys.modules["cloudsubscribefork.core.media"].normalize_season = lambda value, default=1: max(0, int(default if value is None or value == "" else value))
 
 # 加载实际的 MediaFileParser
 parser_path = os.path.abspath(
@@ -207,6 +212,386 @@ class TestTransferOrganizeBehavior(unittest.TestCase):
             share_url=share_url,
             save_path=cloud_transfer_path,
         )
+
+
+# -------------------------------------------------------------
+# 针对 SyncHandler 真实 _transfer_episode_batch 批量转存逻辑的测试套件
+# -------------------------------------------------------------
+
+class AutoMockModule(types.ModuleType):
+    def __getattr__(self, name):
+        val = MagicMock()
+        setattr(self, name, val)
+        return val
+
+
+def _ensure_mock_package(name):
+    if name not in sys.modules:
+        m = AutoMockModule(name)
+        m.__path__ = []
+        sys.modules[name] = m
+    return sys.modules[name]
+
+
+for pkg_name in [
+    "app", "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
+    "app.db", "app.db.subscribe_oper", "app.log", "app.modules",
+    "app.modules.filemanager", "app.modules.filemanager.transhandler",
+    "app.schemas", "app.schemas.types", "app.utils", "app.utils.http",
+    "app.helper", "app.application", "app.adapters",
+    "cloudsubscribefork", "cloudsubscribefork.core", "cloudsubscribefork.core.media",
+    "cloudsubscribefork.drive", "cloudsubscribefork.drive.scanner",
+    "cloudsubscribefork.handlers", "cloudsubscribefork.handlers.sync",
+    "cloudsubscribefork.handlers.notification", "cloudsubscribefork.handlers.search",
+    "cloudsubscribefork.handlers.subscription", "cloudsubscribefork.utils",
+    "cloudsubscribefork.utils.cache"
+]:
+    _ensure_mock_package(pkg_name)
+
+for sibling in [
+    "baseline", "cleanup", "history", "matching", "metadata", "movie", "naming",
+    "notify", "platform_history", "postprocess", "pt_upgrade",
+    "retry", "rule_scoring", "subtitles", "television", "upgrade", "utils"
+]:
+    sib_name = f"cloudsubscribefork.handlers.sync.{sibling}"
+    if sib_name not in sys.modules:
+        sys.modules[sib_name] = AutoMockModule(sib_name)
+
+# 加载 service.py 中的真实 SyncHandler
+service_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/service.py")
+)
+spec_service = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.service", service_path)
+mod_service = importlib.util.module_from_spec(spec_service)
+mod_service.__package__ = "cloudsubscribefork.handlers.sync"
+sys.modules["cloudsubscribefork.handlers.sync.service"] = mod_service
+spec_service.loader.exec_module(mod_service)
+SyncHandler = mod_service.SyncHandler
+
+
+class TestSyncHandlerEpisodeBatchTransfer(unittest.TestCase):
+    """测试 SyncHandler._transfer_episode_batch 在各种场景下的转存路径与行为契约。"""
+
+    def setUp(self):
+        self.handler = SyncHandler.__new__(SyncHandler)
+        self.handler._cloud_transfer_path = "/待整理"
+        self.handler._organize_after_transfer = False
+        self.handler._is_cloud_resource_url = lambda url: False
+        self.handler._is_direct_cloud_resource_url = lambda url: False
+        self.handler._is_offline_url = lambda url: False
+        self.handler._resource_staging_dir = (
+            lambda share_url, file_item=None: ResourceTransferService._resource_staging_dir(
+                self.handler, share_url, file_item
+            )
+        )
+        self.handler._resource_provider_for_url = MagicMock(return_value=MagicMock(key="p115"))
+        self.handler._cloud_drive = MagicMock(key="p115")
+        self.handler._ensure_share_transfer_available = MagicMock()
+        self.handler._cross_transfer_enabled = False
+        self.handler._share_transfer = MagicMock()
+        # 默认 transfer_files_batch 成功返回所有 file_ids
+        self.handler._share_transfer.transfer_files_batch.side_effect = lambda share_url, file_ids, save_path, **kw: (
+            list(file_ids), [])
+        # 默认不具备 transfer_share，走按文件列表转存
+        if hasattr(self.handler._share_transfer, "transfer_share"):
+            delattr(self.handler._share_transfer, "transfer_share")
+        self.handler._timed_sync_call = lambda name, fn, **kwargs: fn(**kwargs)
+        self.handler._batch_size = 20
+        self.handler._batch_interval = 0.0
+        self.handler._transfer_risk_cooldown = 0
+        self.handler._stop_requested = lambda: False
+        self.handler._companion_subtitle_files = lambda *a, **k: []
+        self.handler._current_task_context = lambda: (None, None)
+        self.handler._cloud_directory_snapshot = MagicMock(return_value=(False, {}))
+        self.handler._generate_or_queue_strm_batch = MagicMock(return_value={})
+
+        # 构造通用的 mock mediainfo 与 subscribe
+        self.mediainfo = MagicMock()
+        self.mediainfo.type.name = "tv"
+        self.mediainfo.title = "美国人质"
+        self.subscribe = MagicMock()
+
+    def test_partial_transfer_preserves_parent_folder_when_organize_disabled(self):
+        """场景：Issue #10 核心问题——关闭整理时，哪怕仅转存一部分（更02集），也必须保留母文件夹。"""
+        self.handler._organize_after_transfer = False
+        share_url = "https://115.com/s/sample_share"
+
+        # 仅转存第 2 集（模拟原分享有深层母文件夹）
+        matched_items = [
+            {
+                "file": {
+                    "id": "file_ep2_id",
+                    "name": "美国人质 S01E02 2160p.CHDWEB.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                    "size": 1024000,
+                    "sha1": "HASH_EP2",
+                },
+                "target_name": "美国人质 (2026) - S01E02 - 2160p.mkv",
+                "target_dir": "/媒体库/电视剧/美国人质 (2026)/Season 1",
+                "episode": 2,
+            }
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_239618",
+        )
+
+        # 验证调用 transfer_files_batch 的目标 save_path 是带母文件夹的子目录，而不是根目录 /待整理
+        expected_save_path = "/待整理/美国人质 (2026) {tmdbid=239618}/Season 1"
+        self.handler._share_transfer.transfer_files_batch.assert_called_once()
+        _, kwargs = self.handler._share_transfer.transfer_files_batch.call_args
+        self.assertEqual(kwargs["save_path"], expected_save_path)
+        self.assertEqual(kwargs["file_ids"], ["file_ep2_id"])
+
+        # 验证登记到后处理队列的 staging_dir 也是该完整母文件夹路径
+        self.handler._generate_or_queue_strm_batch.assert_called_once()
+        batch_args = self.handler._generate_or_queue_strm_batch.call_args[0][0]
+        self.assertEqual(len(batch_args), 1)
+        self.assertEqual(batch_args[0]["staging_dir"], expected_save_path)
+
+    def test_multiple_episodes_same_folder_grouped_and_cached(self):
+        """场景：多集在同一母文件夹，应合并批次转存，且目录快照只查询一次（缓存生效）。"""
+        self.handler._organize_after_transfer = False
+        share_url = "https://115.com/s/sample_share"
+
+        matched_items = [
+            {
+                "file": {
+                    "id": "ep1_id",
+                    "name": "美国人质 S01E01 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                },
+                "target_name": "美国人质 - S01E01.mkv",
+                "target_dir": "/电视剧/美国人质/Season 1",
+                "episode": 1,
+            },
+            {
+                "file": {
+                    "id": "ep2_id",
+                    "name": "美国人质 S01E02 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                },
+                "target_name": "美国人质 - S01E02.mkv",
+                "target_dir": "/电视剧/美国人质/Season 1",
+                "episode": 2,
+            },
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_239618",
+        )
+
+        expected_dir = "/待整理/美国人质 (2026) {tmdbid=239618}/Season 1"
+        # 1. 验证合并为一次 transfer_files_batch 调用
+        self.assertEqual(self.handler._share_transfer.transfer_files_batch.call_count, 1)
+        _, kwargs = self.handler._share_transfer.transfer_files_batch.call_args
+        self.assertEqual(kwargs["save_path"], expected_dir)
+        self.assertEqual(sorted(kwargs["file_ids"]), ["ep1_id", "ep2_id"])
+
+        # 2. 验证预检阶段快照缓存生效：同一目录只调用了一次 _cloud_directory_snapshot
+        self.handler._cloud_directory_snapshot.assert_called_once_with(expected_dir)
+
+    def test_episodes_different_parent_paths_grouped_separately(self):
+        """场景：多集跨不同母目录（如 Season 1 和 Season 2），应按不同目录分别调用转存。"""
+        self.handler._organize_after_transfer = False
+        share_url = "https://115.com/s/sample_share"
+
+        matched_items = [
+            {
+                "file": {
+                    "id": "s1_id",
+                    "name": "剧集.S01E01.mkv",
+                    "parent_path": "大剧/Season 1",
+                },
+                "target_name": "剧集 - S01E01.mkv",
+                "target_dir": "/剧集/Season 1",
+                "episode": 1,
+            },
+            {
+                "file": {
+                    "id": "s2_id",
+                    "name": "剧集.S02E01.mkv",
+                    "parent_path": "大剧/Season 2",
+                },
+                "target_name": "剧集 - S02E01.mkv",
+                "target_dir": "/剧集/Season 2",
+                "episode": 1,
+            },
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_multi",
+        )
+
+        # 验证调用了 2 次 transfer_files_batch，分别对应两个母目录
+        self.assertEqual(self.handler._share_transfer.transfer_files_batch.call_count, 2)
+        called_paths = [
+            call[1]["save_path"]
+            for call in self.handler._share_transfer.transfer_files_batch.call_args_list
+        ]
+        self.assertIn("/待整理/大剧/Season 1", called_paths)
+        self.assertIn("/待整理/大剧/Season 2", called_paths)
+
+    def test_organize_enabled_transfers_all_to_root(self):
+        """场景：开启自动整理时，所有文件统一转存到根转存目录。"""
+        self.handler._organize_after_transfer = True
+        share_url = "https://115.com/s/sample_share"
+
+        matched_items = [
+            {
+                "file": {
+                    "id": "ep1_id",
+                    "name": "美国人质 S01E01 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                },
+                "target_name": "美国人质 - S01E01.mkv",
+                "target_dir": "/媒体库/Season 1",
+                "episode": 1,
+            },
+            {
+                "file": {
+                    "id": "ep2_id",
+                    "name": "美国人质 S01E02 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                },
+                "target_name": "美国人质 - S01E02.mkv",
+                "target_dir": "/媒体库/Season 1",
+                "episode": 2,
+            },
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_239618",
+        )
+
+        # 开启整理时全部归入根目录 /待整理
+        self.assertEqual(self.handler._share_transfer.transfer_files_batch.call_count, 1)
+        _, kwargs = self.handler._share_transfer.transfer_files_batch.call_args
+        self.assertEqual(kwargs["save_path"], "/待整理")
+        self.assertEqual(sorted(kwargs["file_ids"]), ["ep1_id", "ep2_id"])
+
+    def test_precheck_skips_existing_files_in_subfolder(self):
+        """场景：目标母文件夹下已存在某文件时，预检命中并跳过转存。"""
+        self.handler._organize_after_transfer = False
+        share_url = "https://115.com/s/sample_share"
+
+        # mock 快照中已存在 ep1
+        existing_file = MagicMock()
+        existing_file.name = "美国人质 S01E01 2160p.mkv"
+        existing_file.size = 1000
+        existing_file.sha1 = "HASH1"
+
+        def fake_snapshot(path):
+            if path == "/待整理/美国人质 (2026) {tmdbid=239618}/Season 1":
+                return True, {"美国人质 S01E01 2160p.mkv": existing_file}
+            return False, {}
+
+        self.handler._cloud_directory_snapshot = fake_snapshot
+
+        matched_items = [
+            {
+                "file": {
+                    "id": "ep1_id",
+                    "name": "美国人质 S01E01 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                    "size": 1000,
+                    "sha1": "HASH1",
+                },
+                "target_name": "美国人质 - S01E01.mkv",
+                "target_dir": "/媒体库/Season 1",
+                "episode": 1,
+            },
+            {
+                "file": {
+                    "id": "ep2_id",
+                    "name": "美国人质 S01E02 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                    "size": 2000,
+                    "sha1": "HASH2",
+                },
+                "target_name": "美国人质 - S01E02.mkv",
+                "target_dir": "/媒体库/Season 1",
+                "episode": 2,
+            },
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_239618",
+        )
+
+        # ep1 已存在跳过，只有 ep2 被发送到网盘转存
+        self.assertEqual(self.handler._share_transfer.transfer_files_batch.call_count, 1)
+        _, kwargs = self.handler._share_transfer.transfer_files_batch.call_args
+        self.assertEqual(kwargs["file_ids"], ["ep2_id"])
+
+    def test_failure_recheck_heals_in_subfolder(self):
+        """场景：转存返回失败但实际网盘在母文件夹已存在文件，通过子目录快照自愈恢复。"""
+        self.handler._organize_after_transfer = False
+        share_url = "https://115.com/s/sample_share"
+
+        # 模拟 transfer_files_batch 返回失败
+        self.handler._share_transfer.transfer_files_batch.side_effect = lambda share_url, file_ids, save_path, **kw: (
+            [], list(file_ids))
+
+        # 模拟自愈复核时在目标母文件夹找到该文件
+        found_file = MagicMock()
+        found_file.name = "美国人质 S01E01 2160p.mkv"
+        self.handler._cloud_directory_snapshot = MagicMock(
+            return_value=(True, {"美国人质 S01E01 2160p.mkv": found_file})
+        )
+
+        matched_items = [
+            {
+                "file": {
+                    "id": "ep1_id",
+                    "name": "美国人质 S01E01 2160p.mkv",
+                    "parent_path": "美国人质 (2026) {tmdbid=239618}/Season 1",
+                },
+                "target_name": "美国人质 - S01E01.mkv",
+                "target_dir": "/媒体库/Season 1",
+                "episode": 1,
+            }
+        ]
+
+        self.handler._transfer_episode_batch(
+            matched_items=matched_items,
+            share_url=share_url,
+            mediainfo=self.mediainfo,
+            subscribe=self.subscribe,
+            season=1,
+            sub_key="tv_239618",
+        )
+
+        # 验证后处理队列依然收到了该项（说明自愈成功）
+        self.handler._generate_or_queue_strm_batch.assert_called_once()
+        batch_args = self.handler._generate_or_queue_strm_batch.call_args[0][0]
+        self.assertEqual(len(batch_args), 1)
+        self.assertEqual(batch_args[0]["result_key"], "ep1_id")
 
 
 if __name__ == "__main__":

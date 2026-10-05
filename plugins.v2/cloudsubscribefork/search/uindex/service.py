@@ -7,7 +7,7 @@ from app.schemas.types import MediaType
 
 from .client import UIndexClient, UIndexError
 from ..magnet import clear_cache, media_titles, normalize_magnets
-from ..matching import extract_season, extract_year, unique_texts
+from ..matching import extract_season, extract_year, resource_title_matches, unique_texts
 from ...core.search import SearchQuery
 
 
@@ -71,6 +71,8 @@ class UIndexSearchService:
             return []
 
         limit = query.result_limit or self._result_limit
+        exp_titles = media_titles(mediainfo)
+        expected_year = extract_year(getattr(mediainfo, "year", None))
         collected = []
         seen_hashes = set()
 
@@ -87,18 +89,25 @@ class UIndexSearchService:
                     continue
 
                 # 季号匹配
+                cand_season = extract_season(item.get("title"))
                 if query.media_type == MediaType.TV and query.season:
-                    cand_season = extract_season(item.get("title"))
                     if cand_season is not None and cand_season != query.season:
+                        continue
+                elif query.media_type == MediaType.MOVIE:
+                    if cand_season is not None:
                         continue
 
                 # 电影年份检查
                 if query.media_type == MediaType.MOVIE:
-                    expected_year = extract_year(getattr(mediainfo, "year", None))
                     cand_year = extract_year(item.get("title"))
                     if expected_year and cand_year and cand_year != expected_year:
                         continue
 
+                # 标题校验：资源标题必须包含媒体目标标题中的至少一个
+                if exp_titles and not resource_title_matches(
+                        item.get("title"), exp_titles, expected_year=expected_year
+                ):
+                    continue
                 seen_hashes.add(h)
                 collected.append(item)
                 if len(collected) >= limit:

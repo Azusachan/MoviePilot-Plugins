@@ -210,31 +210,13 @@ class SyncExecutionService(OwnerDelegator):
                 set(range(start_episode, total_episode + 1))
                 if is_tv and total_episode >= start_episode else set()
             )
-            calendar_entry = (
-                self._sync_handler.get_tv_subscribe_calendar(subscribe)
-                if self._sync_handler and expected_episodes else None
-            )
-            unreleased_episodes = {
-                int(episode)
-                for episode in (
-                        (calendar_entry or {}).get("unreleased_episodes") or []
-                )
-            }
             preparation = {
                 "tmdb_id": int(tmdb_id_of(subscribe) or 0),
-                "calendar": calendar_entry,
                 "expected_episodes": sorted(expected_episodes),
-                "aired_target_episodes": sorted(
-                    expected_episodes - unreleased_episodes
-                ),
-                "unreleased_episodes": sorted(unreleased_episodes),
-                "all_targets_future": bool(
-                    calendar_entry
-                    and calendar_entry.get("all_targets_future")
-                ),
-                "defer_until": str(
-                    (calendar_entry or {}).get("defer_until") or ""
-                ),
+                "aired_target_episodes": sorted(expected_episodes),
+                "unreleased_episodes": [],
+                "all_targets_future": False,
+                "defer_until": "",
             }
             setattr(subscribe, "_cloudsubscribefork_preparation", preparation)
             return subscribe
@@ -1121,7 +1103,7 @@ class SyncExecutionService(OwnerDelegator):
             logger.error(f"插件全局配置应用失败（下次首次执行重试）: {e}")
 
     def _apply_pending_config_if_idle(self) -> bool:
-        """Defer handler replacement instead of blocking searches on cloud I/O."""
+        """若离线监控线程正忙则延后应用配置，避免阻塞搜索与同步主线程。"""
         if not self._offline_monitor_lock.acquire(blocking=False):
             return False
         try:

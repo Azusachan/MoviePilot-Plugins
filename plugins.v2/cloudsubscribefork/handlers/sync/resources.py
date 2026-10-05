@@ -364,7 +364,7 @@ class ResourceTransferService(OwnerDelegator):
             if not file_name:
                 file_name = str(
                     (resource.get("magnet_metadata") or {}).get("display_name") or resource.get("title") or "").strip()
-            if file_name and MediaFileParser.is_video(file_name):
+            if file_name and (MediaFileParser.is_video(file_name) or season is None):
                 eps = [int(v) for v in (target_episodes or []) if int(v) > 0]
                 ep = eps[0] if len(eps) == 1 else 0
                 entries.append({

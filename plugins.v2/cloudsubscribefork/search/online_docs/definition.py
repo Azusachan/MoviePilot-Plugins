@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 from .client import OnlineDocumentClient
 from .provider import create_online_docs_provider
+from ...core.definitions import FieldSpec, GroupSpec, SearchSourceDefinition
 
 
 class OnlineDocsSourceDefinition(SearchSourceDefinition):
@@ -37,6 +37,7 @@ class OnlineDocsSourceDefinition(SearchSourceDefinition):
                         key="online_docs",
                         label="在线文档",
                         type="online-documents",
+                        default=[{"url": "", "resource_types": []}],
                         hint="每个文档可分别选择一个或多个资源类型。",
                         cols=12,
                     ),

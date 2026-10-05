@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 from .client import GuangyaClient
 from .provider import GuangyaDrive, create_guangya_provider
+from ...core.definitions import DriverDefinition, FieldSpec, GroupSpec
 
 
 class GuangyaDriverDefinition(DriverDefinition):
@@ -71,6 +71,7 @@ class GuangyaDriverDefinition(DriverDefinition):
                         label="网盘转存路径",
                         type="cloud-directory",
                         placeholder="/",
+                        default="/",
                         drive_provider="guangya",
                         hint="光鸭分享和离线任务先保存到此路径，之后按平台规则整理。",
                         cols=6,
@@ -80,6 +81,7 @@ class GuangyaDriverDefinition(DriverDefinition):
                         label="媒体库目录",
                         type="cloud-directory",
                         placeholder="/",
+                        default="/",
                         drive_provider="guangya",
                         hint="最终媒体从此目录开始按平台规则分类；默认 / 表示网盘根目录。",
                         cols=6,
@@ -96,6 +98,7 @@ class GuangyaDriverDefinition(DriverDefinition):
                         key="guangya_request_timeout",
                         label="请求超时（秒）",
                         type="number",
+                        default=30,
                         min=5,
                         max=300,
                         cols=6,

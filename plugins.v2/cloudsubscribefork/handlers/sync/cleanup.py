@@ -1,7 +1,6 @@
 """
 历史记录关联物理文件与网盘目录的级联清理服务。
 """
-import copy
 import re
 import shutil
 from pathlib import Path, PurePosixPath
@@ -12,7 +11,7 @@ from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
+from ...core import OwnerDelegator
 from ...core.media import list_subscribes_by_tmdb_id
 
 
@@ -123,36 +122,69 @@ class HistoryCleanupService(OwnerDelegator):
                 )
 
     def delete_by_media_server_paths(self, paths: List[str]) -> Dict[str, int]:
-        """按媒体服务器 STRM 路径精确匹配并联动删除终态历史。"""
-        normalized_paths = set()
+        """按媒体服务器路径精确/词干匹配并联动删除终态历史与源文件。"""
+        normalized_targets = []
+        target_stems = set()
+        target_filenames = set()
+
         for path in paths:
-            normalized = self._normalize_media_server_path(path)
-            if normalized:
-                normalized_paths.add(normalized)
-        if not normalized_paths or not self._get_data:
+            clean = self._normalize_media_server_path(path)
+            if not clean:
+                continue
+            normalized_targets.append(clean)
+            p = Path(clean)
+            target_filenames.add(p.name.casefold())
+            stem = p.stem.casefold()
+            if stem:
+                target_stems.add(stem)
+
+        if not normalized_targets or not self._get_data:
             return {"matched": 0, "deleted": 0, "linked_deleted": 0,
                     "cache_deleted": 0, "skipped": 0}
+
         matched = []
         for record in self._get_data("history") or []:
             cloud_dir = str(record.get("cloud_dir") or "").strip()
             file_name = str(record.get("file_name") or "").strip()
-            if not cloud_dir or not file_name or not self._local_resource_path:
+            if not file_name:
                 continue
-            try:
-                local_path = self._path_mapper.local_path(
-                    local_root=self._local_resource_path,
-                    cloud_root=self._CLOUD_MEDIA_ROOT,
-                    cloud_dir=cloud_dir,
-                    file_name=file_name,
-                )
-                media_server_path = self._media_server_notifier.media_server_path(
-                    local_path
-                )
-            except Exception as error:
-                logger.debug(f"计算深度删除匹配路径失败：{file_name} - {error}")
-                continue
-            if self._normalize_media_server_path(media_server_path) in normalized_paths:
+
+            record_file_cf = file_name.casefold()
+            record_stem_cf = Path(file_name).stem.casefold()
+
+            is_match = False
+            # 策略 1：跨端词干或文件名直接匹配（彻底消除 .strm vs .mkv 以及挂载前缀映射差异）
+            if record_file_cf in target_filenames or record_stem_cf in target_stems:
+                is_match = True
+
+            # 策略 2：通过本地路径转换与媒体服务器路径前缀匹配
+            if not is_match and cloud_dir and self._local_resource_path:
+                try:
+                    local_path = self._path_mapper.local_path(
+                        local_root=self._local_resource_path,
+                        cloud_root=self._CLOUD_MEDIA_ROOT,
+                        cloud_dir=cloud_dir,
+                        file_name=file_name,
+                    )
+                    media_server_path = self._media_server_notifier.media_server_path(
+                        local_path
+                    )
+                    clean_ms = self._normalize_media_server_path(media_server_path)
+                    clean_ms_stem = str(Path(clean_ms).with_suffix("")).casefold()
+
+                    for tgt in normalized_targets:
+                        if (
+                                clean_ms.casefold() == tgt.casefold()
+                                or clean_ms_stem == str(Path(tgt).with_suffix("")).casefold()
+                        ):
+                            is_match = True
+                            break
+                except Exception as error:
+                    logger.debug(f"计算深度删除匹配路径失败：{file_name} - {error}")
+
+            if is_match:
                 matched.append(record)
+
         if not matched:
             return {"matched": 0, "deleted": 0, "linked_deleted": 0,
                     "cache_deleted": 0, "skipped": 0}

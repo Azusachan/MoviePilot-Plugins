@@ -270,8 +270,49 @@ export function getResourceTabIcon(type) {
 
 export const getResourceTypeIcon = getResourceTabIcon;
 
+const THEME_COLOR_NAMES = new Set([
+  "primary", "secondary", "success", "info", "warning", "error",
+]);
+
+const MATERIAL_COLOR_HEX = {
+  purple: "#9c27b0",
+  "deep-purple": "#673ab7",
+  indigo: "#3f51b5",
+  blue: "#2196f3",
+  "light-blue": "#03a9f4",
+  "light-blue-darken-1": "#039be5",
+  cyan: "#00acc1",
+  teal: "#009688",
+  "teal-darken-1": "#00897b",
+  "teal-darken-2": "#00796b",
+  green: "#4caf50",
+  orange: "#ff9800",
+  "deep-orange": "#ff5722",
+  "deep-orange-darken-1": "#f4511e",
+  amber: "#ffc107",
+  "amber-darken-1": "#ffb300",
+  "amber-darken-2": "#ffa000",
+  "amber-darken-3": "#ff8f00",
+  pink: "#e91e63",
+  red: "#f44336",
+  "red-darken-1": "#e53935",
+  "blue-grey": "#607d8b",
+  "blue-grey-darken-1": "#546e7a",
+  brown: "#795548",
+  grey: "#757575",
+};
+
+export function resolveColor(colorName, fallback = "primary") {
+  if (!colorName) return fallback;
+  const raw = String(colorName).trim().toLowerCase();
+  if (THEME_COLOR_NAMES.has(raw)) return raw;
+  if (raw.startsWith("#") || raw.startsWith("rgb")) return raw;
+  return MATERIAL_COLOR_HEX[raw] || fallback;
+}
+
 export function getTypeColor(type) {
-  return typeMeta(type)?.color || "blue-grey";
+  const color = typeMeta(type)?.color;
+  return resolveColor(color, "#607d8b");
 }
 
 function isPreviewableResourceType(type) {
@@ -297,11 +338,19 @@ export function getSourceMeta(source) {
 export function getSourceName(source) {
   return getSourceMeta(source)?.name || String(source || "").trim() || "未知";
 }
-
 export function getChannelDefaultIcon(key) {
   return getSourceMeta(key)?.icon || "mdi-magnify";
 }
 
+export function getSourceColor(source) {
+  const meta = getSourceMeta(source);
+  return resolveColor(meta?.color, "primary");
+}
+
+export function getSourceIcon(source) {
+  const meta = getSourceMeta(source);
+  return meta?.icon || "mdi-source-branch";
+}
 // 标签提取
 export function getTagColorClass(tag) {
   const t = String(tag || "").toUpperCase();
