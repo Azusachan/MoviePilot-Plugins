@@ -1,110 +1,65 @@
 """搜索阶段中间态生命周期与状态机重置测试。"""
 
-import importlib.util
-import os
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock
 
+from plugin_env import OwnerDelegator, load_module, register_mock, register_module
+
 # 构造 mock 的 app 包结构
-mock_app = types.ModuleType("app")
-mock_app.__path__ = []
-sys.modules["app"] = mock_app
+register_module("app", package=True)
+app_core = register_module("app.core", package=True)
+app_core.config = register_mock(
+    "app.core.config", global_vars=MagicMock(), settings=MagicMock()
+)
+app_core.context = register_mock("app.core.context")
+app_core.metainfo = register_mock("app.core.metainfo")
 
-mock_app_core = types.ModuleType("app.core")
-mock_app_core.__path__ = []
-mock_app_core.config = MagicMock()
-mock_app_core.config.global_vars = MagicMock()
-mock_app_core.config.settings = MagicMock()
-mock_app_core.context = MagicMock()
-mock_app_core.metainfo = MagicMock()
-sys.modules["app.core"] = mock_app_core
-sys.modules["app.core.config"] = mock_app_core.config
-sys.modules["app.core.context"] = mock_app_core.context
-sys.modules["app.core.metainfo"] = mock_app_core.metainfo
+register_module("app.db", package=True, SessionFactory=MagicMock())
+register_mock("app.db.subscribe_oper")
 
-mock_app_db = types.ModuleType("app.db")
-mock_app_db.__path__ = []
-mock_app_db.SessionFactory = MagicMock()
-mock_app_db.subscribe_oper = MagicMock()
-sys.modules["app.db"] = mock_app_db
-sys.modules["app.db.subscribe_oper"] = mock_app_db.subscribe_oper
+register_module("app.log", logger=MagicMock())
 
-mock_app_log = types.ModuleType("app.log")
-mock_app_log.logger = MagicMock()
-sys.modules["app.log"] = mock_app_log
+register_module("app.schemas", package=True)
+register_mock("app.schemas.types")
 
-mock_app_schemas = types.ModuleType("app.schemas")
-mock_app_schemas.__path__ = []
-mock_app_schemas.types = MagicMock()
-sys.modules["app.schemas"] = mock_app_schemas
-sys.modules["app.schemas.types"] = mock_app_schemas.types
+register_module("app.utils", package=True)
+register_mock("app.utils.http")
 
-mock_app_utils = types.ModuleType("app.utils")
-mock_app_utils.__path__ = []
-mock_app_utils.http = MagicMock()
-sys.modules["app.utils"] = mock_app_utils
-sys.modules["app.utils.http"] = mock_app_utils.http
+# 构造 mock 的 cloudsubscribe 包结构
+register_module("cloudsubscribe", package=True)
+cloudsubscribe_core = register_module(
+    "cloudsubscribe.core",
+    package=True,
+    OwnerDelegator=OwnerDelegator,
+    CloudDriveCapability=MagicMock(),
+)
+register_module(
+    "cloudsubscribe.core.media",
+    apply_media_identity=MagicMock(),
+    legacy_media_ids=MagicMock(),
+    media_identity=MagicMock(),
+    recognize_media=MagicMock(),
+    search_medias=MagicMock(),
+    tmdb_id_of=MagicMock(),
+    tmdb_identity_update=MagicMock(),
+)
 
-
-class OwnerDelegator:
-    def __init__(self, owner=None):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name) if self._owner else None
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        if self._owner:
-            setattr(self._owner, name, value)
-
-
-pkg = types.ModuleType("cloudsubscribe")
-pkg.__path__ = []
-sys.modules["cloudsubscribe"] = pkg
-
-mock_core = types.ModuleType("cloudsubscribe.core")
-mock_core.__path__ = []
-mock_core.OwnerDelegator = OwnerDelegator
-mock_core.CloudDriveCapability = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
-
-mock_media = types.ModuleType("cloudsubscribe.core.media")
-mock_media.apply_media_identity = MagicMock()
-mock_media.legacy_media_ids = MagicMock()
-mock_media.media_identity = MagicMock()
-mock_media.recognize_media = MagicMock()
-mock_media.search_medias = MagicMock()
-mock_media.tmdb_id_of = MagicMock()
-mock_media.tmdb_identity_update = MagicMock()
-sys.modules["cloudsubscribe.core.media"] = mock_media
-
-mock_utils = types.ModuleType("cloudsubscribe.utils")
-mock_utils.__path__ = []
-sys.modules["cloudsubscribe.utils"] = mock_utils
-
-mock_utils_cache = types.ModuleType("cloudsubscribe.utils.cache")
-mock_utils_cache.normalize_platform_cache_key = MagicMock()
-sys.modules["cloudsubscribe.utils.cache"] = mock_utils_cache
+register_module("cloudsubscribe.utils", package=True)
+register_mock(
+    "cloudsubscribe.utils.cache", normalize_platform_cache_key=MagicMock()
+)
 
 # 动态加载 metadata.py
-base_dir = os.path.dirname(__file__)
-meta_path = os.path.abspath(os.path.join(base_dir, "../plugins.v2/cloudsubscribe/handlers/sync/metadata.py"))
-spec_m = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.metadata", meta_path)
-mod_m = importlib.util.module_from_spec(spec_m)
-spec_m.loader.exec_module(mod_m)
-SyncMetadataService = mod_m.SyncMetadataService
+SyncMetadataService = load_module(
+    "cloudsubscribe.handlers.sync.metadata",
+    "plugins.v2/cloudsubscribe/handlers/sync/metadata.py",
+).SyncMetadataService
 
 # 动态加载 runtime.py
-runtime_path = os.path.abspath(os.path.join(base_dir, "../plugins.v2/cloudsubscribe/core/services/runtime.py"))
-spec_r = importlib.util.spec_from_file_location("cloudsubscribe.core.services.runtime", runtime_path)
-mod_r = importlib.util.module_from_spec(spec_r)
-spec_r.loader.exec_module(mod_r)
-SyncRuntimeService = mod_r.SyncRuntimeService
+SyncRuntimeService = load_module(
+    "cloudsubscribe.core.services.runtime",
+    "plugins.v2/cloudsubscribe/core/services/runtime.py",
+).SyncRuntimeService
 
 
 class TestSearchStateLifecycle(unittest.TestCase):

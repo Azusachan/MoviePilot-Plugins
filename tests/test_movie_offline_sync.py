@@ -7,81 +7,41 @@ import types
 import unittest
 from unittest.mock import MagicMock
 
+from plugin_env import (
+    OwnerDelegator,
+    ensure_package,
+    install_app_mocks,
+    set_media_type,
+)
 
-class AutoMockModule(types.ModuleType):
-    def __getattr__(self, name):
-        val = MagicMock()
-        setattr(self, name, val)
-        return val
-
-
-def _ensure_mock_package(name):
-    if name not in sys.modules or not isinstance(sys.modules[name], AutoMockModule):
-        m = AutoMockModule(name)
-        m.__path__ = []
-        if name in sys.modules:
-            for k, v in list(sys.modules[name].__dict__.items()):
-                setattr(m, k, v)
-        sys.modules[name] = m
-    return sys.modules[name]
-
-
-class MediaType:
-    MOVIE = "movie"
-    TV = "tv"
-
-
-for pkg_name in [
-    "app", "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
-    "app.db", "app.db.subscribe_oper", "app.log", "app.modules",
+_SYNC_COMPONENTS = (
+    "baseline", "cleanup", "dispatcher", "directory", "history", "matching",
+    "metadata", "movie", "naming", "notify", "pipeline", "platform_history",
+    "postprocess", "pt_upgrade", "queue", "resources", "retry", "rule_scoring",
+    "state", "status", "subtitles", "television", "upgrade", "utils",
+)
+install_app_mocks(
+    "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
+    "app.db", "app.db.subscribe_oper", "app.modules",
     "app.modules.filemanager", "app.modules.filemanager.transhandler",
-    "app.schemas", "app.schemas.types", "app.utils", "app.utils.http",
-    "app.helper", "app.application", "app.adapters",
+    "app.utils", "app.utils.http", "app.helper", "app.application", "app.adapters",
     "cloudsubscribe", "cloudsubscribe.core", "cloudsubscribe.core.media",
     "cloudsubscribe.drive", "cloudsubscribe.drive.scanner",
     "cloudsubscribe.handlers", "cloudsubscribe.handlers.sync",
     "cloudsubscribe.handlers.notification", "cloudsubscribe.handlers.search",
     "cloudsubscribe.handlers.subscription", "cloudsubscribe.utils",
-    "cloudsubscribe.utils.cache",
-    "cloudsubscribe.search", "cloudsubscribe.search.types",
-]:
-    _ensure_mock_package(pkg_name)
+    "cloudsubscribe.utils.cache", "cloudsubscribe.search", "cloudsubscribe.search.types",
+    *[f"cloudsubscribe.handlers.sync.{name}" for name in _SYNC_COMPONENTS],
+)
+MediaType = set_media_type(movie="movie", tv="tv")
 
-for name in [
-    "baseline", "cleanup", "dispatcher", "directory", "history", "matching",
-    "metadata", "movie", "naming", "notify", "pipeline", "platform_history",
-    "postprocess", "pt_upgrade", "queue", "resources", "retry", "rule_scoring",
-    "state", "status", "subtitles", "television", "upgrade", "utils",
-]:
-    _ensure_mock_package(f"cloudsubscribe.handlers.sync.{name}")
-
-mock_notif = sys.modules["cloudsubscribe.handlers.notification"]
+mock_notif = ensure_package("cloudsubscribe.handlers.notification")
 mock_notif.MediaServerNotifier = MagicMock()
 mock_notif.MediaServerResolver = MagicMock()
-mock_search_h = sys.modules["cloudsubscribe.handlers.search"]
-mock_search_h.SearchHandler = MagicMock()
-mock_sub_h = sys.modules["cloudsubscribe.handlers.subscription"]
-mock_sub_h.SubscribeHandler = MagicMock()
+ensure_package("cloudsubscribe.handlers.search").SearchHandler = MagicMock()
+ensure_package("cloudsubscribe.handlers.subscription").SubscribeHandler = MagicMock()
 
-sys.modules["app.schemas.types"].MediaType = MediaType
-
-
-class OwnerDelegator:
-    def __init__(self, owner=None):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name) if self._owner else None
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        if self._owner:
-            setattr(self._owner, name, value)
-
-
-mock_core = sys.modules["cloudsubscribe.core"]
+mock_core = ensure_package("cloudsubscribe.core")
 mock_core.OwnerDelegator = OwnerDelegator
 mock_core.CloudDriveCapability = MagicMock()
 

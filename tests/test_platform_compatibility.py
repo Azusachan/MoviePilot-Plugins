@@ -1,60 +1,29 @@
-import os
 import sys
 import unittest
 from unittest.mock import MagicMock
 
+from plugin_env import OwnerDelegator, load_module, register_mock
+
 # 构造 mock 的 app 基础依赖
-mock_app = MagicMock()
 mock_subscribe_chain = MagicMock()
 mock_subscribe_oper = MagicMock()
 mock_logger = MagicMock()
 
-mock_app.chain.subscribe.SubscribeChain = mock_subscribe_chain
-mock_app.db.subscribe_oper.SubscribeOper = mock_subscribe_oper
-mock_app.log.logger = mock_logger
+register_mock("app")
+register_mock("app.log", logger=mock_logger)
+register_mock("app.scheduler")
+register_mock("app.chain.subscribe", SubscribeChain=mock_subscribe_chain)
+register_mock("app.db.subscribe_oper", SubscribeOper=mock_subscribe_oper)
 
-sys.modules["app"] = mock_app
-sys.modules["app.chain"] = mock_app.chain
-sys.modules["app.chain.subscribe"] = mock_app.chain.subscribe
-sys.modules["app.db"] = mock_app.db
-sys.modules["app.db.subscribe_oper"] = mock_app.db.subscribe_oper
-sys.modules["app.log"] = mock_app.log
-sys.modules["app.scheduler"] = mock_app.scheduler
+# 构造 mock 的 cloudsubscribe 包结构
+register_mock("cloudsubscribe")
+register_mock("cloudsubscribe.core", OwnerDelegator=OwnerDelegator)
+register_mock("cloudsubscribe.core.hook")
 
-
-# 定义与 delegation.py 一致的 OwnerDelegator
-class OwnerDelegator:
-    def __init__(self, owner):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name)
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._owner, name, value)
-
-
-mock_core = MagicMock()
-mock_core.OwnerDelegator = OwnerDelegator
-
-sys.modules["cloudsubscribe"] = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
-sys.modules["cloudsubscribe.core.hook"] = MagicMock()
-
-import importlib.util
-
-hook_file_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/core/hook/subscription.py"))
-spec = importlib.util.spec_from_file_location("cloudsubscribe.core.hook.subscription", hook_file_path)
-subscription_mod = importlib.util.module_from_spec(spec)
-subscription_mod.__package__ = "cloudsubscribe.core.hook"
-sys.modules["cloudsubscribe.core.hook.subscription"] = subscription_mod
-spec.loader.exec_module(subscription_mod)
-
-SubscriptionSearchHook = subscription_mod.SubscriptionSearchHook
+SubscriptionSearchHook = load_module(
+    "cloudsubscribe.core.hook.subscription",
+    "plugins.v2/cloudsubscribe/core/hook/subscription.py",
+).SubscriptionSearchHook
 
 
 class TestPlatformCompatibility(unittest.TestCase):

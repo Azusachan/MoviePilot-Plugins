@@ -1,93 +1,59 @@
 """后处理任务完整测试套件（覆盖 DirectoryFileIndex、快照同步、文件定位、重命名与移动状态机、重试退避及关闭自动整理契约）。"""
 
-import importlib.util
-import os
-import sys
 import types
 import unittest
 from unittest.mock import MagicMock
 
+from plugin_env import (
+    OwnerDelegator,
+    install_app_mocks,
+    load_module,
+    register_mock,
+    register_package,
+)
+
 # 构造 mock 的基础依赖
-sys.modules.setdefault("app", MagicMock())
-sys.modules.setdefault("app.db", MagicMock())
-sys.modules.setdefault("app.db.models", MagicMock())
-sys.modules.setdefault("app.db.models.subscribe", MagicMock())
-sys.modules.setdefault("app.db.subscribe_oper", MagicMock())
-sys.modules.setdefault("app.log", MagicMock())
-sys.modules.setdefault("app.schemas", MagicMock())
-sys.modules.setdefault("app.schemas.types", MagicMock())
+install_app_mocks(
+    "app.db",
+    "app.db.models",
+    "app.db.models.subscribe",
+    "app.db.subscribe_oper",
+)
 
 # 构造 cloudsubscribe 包结构
-pkg = types.ModuleType("cloudsubscribe")
-pkg.__path__ = []
-sys.modules["cloudsubscribe"] = pkg
-
-mock_core = types.ModuleType("cloudsubscribe.core")
-mock_core.__path__ = []
-
-
-class OwnerDelegator:
-    def __init__(self, owner=None):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name) if self._owner else None
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        if self._owner:
-            setattr(self._owner, name, value)
-
-
-mock_core.OwnerDelegator = OwnerDelegator
-mock_core.CloudDriveCapability = MagicMock()
-sys.modules["cloudsubscribe.core"] = mock_core
-
-mock_search = types.ModuleType("cloudsubscribe.search")
-mock_search.__path__ = []
-mock_search.subs_filter = MagicMock()
-sys.modules["cloudsubscribe.search"] = mock_search
-sys.modules["cloudsubscribe.search.subs_filter"] = mock_search.subs_filter
+register_mock("cloudsubscribe")
+register_package(
+    "cloudsubscribe.core",
+    OwnerDelegator=OwnerDelegator,
+    CloudDriveCapability=MagicMock(),
+)
+register_mock("cloudsubscribe.search", subs_filter=MagicMock())
+register_mock("cloudsubscribe.search.subs_filter")
 
 # 加载 file_parser
-parser_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/utils/file_parser.py"))
-spec_p = importlib.util.spec_from_file_location("cloudsubscribe.utils.file_parser", parser_path)
-mod_p = importlib.util.module_from_spec(spec_p)
-spec_p.loader.exec_module(mod_p)
-mock_utils = types.ModuleType("cloudsubscribe.utils")
-mock_utils.MediaFileParser = mod_p.MediaFileParser
-sys.modules["cloudsubscribe.utils"] = mock_utils
-sys.modules["cloudsubscribe.utils.file_parser"] = mod_p
+utils_file_parser = load_module(
+    "cloudsubscribe.utils.file_parser",
+    "plugins.v2/cloudsubscribe/utils/file_parser.py",
+)
+register_package(
+    "cloudsubscribe.utils",
+    MediaFileParser=utils_file_parser.MediaFileParser,
+)
 
-mock_handlers = types.ModuleType("cloudsubscribe.handlers")
-mock_handlers.__path__ = []
-sys.modules["cloudsubscribe.handlers"] = mock_handlers
+register_package("cloudsubscribe.handlers")
+register_package("cloudsubscribe.handlers.sync")
+load_module(
+    "cloudsubscribe.handlers.sync.utils",
+    "plugins.v2/cloudsubscribe/handlers/sync/utils.py",
+)
 
-mock_sync = types.ModuleType("cloudsubscribe.handlers.sync")
-mock_sync.__path__ = []
-sys.modules["cloudsubscribe.handlers.sync"] = mock_sync
-
-utils_sync_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/handlers/sync/utils.py"))
-spec_u = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.utils", utils_sync_path)
-mod_u = importlib.util.module_from_spec(spec_u)
-spec_u.loader.exec_module(mod_u)
-sys.modules["cloudsubscribe.handlers.sync.utils"] = mod_u
-
-postprocess_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribe/handlers/sync/postprocess.py"))
-spec_post = importlib.util.spec_from_file_location("cloudsubscribe.handlers.sync.postprocess", postprocess_path)
-mod_post = importlib.util.module_from_spec(spec_post)
-mod_post.__package__ = "cloudsubscribe.handlers.sync"
-sys.modules["cloudsubscribe.handlers.sync.postprocess"] = mod_post
-spec_post.loader.exec_module(mod_post)
-
-DirectoryFileIndex = mod_post.DirectoryFileIndex
-PostprocessBatchContext = mod_post.PostprocessBatchContext
-PostprocessService = mod_post.PostprocessService
+_postprocess = load_module(
+    "cloudsubscribe.handlers.sync.postprocess",
+    "plugins.v2/cloudsubscribe/handlers/sync/postprocess.py",
+)
+DirectoryFileIndex = _postprocess.DirectoryFileIndex
+PostprocessBatchContext = _postprocess.PostprocessBatchContext
+PostprocessService = _postprocess.PostprocessService
 
 
 class TestDirectoryFileIndex(unittest.TestCase):
