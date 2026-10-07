@@ -877,6 +877,21 @@ class HistoryService(OwnerDelegator):
             name=sub_title or (mediainfo.title if mediainfo else ""),
             year=item.get("year") or (mediainfo.year if mediainfo else ""),
             media_category=None,
+            media_category_id=None,
+            include=None,
+            exclude=None,
+            quality=None,
+            resolution=None,
+            effect=None,
+            audio_quality=None,
+            audio_format=None,
+            min_bitrate=None,
+            min_bit_depth=None,
+            min_sample_rate=None,
+            filter=None,
+            filter_groups=None,
+            sites=None,
+            custom_words=None,
         )
 
         notify_path = strm_path
@@ -1196,14 +1211,38 @@ class HistoryService(OwnerDelegator):
             "media_source": None,
             "media_id": None,
             "media_category": None,
+            "media_category_id": None,
             "episode_group": None,
             "filter_groups": None,
             "sites": None,
             "include": None,
             "exclude": None,
+            "quality": None,
+            "resolution": None,
+            "effect": None,
+            "audio_quality": None,
+            "audio_format": None,
+            "min_bitrate": None,
+            "min_bit_depth": None,
+            "min_sample_rate": None,
+            "filter": None,
+            "custom_words": None,
+            "save_path": None,
+            "downloader": None,
+            "keyword": None,
             "note": [],
             "episode_priority": {},
             "best_version": False,
+            "best_version_full": None,
+            "current_priority": None,
+            "search_imdbid": None,
+            "search_interval": None,
+            "manual_total_episode": None,
+            "total_tracks": None,
+            "music_type": None,
+            "poster": None,
+            "date": None,
+            "username": None,
             "state": "N",
         }
 
@@ -1255,7 +1294,9 @@ class HistoryService(OwnerDelegator):
             "_target_episodes": set(selected_episodes),
             "_manual_media_baseline": dict(manual_baseline or {}),
         })
-        return SimpleNamespace(**target_data)
+        target = SimpleNamespace(**target_data)
+        target.to_dict = lambda: dict(target.__dict__)
+        return target
 
     def _history_upgrade_records(
             self, identities: List[Dict[str, Any]]
@@ -1616,7 +1657,7 @@ class HistoryService(OwnerDelegator):
     def delete_history_record(
             self, identity: Dict[str, Any], delete_linked_files: bool = False
     ) -> Dict[str, Any]:
-        """删除一条终态或后处理历史；显式请求时联动删除115文件和STRM。"""
+        """删除一条终态或后处理历史；显式请求时联动删除网盘文件和STRM。"""
         if not self._get_data or not self._save_data:
             raise RuntimeError("历史记录存储未初始化")
         if not str(identity.get("time") or "").strip() or not str(

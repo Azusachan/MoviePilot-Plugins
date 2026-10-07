@@ -1819,7 +1819,15 @@ class PostprocessService(OwnerDelegator):
         else:
             subscribe = None
         if not subscribe and item.get("transient_target"):
-            subscribe = SimpleNamespace(**(item.get("target_subscribe") or {}))
+            target_data = dict(item.get("target_subscribe") or {})
+            for attr in (
+                "quality", "resolution", "effect", "include", "exclude",
+                "audio_quality", "audio_format", "min_bitrate", "min_bit_depth",
+                "min_sample_rate", "filter", "filter_groups", "sites", "custom_words",
+            ):
+                target_data.setdefault(attr, None)
+            subscribe = SimpleNamespace(**target_data)
+            subscribe.to_dict = lambda: dict(subscribe.__dict__)
         if not subscribe:
             self._cleanup_failed_offline_task(item, "订阅已不存在")
             self._mark_offline_history_status(
