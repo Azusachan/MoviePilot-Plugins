@@ -233,11 +233,11 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook._install_subscribe_search_takeover()
         self.assertEqual(MockV3Scheduler._jobs["subscribe_search"]["func"], self.hook._dispatch_subscribe_search)
 
-    # 5. 跨版本订阅对象与平台过滤规则兼容性 (Issue #15)
+    # 5. 跨版本订阅对象与平台过滤规则兼容性
 
     def test_v3_subscribe_get_params_dot_access_compatibility(self):
         """
-        验证 MoviePilot v3 平台契约兼容性 (Issue #15):
+        验证 MoviePilot v3 平台契约兼容性:
         MoviePilot v3 app/chain/subscribe/query.py::get_params 直接以属性访问读取：
         subscribe.quality, subscribe.resolution, subscribe.effect, subscribe.include, subscribe.exclude
         插件生成的临时目标对象必须包含这些字段，不得抛出 AttributeError。
@@ -293,5 +293,48 @@ class TestPlatformCompatibility(unittest.TestCase):
         obj2 = SimpleNamespace(name="v2测试")
         res_v2 = MockV2SubscribeChain().get_params(obj2)
         self.assertEqual(res_v2["mode"], "v2")
+
+    def test_typing_annotations_defined_across_all_modules(self):
+        """
+        验证插件模块类型注解规范：
+        所有模块中使用的 typing 类型注解必须完整导入或包含 future annotations，
+        防止在低版本 Python 环境中因类/函数定义期求值注解抛出 NameError。
+        """
+        import ast
+        from pathlib import Path
+
+        common_typing = {
+            "Any", "Dict", "List", "Optional", "Tuple", "Set", "Union",
+            "Callable", "Iterable", "Sequence", "Mapping"
+        }
+        root = Path("plugins.v2/cloudsubscribe")
+        missing_typing_report = []
+
+        for py_file in root.rglob("*.py"):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            imported = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "typing":
+                    for alias in node.names:
+                        imported.add(alias.name)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "typing":
+                            imported.update(common_typing)
+
+            used = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in common_typing:
+                    used.add(node.id)
+
+            missing = used - imported
+            if missing:
+                missing_typing_report.append(f"{py_file}: missing {missing}")
+
+        self.assertEqual(
+            missing_typing_report,
+            [],
+            f"存在未导入 typing 类型的模块: {missing_typing_report}",
+        )
 if __name__ == "__main__":
     unittest.main()

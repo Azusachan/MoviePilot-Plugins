@@ -1,10 +1,12 @@
 """配置页选项与详情页数据 API。"""
 
+from __future__ import annotations
+
 import copy
 import datetime
 import re
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, urlencode
-
 import pytz
 from app.core.config import settings
 from app.core.metainfo import MetaInfo
