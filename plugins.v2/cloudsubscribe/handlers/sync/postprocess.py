@@ -630,11 +630,14 @@ class PostprocessService(OwnerDelegator):
             tasks = snapshot.get("tasks") or []
             offline_tasks_valid = bool(snapshot.get("refresh_ok"))
         tasks_valid = bool(offline_tasks_valid)
-        task_map = {
-            str(task.get("id") or "").upper(): task
-            for task in (tasks or [])
-            if task.get("id")
-        }
+        task_map: Dict[str, Any] = {}
+        for task in (tasks or []):
+            task_id = str(task.get("id") or "").upper()
+            if task_id:
+                task_map[task_id] = task
+            native_id = str(task.get("native_id") or "").upper()
+            if native_id and native_id not in task_map:
+                task_map[native_id] = task
 
         return PostprocessBatchContext(
             pending=pending,

@@ -39,7 +39,7 @@ class GuangyaUploadService:
         if not lookup.checked or lookup.directory_id is None:
             raise RuntimeError(f"光鸭本地上传目录不可用：{save_path}")
         response = self._request(
-            "/nd.bizuserres.s/v1/check_can_flash_upload",
+            "/userres/v1/check_can_flash_upload",
             {
                 "taskId": "",
                 "gcid": checksum.upper(),
@@ -76,7 +76,7 @@ class GuangyaUploadService:
         file_md5 = self._file_md5(source)
         try:
             flash_response = self._request(
-                "/nd.bizuserres.s/v1/check_can_flash_upload",
+                "/userres/v1/check_can_flash_upload",
                 {
                     "taskId": "",
                     "gcid": file_md5,
@@ -92,7 +92,7 @@ class GuangyaUploadService:
                     return True
 
             token_response = self._request(
-                "/nd.bizuserres.s/v1/get_res_center_token",
+                "/userres/v1/get_res_center_token",
                 {
                     "capacity": 2,
                     "name": upload_name,
@@ -152,7 +152,7 @@ class GuangyaUploadService:
     def _wait_task(self, task_id: str, retry: int = 120) -> None:
         for index in range(max(1, retry)):
             status_response = self._request(
-                "/nd.bizuserres.s/v1/get_task_status", {"taskId": task_id}
+                "/userres/v1/get_task_status", {"taskId": task_id}
             )
             data = self.client.data(status_response)
             status = data.get("status", data.get("taskStatus")) if isinstance(data, dict) else None
@@ -161,7 +161,7 @@ class GuangyaUploadService:
             if status_response.get("code") in (145, "145"):
                 raise RuntimeError(status_response.get("msg") or "上传任务失败")
             info_response = self._request(
-                "/nd.bizuserres.s/v1/file/get_info_by_task_id", {"taskId": task_id}
+                "/userres/v1/file/get_info_by_task_id", {"taskId": task_id}
             )
             info_data = self.client.data(info_response)
             if isinstance(info_data, dict):

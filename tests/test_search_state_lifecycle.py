@@ -154,6 +154,51 @@ class TestSearchStateLifecycle(unittest.TestCase):
         self.assertEqual(updated_task["search_channels"], [])
         self.assertEqual(updated_task["search_total_results"], 0)
 
+    def test_create_search_registry_simplifies_skipped_logs(self):
+        """验证搜索渠道注册时，未配置的多个渠道日志聚合为单条输出，避免刷屏。"""
+        from app.log import logger as mock_logger
+        load_module("cloudsubscribe.core.search", "plugins.v2/cloudsubscribe/core/search.py")
+        load_module("cloudsubscribe.core.definitions", "plugins.v2/cloudsubscribe/core/definitions.py")
+        load_module("cloudsubscribe.search.types", "plugins.v2/cloudsubscribe/search/types.py")
+        scanner_mod = load_module("cloudsubscribe.search.scanner", "plugins.v2/cloudsubscribe/search/scanner.py")
+        registry_mod = load_module("cloudsubscribe.search.registry", "plugins.v2/cloudsubscribe/search/registry.py")
+
+        class _DummySource1:
+            id = "dummy1"
+
+            @classmethod
+            def create_client(cls, cfg, ctx): return None
+
+            @classmethod
+            def create_service(cls, cli, cfg, ctx): return None
+
+            @classmethod
+            def create_provider(cls, svc, cli, cfg, ctx): return None
+
+        class _DummySource2:
+            id = "dummy2"
+
+            @classmethod
+            def create_client(cls, cfg, ctx): return None
+
+            @classmethod
+            def create_service(cls, cli, cfg, ctx): return None
+
+            @classmethod
+            def create_provider(cls, svc, cli, cfg, ctx): return None
+
+        scanner_mod.SearchSourceRegistry.register(_DummySource1)
+        scanner_mod.SearchSourceRegistry.register(_DummySource2)
+
+        mock_logger.reset_mock()
+        registry_mod.create_search_registry({})
+
+        # 检查是否聚合成单条 debug 日志包含 dummy1 和 dummy2
+        debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list if call.args]
+        skipped_lines = [msg for msg in debug_messages if "未配置搜索渠道已跳过" in msg]
+        self.assertEqual(len(skipped_lines), 1)
+        self.assertIn("dummy1", skipped_lines[0])
+        self.assertIn("dummy2", skipped_lines[0])
 
 if __name__ == "__main__":
     unittest.main()

@@ -259,11 +259,10 @@ class WoniuClient:
         except Exception as error:
             logger.debug(f"蜗牛读取签到天数失败：{error}")
 
-        points_text = f"{points} 积分"
         return {
             "name": name,
             "level": level,
-            "points": points_text,
+            "points": points,
             "signin_days": signin_days,
             "registered_at": reg_time,
             "details": {},
@@ -337,8 +336,8 @@ class WoniuClient:
             "message": message,
             "mode": "normal",
             "signin_days": signin_days,
-            "points_before": before_profile.get("points") or "0 积分",
-            "points_after": after_profile.get("points") or "0 积分",
+            "points_before": int(before_profile.get("points") or 0),
+            "points_after": int(after_profile.get("points") or 0),
             "points_change": points_change,
             "details": {
                 "status": status_text,

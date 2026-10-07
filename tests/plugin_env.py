@@ -161,6 +161,7 @@ def load_module(module_name: str, relative_path: str):
     path = relative_path
     if not os.path.isabs(path):
         path = os.path.join(REPO_ROOT, relative_path)
+    _ensure_parents(module_name)
     spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)
     module.__package__ = module_name.rsplit(".", 1)[0]

@@ -37,7 +37,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook = SubscriptionSearchHook(self.owner)
         self.hook._enabled = True
 
-    # ------------------ 1. SubscribeChain.search 跨版本测试 ------------------
+    # 1. SubscribeChain.search 跨版本测试
 
     def test_v2_search_signature_and_execution(self):
         """
@@ -132,7 +132,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.assertEqual(recorded_kwargs["sids"], (301, 302))
         self.assertEqual(recorded_kwargs["scheduled_interval"], 12)
 
-    # ------------------ 2. SubscribeChain.refresh 跨版本测试 ------------------
+    # 2. SubscribeChain.refresh 跨版本测试
 
     def test_v2_refresh_signature_compatibility(self):
         """
@@ -176,7 +176,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook._dispatch_subscribe_refresh(mtype="tv")
         self.assertEqual(received_mtype, ["tv"])
 
-    # ------------------ 3. Scheduler 单例与调度作业接管测试 ------------------
+    # 3. Scheduler 单例与调度作业接管测试
 
     def test_v2_scheduler_singleton_takeover(self):
         """

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import secrets
+import time
 import uuid
+from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, Optional
 
 import requests
@@ -54,7 +56,8 @@ class GuangyaClient:
             "guangya", self.access_token or self.device_id, min_interval=0.5
         )
         self._session = requests.Session()
-
+        self._global_config_cache: Dict[str, Any] = {}
+        self._global_config_cache_time = 0.0
     def close(self) -> None:
         self._session.close()
 
@@ -291,12 +294,31 @@ class GuangyaClient:
 
     def get_assets(self) -> Dict[str, Any]:
         return self.request(
-            "POST", f"{self.API_BASE_URL}/nd.bizassets.s/v1/get_assets", json_data={}
+            "POST", f"{self.API_BASE_URL}/assets/v1/get_assets", json_data={}
         )
+
+    def get_global_config(self) -> Dict[str, Any]:
+        now = time.time()
+        if self._global_config_cache and now - self._global_config_cache_time < 3600:
+            return dict(self._global_config_cache)
+        try:
+            response = self.request(
+                "POST",
+                f"{self.API_BASE_URL}/misc/v1/get_global_config",
+                json_data={},
+                authenticated=False,
+            )
+            data = self.data(response) or {}
+            if isinstance(data, dict) and data:
+                self._global_config_cache = data
+                self._global_config_cache_time = now
+                return dict(data)
+        except Exception as error:
+            logger.debug(f"获取光鸭全局配置异常：{error}")
+        return dict(self._global_config_cache or {})
 
     def check_login(self) -> bool:
         return self.is_success(self.get_user_info())
-
     def get_account_info(self) -> Dict[str, Any]:
         if not self.access_token:
             return {"connected": False, "error": "请填写 Token 或扫码登录"}
@@ -316,6 +338,18 @@ class GuangyaClient:
             "usedSpaceSize", "usedSpace", "used", "usedSize",
             "spaceUsed", "useSize",
         ))
+        vip_status = safe_int(assets.get("vipStatus"))
+        svip_status = safe_int(assets.get("svipStatus"))
+        is_vip = 2 in (vip_status, svip_status)
+        expire_time = safe_int(assets.get("vipExpireTime"))
+        expire_date_str = ""
+        if expire_time:
+            if expire_time > 10_000_000_000:
+                expire_time //= 1000
+            try:
+                expire_date_str = datetime.fromtimestamp(expire_time).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                expire_date_str = ""
         return {
             "connected": True,
             "user": {
@@ -327,10 +361,10 @@ class GuangyaClient:
                     user.get("picture") or user.get("avatar")
                     or user.get("avatarUrl") or ""
                 ),
-                "membership_supported": False,
-                "is_vip": False,
+                "membership_supported": True,
+                "is_vip": is_vip,
                 "is_forever_vip": False,
-                "vip_expire_date": "",
+                "vip_expire_date": expire_date_str,
             },
             "storage": {
                 "total": format_size(total),

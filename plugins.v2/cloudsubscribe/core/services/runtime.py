@@ -1243,11 +1243,14 @@ class SyncRuntimeService(OwnerDelegator):
         result = dict(snapshot or {})
         tasks = [dict(item) for item in (result.get("tasks") or [])]
         pending = self._sync_handler.get_pending_finalize_tasks() if self._sync_handler else []
-        task_by_id = {
-            str(item.get("id") or "").upper(): item
-            for item in tasks
-            if item.get("id")
-        }
+        task_by_id: Dict[str, Any] = {}
+        for item in tasks:
+            tid = str(item.get("id") or "").upper()
+            if tid:
+                task_by_id[tid] = item
+            nid = str(item.get("native_id") or "").upper()
+            if nid and nid not in task_by_id:
+                task_by_id[nid] = item
         offline_pending_count = 0
         for item in pending:
             task_type = str(item.get("task_type") or "share").strip().lower()
