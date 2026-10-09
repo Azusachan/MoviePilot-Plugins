@@ -1,6 +1,6 @@
 """洗版基线、评分与自动升级。"""
 
-from ...core.media import normalize_season
+from .utils import normalize_season
 
 import datetime
 from typing import Any, Dict, List, Optional, Set

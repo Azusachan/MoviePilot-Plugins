@@ -1,7 +1,5 @@
 """电视剧订阅搜索、匹配与转存流程。"""
 
-from ...core.media import normalize_season
-
 import datetime
 from typing import Any, Dict, List, Optional, Set
 

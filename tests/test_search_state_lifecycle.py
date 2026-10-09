@@ -35,6 +35,7 @@ cloudsubscribefork_core = register_module(
 )
 register_module(
     "cloudsubscribefork.core.media",
+    normalize_season=lambda value, default=1: max(0, int(default if value is None or value == "" else value)),
     apply_media_identity=MagicMock(),
     legacy_media_ids=MagicMock(),
     media_identity=MagicMock(),
