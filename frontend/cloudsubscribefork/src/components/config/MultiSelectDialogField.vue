@@ -350,8 +350,8 @@ const selectedList = computed(() => {
   });
 });
 
-// 触发器中严格单行紧凑展示（最多 3 个），防止折行撑破外框
-const maxVisible = computed(() => Math.min(Number(props.field?.maxChips) || 3, 3));
+// 触发器中自适应单行紧凑展示（默认最多 8 个），充分利用宽屏横向空间
+const maxVisible = computed(() => Number(props.field?.maxChips) || 8);
 const visibleChips = computed(() => selectedList.value.slice(0, maxVisible.value));
 const remainingCount = computed(() => Math.max(0, selectedList.value.length - maxVisible.value));
 
@@ -599,17 +599,26 @@ function clearSelection() {
   white-space: nowrap;
   pointer-events: none;
   line-height: 1;
-  max-width: calc(100% - 68px);
-  gap: 4px;
+  width: 100%;
+  max-width: 100%;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .trigger-chip {
-  max-width: 72px;
+  max-width: 240px;
+  min-width: 0;
+  display: inline-flex !important;
+  align-items: center;
+}
+
+.trigger-chip :deep(.v-chip__content) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
-
 .remaining-chip {
   opacity: 0.85;
   flex-shrink: 0;

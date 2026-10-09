@@ -417,15 +417,39 @@ class CloudDriveFileServiceBase:
     def get_cached_file(self, path: str, file_name: str) -> Optional[CloudFile]:
         return self.find_file(path, file_name)
 
-    def rename_file(self, path: str, item: CloudFile, target_name: str) -> bool:
+    @staticmethod
+    def _ensure_cloud_file(item: Any) -> CloudFile:
+        if isinstance(item, CloudFile):
+            return item
+        if isinstance(item, dict):
+            return CloudFile(
+                id=str(item.get("id") or item.get("file_id") or ""),
+                name=str(item.get("name") or item.get("file_name") or ""),
+                size=int(item.get("size") or 0),
+                is_directory=bool(item.get("is_directory") or item.get("is_dir")),
+                playback_values=dict(item.get("playback_values") or {}),
+                native=item.get("native") or item,
+            )
+        return CloudFile(
+            id=str(getattr(item, "id", "")),
+            name=str(getattr(item, "name", "")),
+            size=int(getattr(item, "size", 0) or 0),
+            is_directory=bool(getattr(item, "is_directory", False)),
+            playback_values=dict(getattr(item, "playback_values", None) or {}),
+            native=getattr(item, "native", None),
+        )
+
+    def rename_file(self, path: str, item: Any, target_name: str) -> bool:
+        item = self._ensure_cloud_file(item)
         success = self._is_success(self.client.rename_file(item.id, target_name))
         if success and item.is_directory:
             self._invalidate_path_cache()
         return success
 
     def move_file(
-            self, item: CloudFile, save_path: str, target_name: str
+            self, item: Any, save_path: str, target_name: str
     ) -> Optional[CloudFile]:
+        item = self._ensure_cloud_file(item)
         lookup = self.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             return None

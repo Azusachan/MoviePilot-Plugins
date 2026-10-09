@@ -77,6 +77,7 @@ class RuntimeApi(OwnerDelegator):
             settings.API_TOKEN,
             str((payload or {}).get("task_id") or ""),
             str((payload or {}).get("pending_key") or ""),
+            delete_source_file=bool((payload or {}).get("delete_source_file", False)),
         )
 
     def api_vue_delete_offline_tasks(self, payload: Dict[str, Any]) -> dict:
@@ -91,7 +92,10 @@ class RuntimeApi(OwnerDelegator):
             if str(value).strip()
         ]
         return self.api_delete_offline_tasks(
-            settings.API_TOKEN, task_ids, pending_keys
+            settings.API_TOKEN,
+            task_ids,
+            pending_keys,
+            delete_source_file=bool((payload or {}).get("delete_source_file", False)),
         )
 
     def api_vue_retry_offline_tasks(self, payload: Dict[str, Any]) -> dict:
@@ -110,6 +114,20 @@ class RuntimeApi(OwnerDelegator):
             pending_keys,
             task_ids,
         )
+
+    def api_vue_reconcile_history_status(self, payload: Optional[Dict[str, Any]] = None) -> dict:
+        if not self._sync_handler:
+            return {"success": False, "message": "同步处理器未初始化"}
+        try:
+            result = self._sync_handler.reconcile_real_history_status()
+            return {
+                "success": True,
+                "message": result.get("message", "历史状态校准完成"),
+                "data": result.get("data") or result,
+            }
+        except Exception as error:
+            logger.error(f"校准历史状态异常：{error}")
+            return {"success": False, "message": str(error)}
 
     def api_vue_clear_history(self, payload: Optional[Dict[str, Any]] = None) -> dict:
         return self.api_clear_history(

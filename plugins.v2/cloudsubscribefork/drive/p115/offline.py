@@ -310,8 +310,8 @@ class OfflineDownloadService(OwnerDelegator):
             self,
             items: List[Dict[str, Any]],
             save_path: str,
-            batch_size: int = 20,
-            batch_interval: float = 3.0,
+            batch_size: int = 1,
+            batch_interval: float = 2.0,
     ) -> Tuple[List[str], List[str]]:
         """批量添加 ED2K/Magnet 离线任务，同一批只调用一次115添加接口。"""
         if not self.client:

@@ -585,7 +585,7 @@ class HistoryCleanupService(OwnerDelegator):
     def _delete_history_linked_files(
             self, record: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """尽力删除115目标文件及本地STRM，任何失败均不阻止历史删除。"""
+        """尽力删除目标文件及本地STRM，任何失败均不阻止历史删除。"""
         file_name = str(record.get("file_name") or "").strip()
         result = self._delete_history_linked_files_batch([record])
         cloud_deleted = (

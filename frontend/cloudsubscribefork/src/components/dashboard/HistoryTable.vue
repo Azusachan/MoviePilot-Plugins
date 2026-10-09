@@ -131,13 +131,23 @@
           color="error"
           variant="text"
           size="small"
-          :disabled="!deletableSelectedGroups.length"
+          :disabled="!totalSelectedCount"
           :loading="deletingKey === 'batch'"
           @click.stop="deleteSelected">
           <v-icon icon="mdi-delete-outline" class="history-action-icon" />
-          <span class="history-action-label">删除所选</span>
+          <span class="history-action-label">删除所选{{ totalSelectedCount ? ` (${totalSelectedCount})` : "" }}</span>
         </v-btn>
         <div class="history-actions">
+          <v-btn
+            color="primary"
+            variant="text"
+            size="small"
+            :loading="reconciling"
+            title="核验网盘与本地真实文件，校准待处理记录状态"
+            @click.stop="emit('reconcile')">
+            <v-icon icon="mdi-check-decagram-outline" class="history-action-icon" />
+            <span class="history-action-label">校准状态</span>
+          </v-btn>
           <v-btn variant="text" size="small" :loading="loading" title="刷新历史记录" @click.stop="emit('refresh')">
             <v-icon icon="mdi-refresh" class="history-action-icon" />
             <span class="history-action-label">刷新</span>
@@ -194,6 +204,26 @@
         @update:page="changePage"
         @update:items-per-page="changePageSize"
         @click:row="toggleExpanded">
+        <template #header.data-table-select>
+          <v-checkbox-btn
+            :model-value="isPageAllSelected"
+            :indeterminate="isPageIndeterminate"
+            :disabled="!hasDeletableGroups"
+            density="compact"
+            color="primary"
+            @update:model-value="togglePageSelectAll($event)"
+            @click.stop />
+        </template>
+        <template #item.data-table-select="{ item }">
+          <v-checkbox-btn
+            :model-value="isGroupAllRecordsSelected(item)"
+            :indeterminate="isGroupRecordsIndeterminate(item)"
+            :disabled="!item.deletable"
+            density="compact"
+            color="primary"
+            @update:model-value="toggleGroupRecordsSelectAll(item, $event)"
+            @click.stop />
+        </template>
         <template #item.media="{ item }">
           <div class="media-cell">
             <span class="media-title font-weight-medium" :title="item.title + (item.year ? ` (${item.year})` : '')">
@@ -322,6 +352,7 @@
               <v-table density="compact" class="detail-table">
                 <thead>
                 <tr>
+                  <th class="subtable-select-th" style="width: 44px; padding: 0 4px;"></th>
                   <th>名称</th>
                   <th>类型</th>
                   <th>格式</th>
@@ -335,11 +366,20 @@
                 </thead>
                 <tbody>
                 <tr v-for="(record, index) in item.records" :key="recordKey(record, index)">
+                  <td class="subtable-select-td" style="width: 44px; padding: 0 4px;">
+                    <v-checkbox-btn
+                      :model-value="isRecordSelected(record)"
+                      :disabled="!canDeleteRecord(record)"
+                      density="compact"
+                      color="primary"
+                      @update:model-value="toggleRecordSelect(record, item, $event)"
+                      @click.stop />
+                  </td>
                   <td>
                     <div class="d-flex align-center ga-1">
-                        <span class="record-name" :title="record.display_name || '-'">
-                          {{ record.display_name || "-" }}
-                        </span>
+                      <span class="record-name" :title="record.display_name || '-'">
+                        {{ record.display_name || "-" }}
+                      </span>
                       <v-chip v-if="record.upgrade" size="x-small" color="warning" variant="tonal">
                         洗版
                         <v-tooltip activator="parent" location="top">
@@ -566,6 +606,14 @@
                   :key="recordKey(record, index)"
                   class="history-mobile-record">
                   <div class="history-mobile-record-head">
+                    <v-checkbox-btn
+                      :model-value="isRecordSelected(record)"
+                      :disabled="!canDeleteRecord(record)"
+                      density="compact"
+                      color="primary"
+                      class="mr-1"
+                      @update:model-value="toggleRecordSelect(record, item, $event)"
+                      @click.stop />
                     <span class="record-name" :title="record.display_name || '-'">
                       {{ record.display_name || "-" }}
                     </span>
@@ -690,16 +738,16 @@ const props = defineProps({
   filterOptions: {type: Object, default: () => ({})},
   embyPlayItems: {type: Object, default: () => ({})},
   loading: Boolean,
+  reconciling: Boolean,
   retryingKey: {type: String, default: ""},
-  deletingKey: {type: String, default: ""},
   notifyingKey: {type: String, default: ""},
   upgradingKey: {type: String, default: ""},
   enableCloudUpgrade: Boolean,
 })
 const emit = defineEmits([
+  "reconcile",
   "refresh",
   "clear",
-  "retry",
   "delete",
   "delete-groups",
   "selection-change",
@@ -719,8 +767,8 @@ const selectedTaskTypes = ref([]);
 const selectedStatuses = ref([]);
 const expanded = ref([]);
 const selectedGroupKeys = ref([]);
+const selectedRecordKeys = ref([]);
 const filtersVisible = ref(false);
-const searchVisible = ref(false);
 let lastQuerySignature = "";
 
 const statusOptions = ["处理中", "下载中", "成功", "失败"];
@@ -806,6 +854,7 @@ function emitQueryChange(overrides = {}) {
   lastQuerySignature = signature;
   expanded.value = [];
   selectedGroupKeys.value = [];
+  selectedRecordKeys.value = [];
   emit("query-change", query);
 }
 
@@ -1018,6 +1067,129 @@ function upgradeGroup(group) {
   })
 }
 
+function recordIdentifier(record) {
+  return String(record?.record_id || [record?.time, record?.share_url, record?.file_name].join("|")).trim();
+}
+
+function isRecordSelected(record) {
+  const key = recordIdentifier(record);
+  if (!key) return false;
+  if (selectedRecordKeys.value.includes(key)) return true;
+  return selectedGroups.value.some((group) => (group?.records || []).some((r) => recordIdentifier(r) === key));
+}
+
+function toggleRecordSelect(record, group, checked) {
+  if (!canDeleteRecord(record)) return;
+  const key = recordIdentifier(record);
+  if (!key) return;
+  const set = new Set(selectedRecordKeys.value);
+  if (checked) {
+    set.add(key);
+  } else {
+    set.delete(key);
+    if (selectedGroupKeys.value.includes(group.group_key)) {
+      selectedGroupKeys.value = selectedGroupKeys.value.filter((k) => k !== group.group_key);
+      for (const r of group.records || []) {
+        if (canDeleteRecord(r)) {
+          const rk = recordIdentifier(r);
+          if (rk !== key) set.add(rk);
+        }
+      }
+    }
+  }
+  selectedRecordKeys.value = [...set];
+}
+
+function isGroupAllRecordsSelected(group) {
+  const records = (group?.records || []).filter(canDeleteRecord);
+  if (!records.length) return false;
+  return records.every((r) => isRecordSelected(r));
+}
+
+function isGroupRecordsIndeterminate(group) {
+  const records = (group?.records || []).filter(canDeleteRecord);
+  if (!records.length) return false;
+  const count = records.filter((r) => isRecordSelected(r)).length;
+  return count > 0 && count < records.length;
+}
+
+function toggleGroupRecordsSelectAll(group, checked) {
+  const records = (group?.records || []).filter(canDeleteRecord);
+  if (!records.length) return;
+  const set = new Set(selectedRecordKeys.value);
+  if (checked) {
+    for (const r of records) {
+      set.add(recordIdentifier(r));
+    }
+  } else {
+    for (const r of records) {
+      set.delete(recordIdentifier(r));
+    }
+    selectedGroupKeys.value = selectedGroupKeys.value.filter((k) => k !== group.group_key);
+  }
+  selectedRecordKeys.value = [...set];
+}
+
+const effectiveSelectedRecords = computed(() => {
+  const recordsMap = new Map();
+  for (const group of deletableSelectedGroups.value) {
+    for (const r of group.records || []) {
+      if (canDeleteRecord(r)) {
+        recordsMap.set(recordIdentifier(r), r);
+      }
+    }
+  }
+  const selectedKeySet = new Set(selectedRecordKeys.value);
+  for (const group of historyGroups.value) {
+    for (const r of group.records || []) {
+      if (canDeleteRecord(r) && selectedKeySet.has(recordIdentifier(r))) {
+        recordsMap.set(recordIdentifier(r), r);
+      }
+    }
+  }
+  return [...recordsMap.values()];
+});
+
+const totalSelectedCount = computed(() => effectiveSelectedRecords.value.length);
+
+const hasDeletableGroups = computed(() =>
+  historyGroups.value.some((group) => group.deletable && (group?.records || []).some(canDeleteRecord)),
+);
+
+const isPageAllSelected = computed(() => {
+  const groups = historyGroups.value.filter((g) => g.deletable && (g?.records || []).some(canDeleteRecord));
+  if (!groups.length) return false;
+  return groups.every((g) => isGroupAllRecordsSelected(g));
+});
+
+const isPageIndeterminate = computed(() => {
+  if (isPageAllSelected.value) return false;
+  return effectiveSelectedRecords.value.length > 0;
+});
+
+function togglePageSelectAll(checked) {
+  const set = new Set(selectedRecordKeys.value);
+  const groupKeys = new Set(selectedGroupKeys.value);
+  for (const group of historyGroups.value) {
+    if (!group.deletable) continue;
+    const records = (group?.records || []).filter(canDeleteRecord);
+    if (!records.length) continue;
+    if (checked) {
+      groupKeys.add(group.group_key);
+      for (const r of records) {
+        set.add(recordIdentifier(r));
+      }
+    } else {
+      groupKeys.delete(group.group_key);
+      for (const r of records) {
+        set.delete(recordIdentifier(r));
+      }
+    }
+  }
+  selectedGroupKeys.value = [...groupKeys];
+  selectedRecordKeys.value = [...set];
+}
+
 function isGroupSelected(group) {
   return selectedGroupKeys.value.includes(group.group_key);
 }
@@ -1031,11 +1203,11 @@ function selectGroup(group, selected) {
 }
 
 function deleteSelected() {
-  if (!deletableSelectedGroups.value.length) return;
+  if (!effectiveSelectedRecords.value.length) return;
   emit("delete-groups", {
-    groupCount: deletableSelectedGroups.value.length,
-    records: deletableSelectedGroups.value.flatMap((group) => group.records),
-  })
+    groupCount: selectedGroups.value.length || 1,
+    records: effectiveSelectedRecords.value,
+  });
 }
 
 function clearFilters() {

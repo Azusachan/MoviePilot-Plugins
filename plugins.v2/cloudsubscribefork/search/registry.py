@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from app.log import logger
+
 from .scanner import SearchSourceRegistry
 from ..core.search import SearchRegistry
 
@@ -38,6 +40,7 @@ def create_search_registry(
         **extra_context,
     }
 
+    skipped = []
     for def_cls in SearchSourceRegistry.get_definitions():
         try:
             client = def_cls.create_client(config, context)
@@ -46,10 +49,10 @@ def create_search_registry(
             if provider:
                 registry.register(provider, replace=True)
             else:
-                from app.log import logger as _logger
-                _logger.debug(f"搜索渠道 [{def_cls.id}] create_provider 返回 None，已跳过注册")
+                skipped.append(def_cls.id)
         except Exception as _err:
-            from app.log import logger as _logger
-            _logger.debug(f"搜索渠道 [{def_cls.id}] 注册失败：{_err}")
+            logger.debug(f"搜索渠道 [{def_cls.id}] 注册失败：{_err}")
 
+    if skipped:
+        logger.debug(f"未配置搜索渠道已跳过：{', '.join(skipped)}")
     return registry

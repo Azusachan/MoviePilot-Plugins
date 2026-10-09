@@ -136,8 +136,6 @@ class P123Client:
         except ValueError:
             return {"code": 0, "message": "success", "raw": resp.text}
 
-    # --- 用户信息与鉴权 ---
-
     def user_info(self) -> dict:
         """获取当前用户信息与容量。"""
         return self.request("user/info", method="GET")
@@ -267,8 +265,6 @@ class P123Client:
         }
         return self.request("file/trash", method="POST", json=body)
 
-    # --- 分享相关 ---
-
     def list_share(
             self,
             share_key: str,
@@ -321,8 +317,6 @@ class P123Client:
         }
         return self.request("file/copy/async", method="POST", json=body)
 
-    # --- 离线下载 ---
-
     def add_offline(self, url: str, upload_dir: Union[int, str] = 0) -> dict:
         """添加离线下载任务。"""
         body = {
@@ -360,8 +354,6 @@ class P123Client:
             "all": False,
         }
         return self.request("offline_download/task/abort", method="POST", json=body)
-
-    # --- 本地上传 ---
 
     def init_upload(self, filename: str, size: int, etag: str, parent_id: Union[int, str] = 0) -> dict:
         """请求秒传与上传初始化。"""

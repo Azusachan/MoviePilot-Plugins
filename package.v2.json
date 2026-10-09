@@ -3,14 +3,19 @@
     "name": "网盘订阅助手 · Azusa",
     "description": "整合网盘能力与多渠道资源搜索，自动查找并补充订阅缺失的影视内容",
     "labels": "订阅,网盘,转存,搜索,通知,刮削,签到,ed2k,magnet",
-    "version": "1.6.2.52.3731595780.16",
+    "version": "1.6.8.57.1108271846.16",
     "icon": "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "odomu",
     "level": 1,
     "release": true,
     "system_version": ">=2.14.6",
     "history": {
-      "v1.6.2": "修复手动转存逻辑，联动emby前端转存",
+      "v1.6.8": "修复任务历史状态错乱问题",
+      "v1.6.7": "修复榜单订阅媒体类型过滤，修复光鸭离线下载问题，提高媒体识别准确性",
+      "v1.6.6": "修复低版本python语法问题",
+      "v1.6.5": "修复手动转存v3属性兼容性与Dian115签到问题",
+      "v1.6.4": "重构光鸭网盘，新增搜索渠道",
+      "v1.6.2": "修复手动转存逻辑，联动emby_plus前端转存",
       "v1.6.1": "新增蜗牛搜索渠道，修复猫眼榜单订阅",
       "v1.6.0": "支持盘链验证码智能识别，修复离线资源季集过滤问题",
       "v1.5.9": "优化关闭转存自动整理逻辑",
@@ -68,7 +73,8 @@
       "v1.5.7.47.3356382566.14": "Plex compatibility build based on upstream c80e55662ee2",
       "v1.5.8.48.587528776.15": "Plex compatibility build based on upstream 2304fa48ea98",
       "v1.6.1.51.1558850929.16": "Plex compatibility build based on upstream 5cea2d71dc54",
-      "v1.6.2.52.3731595780.16": "Plex compatibility build based on upstream de6ba20417d1"
+      "v1.6.2.52.3731595780.16": "Plex compatibility build based on upstream de6ba20417d1",
+      "v1.6.8.57.1108271846.16": "Plex compatibility build based on upstream 420ee2e6e64e"
     }
   }
 }

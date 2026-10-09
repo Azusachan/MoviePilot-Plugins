@@ -175,9 +175,7 @@ class TestTransferOrganizeBehavior(unittest.TestCase):
         )
 
 
-# -------------------------------------------------------------
 # 针对 SyncHandler 真实 _transfer_episode_batch 批量转存逻辑的测试套件
-# -------------------------------------------------------------
 
 install_app_mocks(
     "app.core", "app.core.config", "app.core.context", "app.core.metainfo",

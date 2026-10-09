@@ -1,18 +1,15 @@
-import asyncio
 import html
 import re
 import threading
-import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, unquote
 
 from app.log import logger
 
-from ..cloudflare import fetch_cloudflare_html, is_cloudflare_challenge
+from .security import UIndexSecurity, UIndexSecurityError
 from ..http_client import (
     RequestGate,
     gated_idempotent_request,
-    gated_request,
     normalize_proxies,
     request_error_summary,
     requests,
@@ -69,6 +66,7 @@ class UIndexClient:
         )
         self._cache = create_platform_ttl_cache("uindex_search", ttl=1800, maxsize=500)
         self._cache_lock = threading.Lock()
+        self._security = UIndexSecurity(self._proxy)
 
     @property
     def proxy(self) -> str:
@@ -100,13 +98,7 @@ class UIndexClient:
             minimum_interval=0.2,
             serial_requests=False,
         )
-
-    def _fetch_page_with_browser(self, url: str) -> str:
-        """按需通过统一反盾工具穿透 Cloudflare 盾并获取搜索页面 HTML。"""
-        try:
-            return fetch_cloudflare_html(url, proxy=self._proxy)
-        except Exception as err:
-            raise UIndexError(f"CloakBrowser 渲染页面失败：{err}") from err
+        self._security.update_config(proxy=self._proxy)
 
     def search(self, query: str) -> List[Dict[str, Any]]:
         keyword = str(query or "").strip()
@@ -121,9 +113,9 @@ class UIndexClient:
         url = f"{self.base_url}/search.php?search={quote(keyword)}"
         proxies = normalize_proxies(self._proxy)
 
-        # 1. 优先执行标准 HTTP 快速请求（不需要 CF 时零浏览器开销）
-        is_cf_blocked = False
-        page_html = ""
+        # 1. 优先执行标准 HTTP 快速请求（不需要盾时零浏览器开销）
+        response = None
+        request_error = None
         try:
             response = gated_idempotent_request(
                 self._gate,
@@ -134,26 +126,19 @@ class UIndexClient:
                 proxies=proxies,
                 timeout=self.timeout,
             )
-            status_code = getattr(response, "status_code", 0)
-            page_text = getattr(response, "text", "") or ""
-
-            # 智能判断是否受到 Cloudflare Managed Challenge 拦截
-            is_cf_blocked = is_cloudflare_challenge(
-                page_text, status_code, getattr(response, "headers", {})
-            )
-
-            if not is_cf_blocked:
-                if status_code != 200:
-                    raise UIndexError(f"UIndex 请求异常：HTTP {status_code}")
-                page_html = page_text
         except requests.exceptions.RequestException as error:
-            logger.debug(f"UIndex 直连请求异常：{request_error_summary(error)}，准备尝试浏览器渲染")
-            is_cf_blocked = True
+            logger.debug(
+                f"UIndex 直连请求异常：{request_error_summary(error)}，准备尝试浏览器渲染"
+            )
+            request_error = error
 
-        # 2. 仅在检测到需要过 CF 盾时，才按需调起 CloakBrowser 浏览器过盾
-        if is_cf_blocked:
-            logger.info(f"UIndex 检测到 Cloudflare 盾防护，按需调用 CloakBrowser 浏览器过盾渲染：{keyword}")
-            page_html = self._fetch_page_with_browser(url)
+        # 2. 仅在命中 Cloudflare 盾或直连异常时，才按需调起公共反盾浏览器
+        if request_error is not None or self._security.is_challenge(response):
+            logger.debug(f"UIndex 检测到 Cloudflare 盾防护，按需调用 CloakBrowser 浏览器过盾渲染：{keyword}")
+        try:
+            page_html = self._security.resolve_page(url, response, request_error)
+        except UIndexSecurityError as error:
+            raise UIndexError(str(error)) from error
 
         results = self._parse_search_page(page_html)
         with self._cache_lock:

@@ -4,18 +4,12 @@ import base64
 import html
 import re
 import threading
-import time
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin
 
-from ..cloudflare import browser_proxy, is_cloudflare_challenge, playwright_snapshot
-from ..http_client import (
-    RequestGate,
-    gated_request,
-    normalize_proxies,
-    requests,
-)
+from .security import SeedHubSecurity
+from ..http_client import RequestGate, normalize_proxies
 from ..matching import extract_year
 from ..types import resource_type_from_url
 from ...utils.cache import create_platform_ttl_cache
@@ -112,134 +106,36 @@ class SeedHubClient:
     ):
         self.base_url = str(base_url or "https://www.seedhub.cc").rstrip("/")
         self._proxies = normalize_proxies(proxy)
-        self._browser_proxy = browser_proxy(proxy)
         self._request_timeout = max(5, min(int(request_timeout or 20), 60))
         self._magnet_cache = create_platform_ttl_cache(
             "seedhub:magnets", self.base_url, maxsize=1024, ttl=60 * 60
         )
         self._cache_lock = threading.RLock()
-        self._browser_lock = threading.RLock()
-        self._browser_state_version = 0
-        self._browser_cookie_header = ""
-        self._browser_user_agent = ""
+        self._security = SeedHubSecurity(
+            base_url=self.base_url,
+            proxy=proxy,
+            request_timeout=self._request_timeout,
+            headers=self._HEADERS,
+            proxies=self._proxies,
+            error_type=SeedHubError,
+        )
         self._request_gate = RequestGate.shared(
             "SeedHub",
             f"{self.base_url}|{self._proxies}",
             request_interval=request_interval,
             minimum_interval=0.2,
-            challenge_detector=self._is_challenge_response,
+            challenge_detector=self._security.is_challenge,
             serial_requests=False,
         )
+        self._security.bind_gate(self._request_gate)
 
     @staticmethod
     def _clean_text(value: object) -> str:
         return html.unescape(re.sub(r"<[^>]+>", "", str(value or ""))).strip()
 
-    def _request_headers(self) -> Dict[str, str]:
-        with self._browser_lock:
-            headers = dict(self._HEADERS)
-            if self._browser_user_agent:
-                headers["User-Agent"] = self._browser_user_agent
-            if self._browser_cookie_header:
-                headers["Cookie"] = self._browser_cookie_header
-            return headers
-
-    @classmethod
-    def _is_challenge_response(cls, response) -> bool:
-        return is_cloudflare_challenge(
-            response.text or "", response.status_code, response.headers
-        )
-
-    def _request_once(self, url: str):
-        return gated_request(
-            self._request_gate,
-            requests.get,
-            url,
-            impersonate="chrome",
-            headers=self._request_headers(),
-            proxies=self._proxies,
-            timeout=(8, self._request_timeout),
-            allow_redirects=True,
-        )
-
-    def _get_browser_text(self, url: str, observed_version: int) -> str:
-        with self._browser_lock:
-            if self._browser_state_version != observed_version:
-                try:
-                    response = self._request_once(url)
-                    text = response.text or ""
-                    if (
-                            response.ok
-                            and not is_cloudflare_challenge(
-                        text, response.status_code, response.headers
-                            )
-                    ):
-                        return text
-                except requests.exceptions.RequestException:
-                    pass
-
-            result = playwright_snapshot(
-                url, self._browser_proxy, max(30, self._request_timeout),
-                self._request_gate,
-            )
-            if not isinstance(result, dict):
-                return ""
-            text = str(result.get("text") or "")
-            if not text or is_cloudflare_challenge(text):
-                self._request_gate.activate_cooldown(
-                    30, reason="SeedHub 浏览器验证"
-                )
-                return ""
-            seedhub_host = str(urlparse(self.base_url).hostname or "").lower()
-            cookies = [
-                f"{cookie.get('name')}={cookie.get('value')}"
-                for cookie in (result.get("cookies") or [])
-                if cookie.get("name") and cookie.get("value") is not None
-                if (
-                    not cookie.get("domain")
-                    or seedhub_host == str(cookie.get("domain")).lstrip(".").lower()
-                    or seedhub_host.endswith(
-                        f".{str(cookie.get('domain')).lstrip('.').lower()}"
-                    )
-                )
-            ]
-            self._browser_cookie_header = "; ".join(cookies)
-            self._browser_user_agent = str(result.get("user_agent") or "")
-            self._browser_state_version += 1
-            return text
-
     def _get_text(self, url: str) -> str:
-        last_error = ""
-        for attempt in range(2):
-            try:
-                with self._browser_lock:
-                    browser_state_version = self._browser_state_version
-                response = self._request_once(url)
-                text = response.text or ""
-                if is_cloudflare_challenge(
-                        text, response.status_code, response.headers
-                ):
-                    browser_text = self._get_browser_text(
-                        url, browser_state_version
-                    )
-                    if browser_text:
-                        return browser_text
-                    raise SeedHubError("SeedHub 浏览器仿真未通过 Cloudflare 验证")
-                if response.status_code == 429 or response.status_code >= 500:
-                    last_error = f"HTTP {response.status_code}"
-                    if attempt == 0:
-                        time.sleep(0.3)
-                        continue
-                response.raise_for_status()
-                return text
-            except SeedHubError:
-                raise
-            except requests.exceptions.RequestException as error:
-                last_error = type(error).__name__
-                if attempt == 0:
-                    time.sleep(0.3)
-                    continue
-        raise SeedHubError(f"SeedHub 请求失败：{last_error or '未知错误'}")
+        """请求页面文本；反盾协议由 :class:`SeedHubSecurity` 统一处理。"""
+        return self._security.get_text(url)
 
     def _parse_search_candidates(self, text: str) -> List[Dict[str, str]]:
         candidates = []

@@ -200,9 +200,9 @@ class TestPostprocessServiceHelpers(unittest.TestCase):
     def test_due_pending_keys(self):
         now = 1000.0
         pending = {
-            "due_item": {"next_check_at": 900.0, "_monitor_until": 950.0},
-            "future_item": {"next_check_at": 1100.0, "_monitor_until": 950.0},
-            "monitored_item": {"next_check_at": 900.0, "_monitor_until": 1200.0},
+            "due_item": {"next_check_at": 900.0, "_monitor_until": 950.0, "history_ready": True},
+            "future_item": {"next_check_at": 1100.0, "_monitor_until": 950.0, "history_ready": True},
+            "monitored_item": {"next_check_at": 900.0, "_monitor_until": 1200.0, "history_ready": True},
         }
         due = PostprocessService._due_pending_keys(pending, now)
         self.assertEqual(due, ["due_item"])
@@ -212,6 +212,43 @@ class TestPostprocessServiceHelpers(unittest.TestCase):
         self.assertIn("due_item", forced_due)
         self.assertIn("future_item", forced_due)
         self.assertNotIn("monitored_item", forced_due)
+
+    def test_due_pending_keys_requires_history_ready(self):
+        """历史记录未落库的任务不得进入后处理，保证记录先于产物落库。"""
+        now = 1000.0
+        pending = {
+            "not_persisted": {"next_check_at": 900.0, "history_ready": False},
+            "ready": {"next_check_at": 900.0, "history_ready": True},
+        }
+        self.assertEqual(
+            PostprocessService._due_pending_keys(pending, now), ["ready"]
+        )
+        # 即便显式选中或强制刷新，也必须等待记录落库
+        self.assertEqual(
+            PostprocessService._due_pending_keys(
+                pending, now, force=True, pending_keys={"not_persisted"}
+            ),
+            [],
+        )
+
+    def test_due_pending_keys_grace_for_abandoned_tasks(self):
+        """超过落库宽限期仍未就绪的遗留任务放行，避免被永久阻塞。"""
+        now = 100000.0
+        abandoned = {
+            "abandoned": {
+                "next_check_at": 0.0,
+                "history_ready": False,
+                "created_at": now - PostprocessService._HISTORY_READY_GRACE - 1,
+            },
+            "recent": {
+                "next_check_at": 0.0,
+                "history_ready": False,
+                "created_at": now - 5.0,
+            },
+        }
+        self.assertEqual(
+            PostprocessService._due_pending_keys(abandoned, now), ["abandoned"]
+        )
 
     def test_media_context_key(self):
         sub_item = {"subscribe_id": 42}
@@ -242,14 +279,16 @@ class TestRetryAndLocateMechanism(unittest.TestCase):
 
     def test_finalize_failure_and_dead_letter(self):
         item = {"file_name": "DeadTask.mkv", "fail_count": 0, "task_type": "share"}
-        # 阈值为 2
-        is_dead = self.service._finalize_failure(item, "pending_key")
-        self.assertFalse(is_dead)
-        self.assertEqual(item["fail_count"], 1)
+        # 普通分享与离线任务共用同一失败上限，避免网盘短暂索引延迟导致任务提前终止
+        threshold = self.service._FINALIZE_MAX_FAILURES
+        self.assertGreater(threshold, 1)
+        for attempt in range(1, threshold):
+            self.assertFalse(self.service._finalize_failure(item, "pending_key"))
+            self.assertEqual(item["fail_count"], attempt)
+            self.assertFalse(item.get("finalize_dead"))
 
-        is_dead = self.service._finalize_failure(item, "pending_key")
-        self.assertTrue(is_dead)
-        self.assertEqual(item["fail_count"], 2)
+        self.assertTrue(self.service._finalize_failure(item, "pending_key"))
+        self.assertEqual(item["fail_count"], threshold)
         self.assertTrue(item.get("finalize_dead"))
 
     def test_locate_cloud_file_strategies(self):

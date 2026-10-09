@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from app.log import logger
 
-from .files import cloud_file, list_data
+from .files import cloud_file
 from ..common import iter_transfer_batches, safe_int
 from ...core.cloud import ShareLinkStatus
 from ...utils.cache import create_platform_ttl_cache
@@ -34,7 +34,7 @@ class GuangyaShareService:
     def _share_summary(self, share_id: str) -> Dict[str, Any]:
         return self.client.request(
             "POST",
-            f"{self.client.API_BASE_URL}/nd.bizuserres.s/v1/get_share_summary",
+            f"{self.client.API_BASE_URL}/userres/v1/get_share_summary",
             json_data={"shareId": share_id},
             authenticated=False,
         )
@@ -42,7 +42,7 @@ class GuangyaShareService:
     def _share_access_token(self, share_id: str, code: str) -> Dict[str, Any]:
         return self.client.request(
             "POST",
-            f"{self.client.API_BASE_URL}/nd.bizuserres.s/v1/get_share_access_token",
+            f"{self.client.API_BASE_URL}/userres/v1/get_share_access_token",
             json_data={"shareId": share_id, "code": code},
             authenticated=False,
         )
@@ -53,7 +53,7 @@ class GuangyaShareService:
     ) -> Dict[str, Any]:
         return self.client.request(
             "POST",
-            f"{self.client.API_BASE_URL}/nd.bizuserres.s/v1/get_share_page_files_list",
+            f"{self.client.API_BASE_URL}/userres/v1/get_share_page_files_list",
             json_data={
                 "accessToken": access_token,
                 "parentId": parent_id,
@@ -68,7 +68,7 @@ class GuangyaShareService:
     def _restore(self, access_token: str, file_ids: list, parent_id: str = "") -> Dict[str, Any]:
         return self.client.request(
             "POST",
-            f"{self.client.API_BASE_URL}/nd.bizuserres.s/v1/restore_share",
+            f"{self.client.API_BASE_URL}/userres/v1/restore_share",
             json_data={
                 "accessToken": access_token,
                 "fileIds": file_ids,
@@ -177,7 +177,8 @@ class GuangyaShareService:
                     response = self._share_files(token, parent_id, page, self.page_size)
                     if not self.client.is_success(response):
                         return result
-                    items = list_data(self.client, response)
+                    data = response.get("data") or {}
+                    items = data if isinstance(data, list) else data.get("list") or []
                     for raw in items:
                         item = cloud_file(raw)
                         if not item:
@@ -218,7 +219,8 @@ class GuangyaShareService:
                 raise RuntimeError(
                     response.get("msg") or response.get("error") or "读取光鸭分享目录失败"
                 )
-            items = list_data(self.client, response)
+            data = response.get("data") or {}
+            items = data if isinstance(data, list) else data.get("list") or []
             result.extend(dict(item) for raw in items if (item := cloud_file(raw)))
             if len(items) < self.page_size:
                 return result
@@ -234,8 +236,10 @@ class GuangyaShareService:
         normalized = [str(value) for value in file_ids]
         if not normalized:
             root = self._share_files(token, page=1, page_size=self.page_size)
+            data = root.get("data") or {}
+            raw_items = data if isinstance(data, list) else data.get("list") or []
             normalized = [
-                item.id for raw in list_data(self.client, root)
+                item.id for raw in raw_items
                 if (item := cloud_file(raw))
             ]
         if not normalized:
@@ -280,7 +284,6 @@ class GuangyaShareService:
         if not normalized:
             return [], []
 
-        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),

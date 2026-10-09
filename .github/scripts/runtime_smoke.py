@@ -19,7 +19,7 @@ from app.schemas.types import MediaType
 
 assert CloudSubscribeFork.plugin_config_prefix == 'cloudsubscribefork_'
 sources = {definition.id for definition in SearchSourceRegistry.get_definitions()}
-assert {'mikan', 'pansou', 'hdhive', 'seedhub', 'animegarden', 'woniu'} <= sources, sources
+assert {'mikan', 'pansou', 'hdhive', 'seedhub', 'animegarden', 'woniu', 'pianku'} <= sources, sources
 assert '115' in {definition.id for definition in DriverRegistry.get_definitions()}
 config = dict(enabled=False, takeover_new_subscribes=True,
               search_source_order=['mikan', 'pansou'], mikan_base_url='https://mikanani.me',
@@ -134,7 +134,7 @@ from unittest.mock import patch
 from app.plugins.cloudsubscribefork.handlers.sync.postprocess import PostprocessService
 for fails in (False, True):
     pending = {'fixture': dict(task_type='magnet', task_id='ABC',
-                              subscribe_id=0, created_at=time.time())}
+                              subscribe_id=0, created_at=time.time(), history_ready=True)}
     def save_pending(values):
         pending.clear()
         pending.update(copy.deepcopy(values))

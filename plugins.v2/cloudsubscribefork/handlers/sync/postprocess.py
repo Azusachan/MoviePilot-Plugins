@@ -148,6 +148,9 @@ class PostprocessService(OwnerDelegator):
     )
 
     _FINALIZE_MAX_FAILURES = 5
+    # 记录落库是后处理的前置条件；超过该时限仍未落库说明该轮同步已放弃，
+    # 放行以避免遗留任务被永久阻塞（正常同步在秒级内即完成落库）。
+    _HISTORY_READY_GRACE = 30 * 60
     _FINALIZE_DEAD_LOG = "文件后处理连续失败 {} 次，已终止重试：{}"
     _FINALIZE_DEAD_REASON = "文件后处理连续失败 {} 次，已停止自动重试"
     _FINALIZE_DEAD_TITLE = "网盘文件后处理失败"
@@ -301,7 +304,11 @@ class PostprocessService(OwnerDelegator):
             key
             for key, item in pending.items()
             if (not selected or key in selected)
-               and now >= float(item.get("_monitor_until") or 0)
+               and (
+                       item.get("history_ready")
+                       or now - float(item.get("created_at") or now) >= PostprocessService._HISTORY_READY_GRACE
+               )
+               and (bool(selected and key in selected) or now >= float(item.get("_monitor_until") or 0))
                and (force or now >= float(item.get("next_check_at") or 0))
         ]
 
@@ -630,11 +637,14 @@ class PostprocessService(OwnerDelegator):
             tasks = snapshot.get("tasks") or []
             offline_tasks_valid = bool(snapshot.get("refresh_ok"))
         tasks_valid = bool(offline_tasks_valid)
-        task_map = {
-            str(task.get("id") or "").upper(): task
-            for task in (tasks or [])
-            if task.get("id")
-        }
+        task_map: Dict[str, Any] = {}
+        for task in (tasks or []):
+            task_id = str(task.get("id") or "").upper()
+            if task_id:
+                task_map[task_id] = task
+            native_id = str(task.get("native_id") or "").upper()
+            if native_id and native_id not in task_map:
+                task_map[native_id] = task
 
         return PostprocessBatchContext(
             pending=pending,
@@ -1156,38 +1166,60 @@ class PostprocessService(OwnerDelegator):
         self._notify_finalize_dead(item, pending_key)
         self._abort_single_item(item, pending_key, reason, ctx)
 
-    def _handle_magnet_due_item(
+    def _poll_offline_ready(
             self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
-    ) -> None:
-        """处理单个 Magnet 离线任务的等待轮询或下载完成整理。"""
-        created_at = float(item.get("created_at") or ctx.now)
-        self._update_postprocess_progress(
-            item, pending_key, "locate", "检查下载和文件就绪状态"
-        )
-        task = ctx.task_map.get(str(item.get("task_id") or "").upper())
-        task_done = bool(task and task.get("completed"))
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """统一检查网盘离线任务就绪状态。"""
+        task_id = str(item.get("task_id") or "").strip().upper()
+        task = ctx.task_map.get(task_id) if task_id else None
+
+        # 1. 任务明确失败
         if task and bool(task.get("failed")):
-            reason = "Magnet 离线下载失败"
-            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
+            reason = f"离线下载失败：{task.get('status_text') or '任务错误'}"
+            self._add_offline_blacklist(item.get("share_url") or pending_key, reason)
             self._cleanup_failed_offline_task(item, reason)
             self._abort_single_item(item, pending_key, reason, ctx)
-            return
-        if not task_done:
-            timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
-                reason = f"Magnet 离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                self._cleanup_failed_offline_task(item, reason)
-                self._abort_single_item(item, pending_key, reason, ctx)
-            else:
-                self._schedule_finalize_retry(item, ctx.now)
-                retry_at = float(item.get("next_check_at") or ctx.now)
-                retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
-                self._update_postprocess_progress(
-                    item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
-                )
-            return
+            return task, False
 
+        # 2. 检查完成状态（网盘暂存目录已有文件 或 任务标记完成）
+        task_done = bool(item.get("moved_at") or (task and task.get("completed")))
+        if not task_done:
+            staging_dir = str(item.get("staging_dir") or item.get("cloud_dir") or "/")
+            directory_valid, file_index = self._cloud_directory_snapshot(
+                staging_dir, ctx.directory_snapshots
+            )
+            task_done = bool(directory_valid and file_index)
+
+        if task_done:
+            item.setdefault("download_completed_at", ctx.now)
+            return task, True
+
+        # 3. 未完成：判断超时或调度重试
+        created_at = float(item.get("created_at") or ctx.now)
+        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
+        if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
+            reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
+            self._add_offline_blacklist(item.get("share_url") or pending_key, reason)
+            self._cleanup_failed_offline_task(item, reason)
+            self._abort_single_item(item, pending_key, reason, ctx)
+            return task, False
+
+        self._schedule_finalize_retry(item, ctx.now)
+        retry_at = float(item.get("next_check_at") or ctx.now)
+        retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
+        self._update_postprocess_progress(
+            item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
+        )
+        return task, False
+
+    def _finalize_magnet_due_item(
+            self,
+            item: Dict[str, Any],
+            pending_key: str,
+            ctx: PostprocessBatchContext,
+            task: Optional[Dict[str, Any]],
+    ) -> None:
+        """整理 Magnet 下载文件包。"""
         self._update_postprocess_progress(
             item, pending_key, "organize", "整理 Magnet 下载文件"
         )
@@ -1228,75 +1260,10 @@ class PostprocessService(OwnerDelegator):
             ctx.completed += len(finalized)
         else:
             self._add_offline_blacklist(
-                item.get("share_url") or item.get("task_id"),
+                item.get("share_url") or pending_key,
                 "Magnet 下载完成但未匹配到目标媒体文件",
             )
             ctx.failed += 1
-
-    def _poll_offline_download_due_item(
-            self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
-    ) -> bool:
-        """检查 ED2K/Offline 离线下载状态。若未完成或失败返回 True，表示中断后续单文件整理。"""
-        file_name = str(item.get("file_name") or pending_key)
-        created_at = float(item.get("created_at") or ctx.now)
-        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
-        task_done = bool(item.get("moved_at") or (task and task.get("completed")))
-
-        if task and bool(task.get("failed")):
-            reason = "离线下载失败"
-            self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-            self._abort_single_item(item, pending_key, reason, ctx)
-            return True
-
-        if not task_done:
-            if self._has_existing_cloud_file(item, pending_key, ctx):
-                task_done = True
-                logger.debug(f"离线任务在网盘中已找到就绪文件，直接推进后处理：{file_name}")
-
-        timeout_mins = max(1, int(getattr(self, "_OFFLINE_TIMEOUT", 1800) // 60))
-        if not task_done and task is not None:
-            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
-                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                self._abort_single_item(item, pending_key, reason, ctx)
-                return True
-            self._schedule_finalize_retry(item, ctx.now)
-            retry_at = float(item.get("next_check_at") or ctx.now)
-            retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
-            self._update_postprocess_progress(
-                item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
-            )
-            return True
-
-        if not task_done and task is None and ctx.tasks_valid:
-            staging_dir = str(
-                item.get("staging_dir") or item.get("cloud_dir") or "/"
-            )
-            directory_valid, file_index = self._cloud_directory_snapshot(
-                staging_dir, ctx.directory_snapshots
-            )
-            if directory_valid and not file_index:
-                reason = "离线任务及目标文件均不存在"
-                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                self._abort_single_item(item, pending_key, reason, ctx)
-                return True
-
-        if not task_done:
-            if ctx.now - created_at >= self._OFFLINE_TIMEOUT:
-                reason = f"离线下载超过 {timeout_mins} 分钟未完成，已退出"
-                self._add_offline_blacklist(item.get("share_url") or item.get("task_id"), reason)
-                self._abort_single_item(item, pending_key, reason, ctx)
-                return True
-            self._schedule_finalize_retry(item, ctx.now)
-            retry_at = float(item.get("next_check_at") or ctx.now)
-            retry_minutes = max(1, int(max(0, retry_at - ctx.now) + 59) // 60)
-            self._update_postprocess_progress(
-                item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
-            )
-            return True
-
-        item.setdefault("download_completed_at", ctx.now)
-        return False
 
     def _organize_and_finalize_single_item(
             self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
@@ -1631,15 +1598,13 @@ class PostprocessService(OwnerDelegator):
                 continue
 
             task_type = str(item.get("task_type") or "share").strip().lower()
-            if task_type == "magnet":
-                self._handle_magnet_due_item(item, pending_key, ctx)
-                continue
-
-            if task_type in {"ed2k", "offline"}:
-                should_halt = self._poll_offline_download_due_item(item, pending_key, ctx)
-                if should_halt:
+            if task_type in {"magnet", "ed2k", "offline"}:
+                task, ready = self._poll_offline_ready(item, pending_key, ctx)
+                if not ready:
                     continue
-
+                if task_type == "magnet":
+                    self._finalize_magnet_due_item(item, pending_key, ctx, task)
+                    continue
             self._organize_and_finalize_single_item(item, pending_key, ctx)
 
     def _flush_batch_postprocess(self, ctx: PostprocessBatchContext) -> None:
@@ -1824,16 +1789,28 @@ class PostprocessService(OwnerDelegator):
                 subscribe = SubscribeOper(db=db).get(subscribe_id)
         else:
             subscribe = None
-        if not subscribe and item.get("transient_target"):
-            subscribe = SimpleNamespace(**(item.get("target_subscribe") or {}))
+        if not subscribe and (item.get("transient_target") or subscribe_id <= 0):
+            target_data = dict(item.get("target_subscribe") or {})
+            for attr in (
+                    "quality", "resolution", "effect", "include", "exclude",
+                    "audio_quality", "audio_format", "min_bitrate", "min_bit_depth",
+                    "min_sample_rate", "filter", "filter_groups", "sites", "custom_words",
+            ):
+                target_data.setdefault(attr, None)
+            target_data.setdefault("id", subscribe_id or -1)
+            target_data.setdefault("name", getattr(mediainfo, "title", "未命名媒体"))
+            target_data.setdefault("year", getattr(mediainfo, "year", None))
+            target_data.setdefault("season", item.get("season"))
+            subscribe = SimpleNamespace(**target_data)
+            subscribe.to_dict = lambda: dict(subscribe.__dict__)
         if not subscribe:
             raise RuntimeError("订阅已不存在，保留下载文件")
 
         task_files = getattr(self._cloud_query, "list_offline_task_files", None)
         if callable(task_files):
-            files = task_files(offline_task or {}, item.get("cloud_dir") or "/")
+            files = task_files(offline_task or {}, item.get("staging_dir") or item.get("cloud_dir") or "/")
         else:
-            path = str(item.get("cloud_dir") or "").strip()
+            path = str(item.get("staging_dir") or item.get("cloud_dir") or "").strip()
             if not path or path == "/":
                 raise RuntimeError("离线后处理没有专用目录，拒绝扫描整个网盘")
             files = self._cloud_query.list_files_recursive(path, max_depth=6)
@@ -2287,10 +2264,8 @@ class PostprocessService(OwnerDelegator):
         达到连续失败上限后返回 True，并将任务标记为死任务（finalize_dead），
         由后续监控扫描彻底移出队列并记录失败历史与通知，终止无限重试。
         """
-        task_type = str(item.get("task_type") or "share").strip().lower()
-        is_offline = task_type in {"ed2k", "magnet", "offline"}
-        threshold = max_failures if max_failures is not None else (
-            self._FINALIZE_MAX_FAILURES if is_offline else 2
+        threshold = (
+            max_failures if max_failures is not None else self._FINALIZE_MAX_FAILURES
         )
         fail_count = int(item.get("fail_count") or 0) + 1
         item["fail_count"] = fail_count

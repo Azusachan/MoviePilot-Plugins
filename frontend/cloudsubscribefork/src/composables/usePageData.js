@@ -219,6 +219,13 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribeFork")
     return result.message || "通知已补发";
   }
 
+  async function reconcileHistoryStatus() {
+    const result = await api.post(`plugin/${pluginId}/history/reconcile_status`, {});
+    if (!result?.success) throw new Error(result?.message || "状态校准失败");
+    await Promise.all([loadPage(false), loadSummary(false)]);
+    return result.message || "历史状态已校准";
+  }
+
   return {
     historyGroups,
     historyPage,
@@ -233,5 +240,6 @@ export function useHistoryPageData(api, notify, pluginId = "CloudSubscribeFork")
     deleteHistory,
     deleteHistoryBatch,
     notifyHistory,
+    reconcileHistoryStatus,
   }
 }
