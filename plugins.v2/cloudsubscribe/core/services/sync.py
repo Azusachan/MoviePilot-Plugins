@@ -885,7 +885,25 @@ class SyncExecutionService(OwnerDelegator):
                             self._sync_handler.append_history_records,
                             new_history_records,
                         )
-                    # 每个并行订阅组完成并持久化历史后立即入队，避免停止同步时
+                        pending_finalize_keys = {
+                            str(r.get("finalize_key") or "").strip()
+                            for r in new_history_records
+                            if str(r.get("finalize_key") or "").strip()
+                        }
+                        if pending_finalize_keys and self._sync_handler:
+                            try:
+                                if hasattr(self, "_run_offline_monitor"):
+                                    self._run_offline_monitor(
+                                        force=True, pending_keys=pending_finalize_keys
+                                    )
+                                else:
+                                    self._sync_handler.monitor_offline_strm_tasks(
+                                        force=True, pending_keys=pending_finalize_keys
+                                    )
+                            except Exception as finalize_err:
+                                logger.debug(
+                                    f"订阅组完成后执行文件后处理异常：{finalize_err}"
+                                )
                     # 只完成了前几个任务却因整批收尾未执行而漏发通知。
                     completed_details = result.get("transfer_details") or []
                     if completed_details:

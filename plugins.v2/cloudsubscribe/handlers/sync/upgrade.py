@@ -84,30 +84,38 @@ class UpgradeService(OwnerDelegator):
                 return transferred_count
 
             verified_baseline = {}
+            for episode, baseline_item in baseline.items():
+                item_data = dict(baseline_item or {})
+                cloud_file = cloud_episode_files.get(episode)
+                if cloud_file:
+                    cloud_name = str(getattr(cloud_file, "name", "") or "")
+                    cloud_size = int(getattr(cloud_file, "size", 0) or 0)
+                    if not int(item_data.get("file_size") or 0):
+                        item_data["file_size"] = cloud_size
+                        item_data["size_source"] = "真实网盘文件"
+                    item_data.update({
+                        "cloud_dir": cloud_dir,
+                        "target_file_name": cloud_name,
+                        "cloud_file_id": str(getattr(cloud_file, "id", "") or ""),
+                    })
+                verified_baseline[int(episode)] = item_data
             for episode, cloud_file in cloud_episode_files.items():
-                baseline_item = dict(baseline.get(episode) or {})
-                cloud_name = str(getattr(cloud_file, "name", "") or "")
-                cloud_size = int(getattr(cloud_file, "size", 0) or 0)
-                if not baseline_item:
+                if int(episode) not in verified_baseline:
+                    cloud_name = str(getattr(cloud_file, "name", "") or "")
+                    cloud_size = int(getattr(cloud_file, "size", 0) or 0)
                     score = self._get_mp_rule_score(
                         cloud_name, cloud_size, subscribe, season, mediainfo
                     )
-                    baseline_item = {
+                    verified_baseline[int(episode)] = {
                         "file_name": cloud_name,
                         "file_size": cloud_size,
                         "source": "真实网盘文件",
                         "score": score,
                         "rule_score": score,
+                        "cloud_dir": cloud_dir,
+                        "target_file_name": cloud_name,
+                        "cloud_file_id": str(getattr(cloud_file, "id", "") or ""),
                     }
-                elif not int(baseline_item.get("file_size") or 0):
-                    baseline_item["file_size"] = cloud_size
-                    baseline_item["size_source"] = "真实网盘文件"
-                baseline_item.update({
-                    "cloud_dir": cloud_dir,
-                    "target_file_name": cloud_name,
-                    "cloud_file_id": str(getattr(cloud_file, "id", "") or ""),
-                })
-                verified_baseline[int(episode)] = baseline_item
             baseline = verified_baseline
             if target_episodes is not None:
                 normalized_targets = {

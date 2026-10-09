@@ -57,6 +57,7 @@ from .subtitles import SubtitleService
 from .television import TelevisionSyncProcessor
 from .upgrade import UpgradeService
 from .utils import extract_ed2k_filename, format_episode_ranges
+from ...search.magnet import extract_magnet_hash
 from ..notification import MediaServerNotifier, MediaServerResolver
 from ..search import SearchHandler
 from ..subscription import SubscribeHandler
@@ -1301,78 +1302,76 @@ class SyncHandler:
         except Exception as error:
             logger.warning(f"批量元数据刮削失败：{error}")
 
-    def _offline_hash(self, share_url: str) -> str:
-        text = str(share_url or "").strip()
-        if not (self._is_magnet_url(text) or self._is_ed2k_url(text)):
+    @staticmethod
+    def _normalize_offline_key(key_or_url: str) -> str:
+        """将离线任务/资源链接规范化为全局唯一指纹键，确保黑名单与排重的准确性和唯一性。"""
+        text = str(key_or_url or "").strip()
+        if not text:
             return ""
-        match = re.search(r"\|([0-9A-Fa-f]{32})(?:\|[^|]*)*\|/$", text)
-        if match:
-            return match.group(1).upper()
-        if self._offline_download:
-            try:
-                magnet = self._offline_download.parse_magnet_link(text)
-                if (magnet or {}).get("hash"):
-                    return str(magnet.get("hash") or "").upper()
-            except Exception:
-                pass
-        return hashlib.sha1(text.encode("utf-8")).hexdigest().upper() if text else ""
+        # 1. 磁力链接：提取 xt 中的 info_hash，剔除动态 tracker/dn 参数变体，生成规范化唯一键
+        if text.lower().startswith("magnet:?"):
+            match = re.search(r"xt=urn:btih:([0-9a-fA-F]{40}|[2-7a-zA-Z]{32})", text, re.I)
+            if match:
+                return f"magnet:{match.group(1).upper()}"
+        # 2. ED2K 链接：提取 32 位文件哈希
+        match_ed2k = re.search(r"ed2k://\|file\|[^|]+\|(\d+)\|([0-9a-fA-F]{32})", text, re.I)
+        if match_ed2k:
+            return f"ed2k:{match_ed2k.group(2).upper()}"
+        # 3. 普通 URL：去除 query 参数与 fragment
+        if text.lower().startswith(("http://", "https://", "ftp://")):
+            return text.split("#")[0].strip().lower()
+        # 4. 其他原生任务 ID 或文本
+        return text.upper()
 
     def _resource_log_reference(self, share_url: str) -> str:
-        """Magnet 日志仅展示 infoHash，避免输出完整 Tracker 参数。"""
-        if self._is_magnet_url(share_url):
-            return f"infoHash={self._offline_hash(share_url) or '未知'}"
-        return str(share_url or "")
+        """格式化资源引用日志，输出规范化唯一键，避免输出过长 Tracker 参数。"""
+        url = str(share_url or "").strip()
+        norm = self._normalize_offline_key(url)
+        return norm or (url.split("&")[0] if self._is_magnet_url(url) else url)
 
     def _add_offline_blacklist(self, key_or_url: str, reason: str = "") -> None:
-        """将失败或超时的离线任务/资源加入黑名单（1天TTL）。"""
+        """将失败或超时的离线任务/资源以规范化唯一键加入黑名单（1天TTL）。"""
         if not key_or_url or not hasattr(self, "_offline_blacklist"):
             return
-        keys = set()
-        text = str(key_or_url).strip()
-        if text:
-            keys.add(text)
-        info_hash = self._offline_hash(text) if hasattr(self, "_offline_hash") else ""
-        if info_hash:
-            keys.add(info_hash.upper())
+        norm_key = self._normalize_offline_key(key_or_url)
+        if not norm_key:
+            return
+        raw_key = str(key_or_url).strip()
         now = time.time()
-        for k in keys:
+        for k in {norm_key, raw_key}:
             if k:
-                self._offline_blacklist[k] = {
-                    "reason": reason,
-                    "time": now,
-                }
-        logger.info(f"🚫 离线资源已加入黑名单（1天过期）：{info_hash or text}，原因：{reason}")
+                self._offline_blacklist[k] = {"reason": reason, "time": now}
+        logger.info(f"🚫 离线资源已加入黑名单（1天过期）：{norm_key}，原因：{reason}")
 
     def _remove_offline_blacklist(self, key_or_url: str) -> None:
         """从黑名单中移除指定的离线任务。"""
         if not key_or_url or not hasattr(self, "_offline_blacklist"):
             return
-        keys = [str(key_or_url).strip()]
-        info_hash = self._offline_hash(key_or_url) if hasattr(self, "_offline_hash") else ""
-        if info_hash:
-            keys.append(info_hash.upper())
-        for k in keys:
-            if k and k in self._offline_blacklist:
-                try:
-                    del self._offline_blacklist[k]
-                except Exception:
-                    pass
+        norm_key = self._normalize_offline_key(key_or_url)
+        raw_key = str(key_or_url).strip()
+        for k in (norm_key, raw_key):
+            if k:
+                self._offline_blacklist.pop(k, None)
 
     def _is_offline_blacklisted(self, resource: Optional[Dict[str, Any]] = None, share_url: str = "") -> bool:
-        """检查离线资源是否在黑名单中。"""
+        """按规范化唯一键检查离线资源是否在黑名单中，彻底杜绝参数变体漏判。"""
         if not hasattr(self, "_offline_blacklist"):
             return False
-        url = share_url or (str((resource or {}).get("url") or (resource or {}).get("link") or "") if resource else "")
-        info_hash = self._offline_hash(url) if (url and hasattr(self, "_offline_hash")) else ""
-        if info_hash and info_hash in self._offline_blacklist:
-            return True
-        if url and url in self._offline_blacklist:
-            return True
+        # 1. 检查 share_url
+        if share_url:
+            norm_key = self._normalize_offline_key(share_url)
+            if norm_key in self._offline_blacklist or str(share_url).strip() in self._offline_blacklist:
+                return True
+        # 2. 检查 resource 中的链接与任务 ID
         if resource:
-            res_hash = str(
-                resource.get("info_hash") or resource.get("hash") or (resource.get("magnet_metadata") or {}).get(
-                    "hash") or "").upper()
-            if res_hash and res_hash in self._offline_blacklist:
+            for k in ("url", "link", "share_url"):
+                val = str(resource.get(k) or "").strip()
+                if val:
+                    norm_key = self._normalize_offline_key(val)
+                    if norm_key in self._offline_blacklist or val in self._offline_blacklist:
+                        return True
+            task_id = str(resource.get("task_id") or "").strip()
+            if task_id and (task_id in self._offline_blacklist or task_id.upper() in self._offline_blacklist):
                 return True
         return False
 
@@ -1486,7 +1485,6 @@ class SyncHandler:
             submit_queue: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """提交离线下载（Magnet/ED2K/直链离线等）到隔离目录；下载完成后再按真实文件树匹配。"""
-        info_hash = self._offline_hash(share_url)
         magnet_title = self._prepare_magnet_resource(resource, share_url)
         metadata = resource.get("magnet_metadata") or {}
         title_seasons = self._magnet_title_seasons(resource)
@@ -1494,14 +1492,14 @@ class SyncHandler:
             logger.debug(
                 "离线资源标题预过滤排除，未请求远端内容元数据："
                 f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
-                f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
+                f"目标季数=S{int(season):02d}，标题={magnet_title or share_url}"
             )
             return ""
         if season is None and title_seasons:
             logger.debug(
                 "电影离线资源包含剧集季数，预过滤排除："
                 f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
-                f"标题={magnet_title or info_hash}"
+                f"标题={magnet_title or share_url}"
             )
             return ""
         title_episodes = self._magnet_title_episodes(
@@ -1511,7 +1509,7 @@ class SyncHandler:
             logger.debug(
                 "电影离线资源包含剧集集数，预过滤排除："
                 f"标题集数={self._format_episode_ranges(title_episodes)}，"
-                f"标题={magnet_title or info_hash}"
+                f"标题={magnet_title or share_url}"
             )
             return ""
         preview_episodes = (
@@ -1528,7 +1526,7 @@ class SyncHandler:
                     "离线资源标题预过滤排除，未请求远端内容元数据："
                     f"标题集数={self._format_episode_ranges(title_episodes)}，"
                     f"目标集数={self._format_episode_ranges(target_episode_set)}，"
-                    f"标题={magnet_title or info_hash}"
+                    f"标题={magnet_title or share_url}"
                 )
                 return ""
             target_episodes[:] = sorted(confirmed_targets)
@@ -1536,7 +1534,7 @@ class SyncHandler:
                 "离线资源标题预过滤命中，跳过远端内容元数据获取："
                 f"标题集数={self._format_episode_ranges(title_episodes)}，"
                 f"目标集数={self._format_episode_ranges(target_episode_set)}，"
-                f"标题={magnet_title or info_hash}"
+                f"标题={magnet_title or share_url}"
             )
         if (
                 self._is_magnet_url(share_url)
@@ -1547,12 +1545,12 @@ class SyncHandler:
             if season is not None:
                 logger.debug(
                     "Magnet 标题未识别明确集数，开始获取远端内容元数据："
-                    f"{magnet_title or info_hash}"
+                    f"{magnet_title or share_url}"
                 )
             else:
                 logger.debug(
                     "Magnet 开始获取远端内容元数据："
-                    f"{magnet_title or info_hash}"
+                    f"{magnet_title or share_url}"
                 )
             magnet_info = self._offline_download.parse_magnet_link(
                 share_url, fetch_metadata=True
@@ -1577,14 +1575,14 @@ class SyncHandler:
                     logger.debug(
                         "Magnet 远端内容元数据季数不匹配，已跳过："
                         f"内容季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
-                        f"目标季数=S{int(season):02d}，标题={magnet_title or info_hash}"
+                        f"目标季数=S{int(season):02d}，标题={magnet_title or share_url}"
                     )
                     return ""
                 if season is None and title_seasons:
                     logger.debug(
                         "Magnet 远端内容元数据包含剧集季数，与电影订阅不匹配，已跳过："
                         f"内容季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
-                        f"标题={magnet_title or info_hash}"
+                        f"标题={magnet_title or share_url}"
                     )
                     return ""
                 title_episodes = self._magnet_title_episodes(
@@ -1600,7 +1598,7 @@ class SyncHandler:
                 )
                 )
         if (
-                not info_hash
+                not share_url
                 or not self._get_data
                 or (
                 self._is_magnet_url(share_url)
@@ -1613,7 +1611,7 @@ class SyncHandler:
         ):
             logger.debug(
                 "离线资源标题和元数据均未提供可确认内容，已跳过："
-                f"{magnet_title or info_hash}"
+                f"{magnet_title or share_url}"
             )
             return ""
         if season is not None and target_episodes and preview_episodes:
@@ -1626,13 +1624,14 @@ class SyncHandler:
                     "离线资源内容确认未覆盖目标集数，已跳过网盘离线下载候选："
                     f"内容集数={self._format_episode_ranges(preview_episodes)}，"
                     f"目标集数={self._format_episode_ranges(target_episode_set)}，"
-                    f"标题={magnet_title or info_hash}"
+                    f"标题={magnet_title or share_url}"
                 )
                 return ""
             target_episodes[:] = sorted(confirmed_targets)
         subscribe_id = int(getattr(subscribe, "id", 0) or 0)
-        prefix = "magnet" if self._is_magnet_url(share_url) else "ed2k"
-        pending_key = f"{prefix}:{info_hash}:{subscribe_id}"
+        prefix = "magnet" if self._is_magnet_url(share_url) else "ed2k" if self._is_ed2k_url(share_url) else "offline"
+        token = extract_magnet_hash(share_url) or hashlib.sha1(share_url.encode("utf-8")).hexdigest()[:16].upper()
+        pending_key = f"{prefix}:{token}:{subscribe_id}"
         staging_dir = f"{self._cloud_transfer_path.rstrip('/')}"
 
         with self._offline_pending_lock:
@@ -1673,7 +1672,6 @@ class SyncHandler:
         submit_context = {
             "pending_key": pending_key,
             "prefix": prefix,
-            "info_hash": info_hash,
             "share_url": share_url,
             "staging_dir": staging_dir,
             "resource": resource,
@@ -1698,7 +1696,6 @@ class SyncHandler:
         """将已由网盘接受的离线任务从提交占位转为正式待下载记录。"""
         pending_key = str(context["pending_key"])
         prefix = str(context["prefix"])
-        info_hash = str(context["info_hash"])
         share_url = str(context["share_url"])
         staging_dir = str(context["staging_dir"])
         resource = context["resource"]
@@ -1719,7 +1716,7 @@ class SyncHandler:
         display_name = str(
             ed2k_file_name
             or (resource.get("magnet_metadata") or {}).get("display_name")
-            or resource.get("title") or info_hash
+            or resource.get("title") or Path(share_url).name or pending_key
         )
         target_dir = ""
         target_name = ""
@@ -1749,7 +1746,7 @@ class SyncHandler:
             pending[pending_key] = {
                 "pending_key": pending_key,
                 "task_type": prefix,
-                "task_id": info_hash,
+                "task_id": str(context.get("task_id") or "").strip() or pending_key,
                 "share_url": share_url,
                 "staging_dir": staging_dir,
                 "cloud_dir": target_dir or staging_dir,
@@ -1801,51 +1798,32 @@ class SyncHandler:
     def _submit_offline_packages(
             self, contexts: List[Dict[str, Any]]
     ) -> set[str]:
-        """同目录任务优先一次批量提交，并逐项完成或回滚占位记录。"""
+        """统一提交网盘离线任务，逐项完成或回滚占位记录。"""
         contexts = [item for item in contexts if item.get("pending_key")]
         if not contexts:
             return set()
-        successful_hashes: set[str] = set()
-        batch_submit = getattr(
-            self._offline_download, "add_offline_downloads_batch", None
-        )
-        same_directory = len({str(item["staging_dir"]) for item in contexts}) == 1
-        if callable(batch_submit) and same_directory and len(contexts) > 1:
-            try:
-                success_values, _ = batch_submit(
-                    [
-                        {"url": item["share_url"]}
-                        for item in contexts
-                    ],
-                    save_path=str(contexts[0]["staging_dir"]),
-                    batch_size=min(20, len(contexts)),
-                )
-                successful_hashes = {
-                    re.sub(r"[^0-9A-Fa-f]", "", str(value or "")).upper()
-                    for value in success_values
-                }
-            except Exception as error:
-                logger.error(f"批量提交网盘离线下载接口异常：{error}")
-        else:
-            for item in contexts:
-                try:
-                    if self._offline_download.add_offline_download(
-                            item["share_url"], item["staging_dir"]
-                    ):
-                        successful_hashes.add(str(item["info_hash"]).upper())
-                except Exception as error:
-                    logger.error(f"提交网盘离线下载接口异常：{error}")
-
         successful_keys: set[str] = set()
-        for item in contexts:
-            normalized_hash = re.sub(
-                r"[^0-9A-Fa-f]", "", str(item.get("info_hash") or "")
-            ).upper()
-            if normalized_hash in successful_hashes:
-                self._complete_offline_submission(item)
-                successful_keys.add(str(item["pending_key"]))
-            else:
+
+        for index, item in enumerate(contexts):
+            if index > 0:
+                time.sleep(1.5)
+            try:
+                res = self._offline_download.add_offline_download(
+                    item["share_url"],
+                    item["staging_dir"],
+                    target_name=item.get("file_name"),
+                )
+                if res:
+                    if isinstance(res, str) and res.lower() != "true":
+                        item["task_id"] = res
+                    self._complete_offline_submission(item)
+                    successful_keys.add(str(item["pending_key"]))
+                else:
+                    self._rollback_offline_submission(item)
+            except Exception as error:
+                logger.error(f"提交网盘离线下载接口异常：{error}")
                 self._rollback_offline_submission(item)
+
         return successful_keys
 
     @staticmethod
@@ -1902,6 +1880,22 @@ class SyncHandler:
             )).encode("utf-8")
         ).hexdigest().upper()
         return source_hash, identity
+
+    @staticmethod
+    def _offline_hash(share_url: str) -> str:
+        """从磁力或 ed2k 链接中提取特征 hash，非离线链接返回空字符串。"""
+        if not share_url:
+            return ""
+        url = str(share_url).strip()
+        lower = url.lower()
+        if lower.startswith("magnet:") or "xt=urn:btih:" in lower:
+            return (extract_magnet_hash(url) or "").upper()
+        if lower.startswith("ed2k://"):
+            parts = url.split("|")
+            if len(parts) >= 5 and parts[1].lower() == "file" and parts[4]:
+                return parts[4].upper()
+            return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16].upper()
+        return ""
 
     def _pending_identity(
             self,
@@ -2332,7 +2326,9 @@ class SyncHandler:
         organize_enabled = getattr(self, "_organize_after_transfer", True)
         for item in items:
             result_key = str(item["result_key"])
-            if not organize_enabled or item.get("staging_dir"):
+            staging_dir = str(item.get("staging_dir") or "").rstrip("/")
+            cloud_dir = str(item.get("cloud_dir") or "").rstrip("/")
+            if not organize_enabled or (staging_dir and staging_dir != cloud_dir):
                 queued_items.append(item)
                 continue
             cloud_dir = item["cloud_dir"]
@@ -2517,7 +2513,6 @@ class SyncHandler:
     @staticmethod
     def _format_episode_ranges(episodes: Set[int]) -> str:
         return format_episode_ranges(episodes)
-
 
     @staticmethod
     def _normalize_cloud_path(path: str) -> str:
@@ -2786,8 +2781,6 @@ class SyncHandler:
             "missing": sorted(expected - verified),
             "updated": bool(update_data),
         }
-
-
 
     def guardian_check(self, all_subs) -> int:
         """

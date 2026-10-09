@@ -800,10 +800,8 @@ class P115FileService(OwnerDelegator):
             if fid != file_id and cid != file_id:
                 continue
             name = str(raw_dict.get("name") or raw_dict.get("n") or "").strip()
-            is_dir = bool(
-                raw_dict.get("is_dir")
-                or (str(raw_dict.get("fid") or "0") == "0" and raw_dict.get("cid"))
-            )
+            normalized = cloud_file(raw_dict)
+            is_dir = bool(normalized and normalized.is_directory)
             raw_dict["is_dir"] = is_dir
             if is_dir:
                 dir_id = raw_dict.get("cid") or raw_dict.get("id")

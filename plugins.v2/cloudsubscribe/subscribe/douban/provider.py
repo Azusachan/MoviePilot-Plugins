@@ -51,6 +51,14 @@ class DoubanSubscribeProvider(SubscribeProvider):
         limit = int(options.get("limit") or 30)
         scan_limit = ranking_scan_limit(options)
         limit_type = str(options.get("media_type") or "").strip().lower()
+        raw_types = options.get("media_types")
+        if raw_types:
+            if isinstance(raw_types, (list, tuple, set)):
+                selected_types = {str(t).strip().lower() for t in raw_types if str(t).strip()}
+            else:
+                selected_types = {str(raw_types).strip().lower()}
+        else:
+            selected_types = set()
 
         logger.info(f"开始抓取豆瓣榜单：选中榜单={ranks}")
         seen_keys: set[str] = set()
@@ -117,7 +125,12 @@ class DoubanSubscribeProvider(SubscribeProvider):
                     tv_types.add(str(getattr(MediaType.TV, "value", "")).lower())
 
                 mtype = "movie" if raw_type in movie_types else "tv" if raw_type in tv_types else default_type
-                if limit_type and limit_type not in ("all", "全部", "any") and limit_type != mtype:
+                if selected_types and "all" not in selected_types:
+                    if mtype == "movie" and not ({"movie", "anime_movie"} & selected_types):
+                        continue
+                    if mtype == "tv" and not ({"tv", "anime_tv"} & selected_types):
+                        continue
+                elif limit_type and limit_type not in ("all", "全部", "any") and limit_type != mtype:
                     continue
 
                 year = str(data.get("year") or "").strip()

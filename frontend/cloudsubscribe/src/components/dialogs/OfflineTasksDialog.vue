@@ -165,11 +165,19 @@
     </v-card>
   </v-dialog>
 
-  <v-dialog v-model="confirmVisible" max-width="420" persistent>
+  <v-dialog v-model="confirmVisible" max-width="440" persistent>
     <v-card>
       <v-card-title class="text-subtitle-1">删除离线任务</v-card-title>
       <v-card-text>
-        {{ deleteConfirmText }}
+        <div>{{ deleteConfirmText }}</div>
+        <v-checkbox
+          v-model="deleteSourceFile"
+          color="error"
+          density="compact"
+          hide-details
+          class="mt-2"
+          label="同时删除网盘原文件"
+        />
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -202,6 +210,7 @@ const selectedKeys = ref([]);
 const retrying = ref(false);
 const retryingKey = ref("");
 const batchDeleting = ref(false);
+const deleteSourceFile = ref(false);
 let refreshTimer = null;
 let loadRequest = null;
 
@@ -229,10 +238,10 @@ const quotaPercent = computed(() =>
 )
 const deleteConfirmText = computed(() =>
   batchDeleting.value
-    ? `确认删除所选 ${selectedKeys.value.length} 个任务？已下载文件会保留。`
+    ? `确认删除所选 ${selectedKeys.value.length} 个任务？已下载文件默认会保留。`
     : `确认删除${
         pendingTask.value?.finalize_pending ? "后处理任务" : "离线任务"
-    }“${pendingTask.value?.name || "未命名任务"}”？已下载文件会保留。`,
+    }“${pendingTask.value?.name || "未命名任务"}”？已下载文件默认会保留。`,
 )
 
 function unwrapResponse(raw) {
@@ -392,6 +401,7 @@ function toggleSelectAll() {
 function askDelete(task) {
   batchDeleting.value = false;
   pendingTask.value = task;
+  deleteSourceFile.value = false;
   confirmVisible.value = true;
 }
 
@@ -399,6 +409,7 @@ function askDeleteSelected() {
   if (!selectedKeys.value.length) return;
   batchDeleting.value = true;
   pendingTask.value = null;
+  deleteSourceFile.value = false;
   confirmVisible.value = true;
 }
 
@@ -412,10 +423,12 @@ async function deleteTask() {
         ? await props.api.post(`plugin/${pluginId}/offline/delete_batch`, {
           task_ids: selectedHashes.value,
           pending_keys: selectedPendingKeys.value,
+          delete_source_file: deleteSourceFile.value,
         })
         : await props.api.post(`plugin/${pluginId}/offline/delete`, {
           task_id: pendingTask.value.id,
           pending_key: pendingTask.value.pending_key,
+          delete_source_file: deleteSourceFile.value,
         }),
     )
     if (response.success === false) {

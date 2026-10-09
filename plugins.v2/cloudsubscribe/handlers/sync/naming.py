@@ -139,7 +139,10 @@ class SyncNamingService(OwnerDelegator):
         if season is not None:
             meta.begin_season = season
         if episode is not None:
-            meta.begin_episode = episode
+            if hasattr(meta, "set_episode"):
+                meta.set_episode(episode)
+            else:
+                meta.begin_episode = episode
         relative_name = FileManagerModule.recommend_name(meta, effective_media)
         if not relative_name:
             clean_title = effective_media.title or getattr(subscribe, "name", "") or "Unknown"

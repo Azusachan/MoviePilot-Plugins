@@ -165,7 +165,30 @@ class GuangyaFileService(CloudDriveFileServiceBase):
         data = self.client.data(response)
         return cloud_file(data)
 
-    def rename_file(self, path: str, item: CloudFile, target_name: str) -> bool:
+    @staticmethod
+    def _ensure_cloud_file(item: Any) -> CloudFile:
+        if isinstance(item, CloudFile):
+            return item
+        if isinstance(item, dict):
+            return CloudFile(
+                id=str(item.get("id") or item.get("file_id") or ""),
+                name=str(item.get("name") or item.get("file_name") or ""),
+                size=int(item.get("size") or 0),
+                is_directory=bool(item.get("is_directory") or item.get("is_dir")),
+                playback_values=dict(item.get("playback_values") or {}),
+                native=item.get("native") or item,
+            )
+        return CloudFile(
+            id=str(getattr(item, "id", "")),
+            name=str(getattr(item, "name", "")),
+            size=int(getattr(item, "size", 0) or 0),
+            is_directory=bool(getattr(item, "is_directory", False)),
+            playback_values=dict(getattr(item, "playback_values", None) or {}),
+            native=getattr(item, "native", None),
+        )
+
+    def rename_file(self, path: str, item: Any, target_name: str) -> bool:
+        item = self._ensure_cloud_file(item)
         response = self.client.request(
             "POST",
             f"{self.client.API_BASE_URL}/userres/v1/file/rename",
@@ -179,8 +202,9 @@ class GuangyaFileService(CloudDriveFileServiceBase):
         return success
 
     def move_file(
-            self, item: CloudFile, save_path: str, target_name: str
+            self, item: Any, save_path: str, target_name: str
     ) -> Optional[CloudFile]:
+        item = self._ensure_cloud_file(item)
         lookup = self.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             return None
@@ -194,11 +218,24 @@ class GuangyaFileService(CloudDriveFileServiceBase):
         self._invalidate_directory_cache()
         if item.is_directory:
             self._invalidate_path_cache()
+        final_name = target_name or item.name
         if target_name and target_name != item.name:
             if not self.rename_file(save_path, item, target_name):
                 logger.warning(f"光鸭文件移入目录后重命名失败，保留原名：{item.name} -> {target_name}")
-                return self.find_file(save_path, item.name)
-        return self.find_file(save_path, target_name or item.name)
+                final_name = item.name
+            else:
+                final_name = target_name
+        found = self.find_file(save_path, final_name)
+        if found:
+            return found
+        return CloudFile(
+            id=item.id,
+            name=final_name,
+            size=item.size,
+            is_directory=item.is_directory,
+            playback_values=dict(item.playback_values or {}),
+            native=item.native,
+        )
 
     def delete_file(self, file_id: str) -> bool:
         response = self.client.request(

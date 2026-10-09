@@ -710,6 +710,20 @@ class SyncRuntimeService(OwnerDelegator):
                 )
                 if pending_count and not stopped:
                     self._refresh_postprocessing_sync_tasks()
+                    pending_keys = {
+                        str(item.get("pending_key") or "").strip()
+                        for item in pending_items
+                        if str(item.get("pending_key") or "").strip()
+                    }
+                    if pending_keys and self._sync_handler:
+                        try:
+                            self._sync_handler.monitor_offline_strm_tasks(
+                                force=True, pending_keys=pending_keys
+                            )
+                        except Exception as finalize_err:
+                            logger.debug(
+                                f"单订阅完成后执行文件后处理异常：{finalize_err}"
+                            )
             except Exception as error:
                 logger.error(f"订阅 {getattr(subscribe, 'name', '')} 处理异常：{error}")
                 self._update_sync_task(
@@ -1189,7 +1203,11 @@ class SyncRuntimeService(OwnerDelegator):
                 "failed": 0,
                 "pending": 0,
             }
-        if not self._offline_monitor_lock.acquire(blocking=False):
+        force = bool(kwargs.get("force"))
+        lock_acquired = self._offline_monitor_lock.acquire(
+            blocking=force, timeout=10.0 if force else -1
+        )
+        if not lock_acquired:
             pending_count = len(sync_handler.get_pending_finalize_tasks())
             logger.debug(
                 f"已有网盘文件后处理正在执行，本轮检查跳过"
@@ -1347,7 +1365,7 @@ class SyncRuntimeService(OwnerDelegator):
         }
 
     def api_delete_offline_task(
-            self, apikey: str, task_id: str, pending_key: str = ""
+            self, apikey: str, task_id: str, pending_key: str = "", delete_source_file: bool = False
     ) -> dict:
         if apikey != settings.API_TOKEN:
             return {"success": False, "message": "API密钥错误"}
@@ -1367,7 +1385,7 @@ class SyncRuntimeService(OwnerDelegator):
             if normalized_id:
                 try:
                     offline_tasks.delete_offline_task(
-                        normalized_id, delete_source_file=False
+                        normalized_id, delete_source_file=delete_source_file
                     )
                 except Exception:
                     if not removed_pending:
@@ -1384,12 +1402,13 @@ class SyncRuntimeService(OwnerDelegator):
                     # 删除接口成功已经确认该任务不存在，无需再请求一次任务列表。
                     offline_tasks_valid=True,
                 )
+            file_msg = "已删除网盘原文件" if delete_source_file else "已下载文件保留"
             if normalized_id and removed_pending:
-                message = "离线任务和后处理任务已删除，已下载文件保留"
+                message = f"离线任务和后处理任务已删除，{file_msg}"
             elif normalized_id:
-                message = "离线任务已删除，已下载文件保留"
+                message = f"离线任务已删除，{file_msg}"
             else:
-                message = "后处理任务已删除，已下载文件保留"
+                message = f"后处理任务已删除，{file_msg}"
             if monitor_result and monitor_result.get("failed"):
                 message += "；目标文件不存在，下载历史已结束"
             elif monitor_result and monitor_result.get("completed"):
@@ -1411,6 +1430,7 @@ class SyncRuntimeService(OwnerDelegator):
             apikey: str,
             task_ids: List[str],
             pending_keys: Optional[List[str]] = None,
+            delete_source_file: bool = False,
     ) -> dict:
         if apikey != settings.API_TOKEN:
             return {"success": False, "message": "API密钥错误"}
@@ -1434,7 +1454,7 @@ class SyncRuntimeService(OwnerDelegator):
                 )
             try:
                 count = offline_tasks.delete_offline_tasks(
-                    task_ids, delete_source_file=False
+                    task_ids, delete_source_file=delete_source_file
                 ) if task_ids else 0
             except Exception:
                 if not removed_pending:
@@ -1457,7 +1477,7 @@ class SyncRuntimeService(OwnerDelegator):
                 "message": (
                         f"已删除 {count} 个离线任务"
                         + (f"、{removed_pending} 个后处理任务" if removed_pending else "")
-                        + "，已下载文件保留"
+                        + (f"，已删除网盘原文件" if delete_source_file else "，已下载文件保留")
                 ),
                 "data": {
                     "deleted": count,

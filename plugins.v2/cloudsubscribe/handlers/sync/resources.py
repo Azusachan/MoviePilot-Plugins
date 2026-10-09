@@ -8,6 +8,7 @@ from urllib.parse import unquote, urlsplit
 
 from app.log import logger
 
+from .utils import extract_ed2k_filename
 from ...core import (
     CloudDriveCapability,
     CloudDriveProvider,
@@ -468,6 +469,20 @@ class ResourceTransferService(OwnerDelegator):
             result["source_url"] = source_url
         return result
 
+    @staticmethod
+    def _extract_url_filename(url: str) -> str:
+        if not url:
+            return ""
+        ed2k_name = extract_ed2k_filename(url)
+        if ed2k_name:
+            return ed2k_name
+        text = str(url).strip()
+        if text.lower().startswith("magnet:"):
+            match = re.search(r"[?&]dn=([^&]+)", text)
+            if match:
+                return unquote(match.group(1)).strip()
+        return ""
+
     def _expand_resource_urls(
             self,
             resources: List[Dict[str, Any]],
@@ -498,12 +513,31 @@ class ResourceTransferService(OwnerDelegator):
         resource["url"] = urls[0]
         resource["need_unlock"] = False
         resource["need_access"] = False
+        file_list = [str(f).strip() for f in (resource.get("file_list") or []) if str(f or "").strip()]
+        first_name = (
+            file_list[0]
+            if file_list and len(file_list) > 0
+            else self._extract_url_filename(urls[0])
+        )
+        if first_name:
+            resource["title"] = first_name
+            resource["file_name"] = first_name
+            resource["file_list"] = [first_name]
         if len(urls) > 1:
             expanded = []
-            for url in urls[1:]:
+            for i, url in enumerate(urls[1:], 1):
                 item = copy.deepcopy(resource)
                 item["url"] = url
                 item["unlock_points"] = 0
+                name = (
+                    file_list[i]
+                    if file_list and i < len(file_list)
+                    else self._extract_url_filename(url)
+                )
+                if name:
+                    item["title"] = name
+                    item["file_name"] = name
+                    item["file_list"] = [name]
                 expanded.append(item)
             resources[resource_index + 1:resource_index + 1] = expanded
             source_name = str(resource.get("source") or "资源源").upper()

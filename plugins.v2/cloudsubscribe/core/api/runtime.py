@@ -77,6 +77,7 @@ class RuntimeApi(OwnerDelegator):
             settings.API_TOKEN,
             str((payload or {}).get("task_id") or ""),
             str((payload or {}).get("pending_key") or ""),
+            delete_source_file=bool((payload or {}).get("delete_source_file", False)),
         )
 
     def api_vue_delete_offline_tasks(self, payload: Dict[str, Any]) -> dict:
@@ -91,7 +92,10 @@ class RuntimeApi(OwnerDelegator):
             if str(value).strip()
         ]
         return self.api_delete_offline_tasks(
-            settings.API_TOKEN, task_ids, pending_keys
+            settings.API_TOKEN,
+            task_ids,
+            pending_keys,
+            delete_source_file=bool((payload or {}).get("delete_source_file", False)),
         )
 
     def api_vue_retry_offline_tasks(self, payload: Dict[str, Any]) -> dict:

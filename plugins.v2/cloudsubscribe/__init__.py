@@ -100,7 +100,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.6"
+    plugin_version = "1.6.7"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -114,8 +114,7 @@ class CloudSubscribe(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
     _offline_scheduler: Optional[BackgroundScheduler] = None
     _offline_scheduler_lock: RLock = RLock()
-    _offline_monitor_lock: Lock = Lock()
-
+    _offline_monitor_lock: RLock = RLock()
     # 配置属性
     _enabled: bool = False
     _show_sidebar_nav: bool = True
@@ -404,6 +403,8 @@ class CloudSubscribe(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         """宿主加载或重载插件时初始化完整运行环境。"""
+        self._offline_monitor_lock = RLock()
+        self._offline_scheduler_lock = RLock()
         # 初始化独立数据库并修复历史分组键。
         self._get_data_store().initialize()
         self._apply_plugin_config(config, reset_runtime=True)

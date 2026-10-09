@@ -287,8 +287,6 @@ class HistoryService(OwnerDelegator):
     def _is_workflow_history(cls, record: Dict[str, Any]) -> bool:
         return bool(cls._history_task_types(record))
 
-
-
     def append_history_records(
             self,
             records: List[Dict[str, Any]],
@@ -486,7 +484,6 @@ class HistoryService(OwnerDelegator):
                     f"跨盘/洗版历史已合并：{len(history)} 条 -> {len(compacted)} 条"
                 )
             return compacted
-
 
     def _history_page_fields(self, record: Dict[str, Any]) -> Dict[str, str]:
         """生成历史页面所需的稳定标识、名称和可点击链接。"""
@@ -1291,11 +1288,14 @@ class HistoryService(OwnerDelegator):
             "episode_group": media.get("episode_group"),
             "_transient_target": True,
             "_manual_upgrade": bool(manual_upgrade),
-            "_target_episodes": set(selected_episodes),
+            "_target_episodes": list(selected_episodes),
             "_manual_media_baseline": dict(manual_baseline or {}),
         })
         target = SimpleNamespace(**target_data)
-        target.to_dict = lambda: dict(target.__dict__)
+        target.to_dict = lambda: {
+            k: list(v) if isinstance(v, (set, frozenset)) else v
+            for k, v in target.__dict__.items()
+        }
         return target
 
     def _history_upgrade_records(

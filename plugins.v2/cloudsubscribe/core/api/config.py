@@ -279,35 +279,23 @@ class ConfigApi(OwnerDelegator):
         payload["auto_subscribe_mikan_base_urls"] = normalized_mikan_urls
         raw_global_types = payload.get("auto_subscribe_media_types")
         if raw_global_types is None:
-            raw_global_types = payload.get("auto_subscribe_media_type") or ["movie", "tv"]
+            raw_global_types = payload.get("auto_subscribe_media_type")
         if isinstance(raw_global_types, str):
             types_list = [t.strip().lower() for t in raw_global_types.split(",") if t.strip()]
         elif isinstance(raw_global_types, (list, tuple, set)):
             types_list = [str(t).strip().lower() for t in raw_global_types if str(t).strip()]
         else:
-            types_list = ["movie", "tv"]
-        normalized_types = [t for t in types_list if t in {"movie", "tv", "all"}]
+            types_list = ["all"]
+        valid_choices = {"all", "movie", "tv", "anime_movie", "anime_tv"}
+        normalized_types = [t for t in dict.fromkeys(types_list) if t in valid_choices]
         if not normalized_types or "all" in normalized_types:
-            normalized_types = ["movie", "tv"]
+            normalized_types = ["all"]
         payload["auto_subscribe_media_types"] = normalized_types
-        payload["auto_subscribe_media_type"] = (
-            "all" if set(normalized_types) >= {"movie", "tv"}
-            else (normalized_types[0] if normalized_types else "all")
-        )
 
+        # 清理多余的历史单选字段，避免遗留配置污染
+        payload.pop("auto_subscribe_media_type", None)
         for provider_id in ("douban", "maoyan", "tmdb", "netflix"):
-            media_type_key = f"auto_subscribe_{provider_id}_media_type"
-            val = payload.get(media_type_key)
-            if val is not None:
-                if isinstance(val, (list, tuple, set)):
-                    s = {str(x).strip().lower() for x in val if str(x).strip()}
-                    m_type = "all" if s >= {"movie", "tv"} or "all" in s else (
-                        "movie" if "movie" in s else ("tv" if "tv" in s else "all"))
-                else:
-                    m_type = str(val).strip().lower()
-                    if m_type not in {"all", "movie", "tv"}:
-                        m_type = payload["auto_subscribe_media_type"]
-                payload[media_type_key] = m_type
+            payload.pop(f"auto_subscribe_{provider_id}_media_type", None)
         maoyan_map = payload.get("auto_subscribe_maoyan_web_platform_map", {})
         if not isinstance(maoyan_map, dict):
             return "猫眼平台与类型配置格式错误"

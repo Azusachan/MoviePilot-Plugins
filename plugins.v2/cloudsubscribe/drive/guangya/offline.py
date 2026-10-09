@@ -78,6 +78,7 @@ class GuangyaOfflineService:
             page_size: int = 100,
             status: Optional[List[int]] = None,
             task_ids: Optional[Sequence[str]] = None,
+            cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """查询光鸭离线任务列表或指定任务详情。"""
         json_data: Dict[str, Any] = {}
@@ -85,7 +86,9 @@ class GuangyaOfflineService:
             json_data["taskIds"] = [str(x).strip() for x in task_ids if str(x).strip()]
         else:
             json_data["pageSize"] = max(1, int(page_size or 100))
-            json_data["status"] = status if status is not None else [0, 1, 2, 3, 4, 5]
+            json_data["cursor"] = str(cursor or "")
+            if status is not None:
+                json_data["status"] = status
             if page > 0:
                 json_data["page"] = page
         return self.client.request(
@@ -211,11 +214,22 @@ class GuangyaOfflineService:
                 return [dict(t) for t in self._tasks]
 
         try:
-            response = self.cloud_task_list(page_size=100, status=[0, 1, 2, 3, 4, 5])
-            if not self.client.is_success(response):
-                raise RuntimeError(response.get("msg") or response.get("message") or "读取光鸭离线任务失败")
-            raw_list = (response.get("data") or {}).get("list") or []
-            tasks = [self._format_task(item) for item in raw_list if isinstance(item, dict)]
+            tasks: List[Dict[str, Any]] = []
+            cursor = ""
+            for _ in range(3):
+                response = self.cloud_task_list(page_size=100, cursor=cursor)
+                if not self.client.is_success(response):
+                    if not tasks:
+                        raise RuntimeError(response.get("msg") or response.get("message") or "读取光鸭离线任务失败")
+                    break
+                data = response.get("data") or {}
+                raw_list = data.get("list") or []
+                for item in raw_list:
+                    if isinstance(item, dict):
+                        tasks.append(self._format_task(item))
+                cursor = str(data.get("cursor") or "").strip()
+                if not cursor or not data.get("hasMore", True):
+                    break
             with self._lock:
                 self._tasks = tasks
                 self._updated_at = time.time()
