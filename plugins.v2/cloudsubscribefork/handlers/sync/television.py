@@ -46,9 +46,21 @@ class TelevisionSyncProcessor(OwnerDelegator):
             if self._stop_requested():
                 return transferred_count
             # 原生 best_version 决定洗版订阅，插件范围进一步限制处理对象。
+            # 无订阅绑定的手动提交（如 Emby 电影院卡片转存）没有洗版策略可继承：
+            # 只要插件启用了网盘洗版，就先建立真实网盘基线，按洗版规则比较后替换或跳过，
+            # 否则会把整包分享重复转存成“(1)”文件。
+            manual_cloud_upgrade = bool(
+                manual_resources
+                and transient_target
+                and self._enable_cloud_upgrade
+            )
             if (
                     allow_upgrade
-                    and (manual_upgrade or self._is_cloud_upgrade_subscribe(subscribe))
+                    and (
+                    manual_upgrade
+                    or manual_cloud_upgrade
+                    or self._is_cloud_upgrade_subscribe(subscribe)
+            )
             ):
                 return self._process_tv_subscribe_upgrade(
                     subscribe=subscribe,
@@ -82,6 +94,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
             self._set_task_phase(subscribe, "核对播出范围", 20)
             season = normalize_season(subscribe.season)
+            cloud_drive_name = self._cloud_drive_name()
             total_ep = subscribe.total_episode or 0
             start_ep = subscribe.start_episode or 1
             expected_episodes = set(range(start_ep, total_ep + 1)) if total_ep >= start_ep else set()
@@ -113,7 +126,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 else:
                     logger.warning(
                         f"{mediainfo.title_year} S{season:02d} 无法读取媒体服务器实际数据，"
-                        "本轮跳过且不访问115，不修改订阅进度"
+                        f"本轮跳过且不访问{cloud_drive_name}，不修改订阅进度"
                     )
                     return transferred_count
             logger.debug(
@@ -121,7 +134,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 f"{self._format_episode_ranges(media_server_episodes & expected_episodes)}"
             )
 
-            # 2. 再读取115目标目录；不扫描本地 STRM 路径。
+            # 2. 再读取目标网盘目录；不扫描本地 STRM 路径。
             self._set_task_phase(subscribe, "检查网盘内容", 40)
             cloud_valid, cloud_episodes, cloud_label = self._timed_sync_call(
                 "cloud_scan",
@@ -134,13 +147,18 @@ class TelevisionSyncProcessor(OwnerDelegator):
             )
             if not cloud_valid:
                 logger.warning(
-                    f"{mediainfo.title_year} S{season:02d} 无法读取115实际数据，"
+                    f"{mediainfo.title_year} S{season:02d} 无法读取{cloud_drive_name}实际数据，"
                     "本轮跳过，不修改订阅进度"
                 )
                 return transferred_count
             existing_episodes_in_resources.update(cloud_episodes & expected_episodes)
+            # 无订阅的手动提交按网盘/媒体库真实内容去重：目标季已存在的集数不再重复转存。
+            existing_episodes_for_manual = (
+                set(media_server_episodes) | set(cloud_episodes)
+                if discover_manual_episodes else set()
+            )
             logger.debug(
-                f"115 实际存在剧集：{cloud_label}，"
+                f"{cloud_label} 实际存在剧集："
                 f"{self._format_episode_ranges(cloud_episodes & expected_episodes)}"
             )
 
@@ -159,18 +177,21 @@ class TelevisionSyncProcessor(OwnerDelegator):
                         total_episode=total_ep,
                     )
                 logger.debug(
-                    f"Emby 与115合并后已存在 "
+                    f"媒体库与{cloud_drive_name}合并后已存在 "
                     f"{self._format_episode_ranges(existing_episodes_in_resources)}，缺失 "
                     f"{self._format_episode_ranges(set(missing_episodes))}"
                 )
                 if restored_missing:
                     logger.warning(
-                        "Emby 与115均不存在，已删除订阅误标并恢复缺集："
+                        f"媒体库与{cloud_drive_name}均不存在，已删除订阅误标并恢复缺集："
                         f"{self._format_episode_ranges(restored_missing)}"
                     )
 
             if not missing_episodes and not discover_manual_episodes:
-                logger.info(f"{mediainfo.title_year} S{season:02d} Emby 与115已完整存在")
+                logger.info(
+                    f"{mediainfo.title_year} S{season:02d} "
+                    f"媒体库与{cloud_drive_name}已完整存在"
+                )
                 if not transient_target:
                     self._subscribe_handler.check_and_finish_subscribe(
                         subscribe=subscribe,
@@ -368,7 +389,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             )
                             if title_episodes:
                                 target_episode_set = (
-                                    title_episodes - discovered_manual_episodes
+                                    title_episodes - discovered_manual_episodes - existing_episodes_for_manual
                                     if discover_manual_episodes
                                     else missing_episode_set & title_episodes
                                 )
@@ -386,7 +407,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     resource, season
                                 )
                                 target_episode_set = (
-                                    preview_episodes - discovered_manual_episodes
+                                    preview_episodes - discovered_manual_episodes - existing_episodes_for_manual
                                     if discover_manual_episodes
                                     else missing_episode_set & preview_episodes
                                     if preview_episodes
@@ -474,7 +495,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             mediainfo if is_cross_batch else None,
                         )
                         matched_episode_numbers = (
-                            share_episodes - discovered_manual_episodes
+                            share_episodes - discovered_manual_episodes - existing_episodes_for_manual
                             if discover_manual_episodes
                             else missing_episode_set & share_episodes
                         )

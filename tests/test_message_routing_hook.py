@@ -1,44 +1,22 @@
-import os
-import sys
 import unittest
 from unittest.mock import MagicMock
 
+from plugin_env import OwnerDelegator, load_module, register_mock
+
 # 构造 mock 的 app 模块依赖
-mock_app = MagicMock()
 mock_message_chain = MagicMock()
 mock_logger = MagicMock()
 
-mock_app.chain.message.MessageChain = mock_message_chain
-mock_app.log.logger = mock_logger
+register_mock("app")
+register_mock("app.log", logger=mock_logger)
+register_mock("app.chain.message", MessageChain=mock_message_chain)
 
-sys.modules["app"] = mock_app
-sys.modules["app.chain"] = mock_app.chain
-sys.modules["app.chain.message"] = mock_app.chain.message
-sys.modules["app.log"] = mock_app.log
-
-
-# mock OwnerDelegator
-class OwnerDelegator:
-    def __init__(self, owner):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name)
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._owner, name, value)
-
-
-mock_core = MagicMock()
-mock_core.OwnerDelegator = OwnerDelegator
-sys.modules["cloudsubscribefork"] = MagicMock()
-sys.modules["cloudsubscribefork.core"] = mock_core
-sys.modules["cloudsubscribefork.core.delegation"] = mock_core
-sys.modules["cloudsubscribefork.search"] = MagicMock()
-sys.modules["cloudsubscribefork.search.types"] = MagicMock()
+# 构造 mock 的 cloudsubscribefork 包结构
+register_mock("cloudsubscribefork")
+register_mock("cloudsubscribefork.core", OwnerDelegator=OwnerDelegator)
+register_mock("cloudsubscribefork.core.delegation", OwnerDelegator=OwnerDelegator)
+register_mock("cloudsubscribefork.search")
+search_types = register_mock("cloudsubscribefork.search.types")
 
 
 # mock resource_type_from_url
@@ -52,18 +30,12 @@ def fake_resource_type_from_url(url: str) -> str:
     return ""
 
 
-sys.modules["cloudsubscribefork.search.types"].resource_type_from_url = fake_resource_type_from_url
+search_types.resource_type_from_url = fake_resource_type_from_url
 
-import importlib.util
-
-hook_file = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/core/hook/message.py"))
-spec = importlib.util.spec_from_file_location("cloudsubscribefork.core.hook.message", hook_file)
-mod = importlib.util.module_from_spec(spec)
-mod.__package__ = "cloudsubscribefork.core.hook"
-spec.loader.exec_module(mod)
-
-MessageRoutingHook = mod.MessageRoutingHook
+MessageRoutingHook = load_module(
+    "cloudsubscribefork.core.hook.message",
+    "plugins.v2/cloudsubscribefork/core/hook/message.py",
+).MessageRoutingHook
 
 
 class TestMessageRoutingHook(unittest.TestCase):

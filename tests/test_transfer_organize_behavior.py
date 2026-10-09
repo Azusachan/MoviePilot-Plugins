@@ -1,83 +1,44 @@
 """测试关闭自动整理时保留原分享母文件夹结构与原始文件名的行为（Issue #8）。"""
 
-import importlib.util
-import os
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock
 
-# 构造 mock 的基础依赖
-sys.modules.setdefault("app", MagicMock())
-sys.modules.setdefault("app.log", MagicMock())
-sys.modules.setdefault("app.schemas", MagicMock())
-sys.modules.setdefault("app.schemas.types", MagicMock())
+from plugin_env import ensure_package, install_app_mocks, load_module
 
-
-class AutoMockModule(types.ModuleType):
-    def __getattr__(self, name):
-        val = MagicMock()
-        setattr(self, name, val)
-        return val
-
-
-def _ensure_mock_package(name):
-    if name not in sys.modules or not isinstance(sys.modules[name], AutoMockModule):
-        m = AutoMockModule(name)
-        m.__path__ = []
-        if name in sys.modules:
-            for k, v in list(sys.modules[name].__dict__.items()):
-                setattr(m, k, v)
-        sys.modules[name] = m
-    return sys.modules[name]
-
-
-for pkg_name in [
-    "app", "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
-    "app.db", "app.db.subscribe_oper", "app.log", "app.modules",
+install_app_mocks(
+    "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
+    "app.db", "app.db.subscribe_oper", "app.modules",
     "app.modules.filemanager", "app.modules.filemanager.transhandler",
-    "app.schemas", "app.schemas.types", "app.utils", "app.utils.http",
-    "app.helper", "app.application", "app.adapters",
+    "app.utils", "app.utils.http", "app.helper", "app.application", "app.adapters",
     "cloudsubscribefork", "cloudsubscribefork.core", "cloudsubscribefork.core.media",
     "cloudsubscribefork.drive", "cloudsubscribefork.drive.scanner",
     "cloudsubscribefork.handlers", "cloudsubscribefork.handlers.sync",
     "cloudsubscribefork.handlers.notification", "cloudsubscribefork.handlers.search",
     "cloudsubscribefork.handlers.subscription", "cloudsubscribefork.utils",
-    "cloudsubscribefork.utils.cache",
-    "cloudsubscribefork.search.types"
-]:
-    _ensure_mock_package(pkg_name)
-
-mock_core = sys.modules["cloudsubscribefork.core"]
+    "cloudsubscribefork.utils.cache", "cloudsubscribefork.search.types",
+)
 
 
 class OwnerDelegator:
     pass
 
 
-mock_core.OwnerDelegator = OwnerDelegator
-mock_utils = sys.modules["cloudsubscribefork.utils"]
-sys.modules["cloudsubscribefork.core.media"].normalize_season = lambda value, default=1: max(0, int(default if value is None or value == "" else value))
+ensure_package("cloudsubscribefork.core").OwnerDelegator = OwnerDelegator
+mock_utils = ensure_package("cloudsubscribefork.utils")
 
 # 加载实际的 MediaFileParser
-parser_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/utils/file_parser.py"))
-spec_parser = importlib.util.spec_from_file_location("cloudsubscribefork.utils.file_parser", parser_path)
-mod_parser = importlib.util.module_from_spec(spec_parser)
-spec_parser.loader.exec_module(mod_parser)
-MediaFileParser = mod_parser.MediaFileParser
+MediaFileParser = load_module(
+    "cloudsubscribefork.utils.file_parser",
+    "plugins.v2/cloudsubscribefork/utils/file_parser.py",
+).MediaFileParser
 mock_utils.MediaFileParser = MediaFileParser
 mock_utils.parse_magnet_metadata = MagicMock()
 
 # 加载 resources.py 中的 SyncResourceManager
-resources_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/resources.py"))
-spec_res = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.resources", resources_path)
-mod_res = importlib.util.module_from_spec(spec_res)
-mod_res.__package__ = "cloudsubscribefork.handlers.sync"
-sys.modules["cloudsubscribefork.handlers.sync.resources"] = mod_res
-spec_res.loader.exec_module(mod_res)
-ResourceTransferService = mod_res.ResourceTransferService
+ResourceTransferService = load_module(
+    "cloudsubscribefork.handlers.sync.resources",
+    "plugins.v2/cloudsubscribefork/handlers/sync/resources.py",
+).ResourceTransferService
 
 
 class DummySyncService(ResourceTransferService):
@@ -218,55 +179,32 @@ class TestTransferOrganizeBehavior(unittest.TestCase):
 # 针对 SyncHandler 真实 _transfer_episode_batch 批量转存逻辑的测试套件
 # -------------------------------------------------------------
 
-class AutoMockModule(types.ModuleType):
-    def __getattr__(self, name):
-        val = MagicMock()
-        setattr(self, name, val)
-        return val
-
-
-def _ensure_mock_package(name):
-    if name not in sys.modules:
-        m = AutoMockModule(name)
-        m.__path__ = []
-        sys.modules[name] = m
-    return sys.modules[name]
-
-
-for pkg_name in [
-    "app", "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
-    "app.db", "app.db.subscribe_oper", "app.log", "app.modules",
+install_app_mocks(
+    "app.core", "app.core.config", "app.core.context", "app.core.metainfo",
+    "app.db", "app.db.subscribe_oper", "app.modules",
     "app.modules.filemanager", "app.modules.filemanager.transhandler",
-    "app.schemas", "app.schemas.types", "app.utils", "app.utils.http",
-    "app.helper", "app.application", "app.adapters",
+    "app.utils", "app.utils.http", "app.helper", "app.application", "app.adapters",
     "cloudsubscribefork", "cloudsubscribefork.core", "cloudsubscribefork.core.media",
     "cloudsubscribefork.drive", "cloudsubscribefork.drive.scanner",
     "cloudsubscribefork.handlers", "cloudsubscribefork.handlers.sync",
     "cloudsubscribefork.handlers.notification", "cloudsubscribefork.handlers.search",
     "cloudsubscribefork.handlers.subscription", "cloudsubscribefork.utils",
-    "cloudsubscribefork.utils.cache"
-]:
-    _ensure_mock_package(pkg_name)
-
-for sibling in [
-    "baseline", "cleanup", "history", "matching", "metadata", "movie", "naming",
-    "notify", "platform_history", "postprocess", "pt_upgrade",
-    "retry", "rule_scoring", "subtitles", "television", "upgrade", "utils"
-]:
-    sib_name = f"cloudsubscribefork.handlers.sync.{sibling}"
-    if sib_name not in sys.modules:
-        sys.modules[sib_name] = AutoMockModule(sib_name)
+    "cloudsubscribefork.utils.cache", "cloudsubscribefork.search.types",
+    *[
+        f"cloudsubscribefork.handlers.sync.{sibling}"
+        for sibling in (
+            "baseline", "cleanup", "history", "matching", "metadata", "movie",
+            "naming", "notify", "platform_history", "postprocess", "pt_upgrade",
+            "retry", "rule_scoring", "subtitles", "television", "upgrade", "utils",
+        )
+    ],
+)
 
 # 加载 service.py 中的真实 SyncHandler
-service_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../plugins.v2/cloudsubscribefork/handlers/sync/service.py")
-)
-spec_service = importlib.util.spec_from_file_location("cloudsubscribefork.handlers.sync.service", service_path)
-mod_service = importlib.util.module_from_spec(spec_service)
-mod_service.__package__ = "cloudsubscribefork.handlers.sync"
-sys.modules["cloudsubscribefork.handlers.sync.service"] = mod_service
-spec_service.loader.exec_module(mod_service)
-SyncHandler = mod_service.SyncHandler
+SyncHandler = load_module(
+    "cloudsubscribefork.handlers.sync.service",
+    "plugins.v2/cloudsubscribefork/handlers/sync/service.py",
+).SyncHandler
 
 
 class TestSyncHandlerEpisodeBatchTransfer(unittest.TestCase):

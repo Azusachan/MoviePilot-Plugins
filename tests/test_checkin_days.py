@@ -4,58 +4,28 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+from plugin_env import OwnerDelegator, register_mock
+
 # 构造 mock 的基础依赖
-mock_app = MagicMock()
-mock_logger = MagicMock()
-mock_app.log.logger = mock_logger
+register_mock("app")
+register_mock("app.log", logger=MagicMock())
+register_mock("app.core")
+register_mock("app.core.config", settings=MagicMock(TZ="Asia/Shanghai"))
 
-sys.modules["app"] = mock_app
-sys.modules["app.log"] = mock_app.log
-sys.modules["app.core"] = MagicMock()
-mock_config = MagicMock()
-mock_config.settings = MagicMock()
-mock_config.settings.TZ = "Asia/Shanghai"
-sys.modules["app.core.config"] = mock_config
-
-
-class OwnerDelegator:
-    def __init__(self, owner=None):
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name):
-        return getattr(self._owner, name) if self._owner else None
-
-    def __setattr__(self, name, value):
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        if self._owner:
-            setattr(self._owner, name, value)
-
-
-mock_core = MagicMock()
-mock_core.__path__ = []
-mock_core.OwnerDelegator = OwnerDelegator
-
-sys.modules["cloudsubscribefork"] = MagicMock()
-sys.modules["cloudsubscribefork"].__path__ = []
-sys.modules["cloudsubscribefork.core"] = mock_core
-sys.modules["cloudsubscribefork.core.checkin_manager"] = MagicMock()
-sys.modules["cloudsubscribefork.core.definitions"] = MagicMock()
-sys.modules["cloudsubscribefork.core.search"] = MagicMock()
-sys.modules["cloudsubscribefork.core.services"] = MagicMock()
-sys.modules["cloudsubscribefork.core.services"].__path__ = []
-sys.modules["cloudsubscribefork.search"] = MagicMock()
-sys.modules["cloudsubscribefork.search"].__path__ = []
-sys.modules["cloudsubscribefork.search.hdhaven"] = MagicMock()
-sys.modules["cloudsubscribefork.search.hdhaven"].__path__ = []
-sys.modules["cloudsubscribefork.search.hdhaven.security"] = MagicMock()
-sys.modules["cloudsubscribefork.search.cloudflare"] = MagicMock()
-sys.modules["cloudsubscribefork.search.http_client"] = MagicMock()
-mock_utils = MagicMock()
-mock_utils.__path__ = []
-sys.modules["cloudsubscribefork.utils"] = mock_utils
-sys.modules["cloudsubscribefork.utils.cache"] = MagicMock()
+# 构造 mock 的 cloudsubscribefork 包结构
+register_mock("cloudsubscribefork")
+register_mock("cloudsubscribefork.core", OwnerDelegator=OwnerDelegator)
+register_mock("cloudsubscribefork.core.checkin_manager")
+register_mock("cloudsubscribefork.core.definitions")
+register_mock("cloudsubscribefork.core.search")
+register_mock("cloudsubscribefork.core.services")
+register_mock("cloudsubscribefork.search")
+register_mock("cloudsubscribefork.search.hdhaven")
+register_mock("cloudsubscribefork.search.hdhaven.security")
+register_mock("cloudsubscribefork.search.cloudflare")
+register_mock("cloudsubscribefork.search.http_client")
+register_mock("cloudsubscribefork.utils")
+register_mock("cloudsubscribefork.utils.cache")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 plugins_v2_path = os.path.join(project_root, "plugins.v2")
