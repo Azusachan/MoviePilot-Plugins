@@ -880,30 +880,12 @@ class SyncExecutionService(OwnerDelegator):
                     new_history_records = result["history"]
                     history.extend(new_history_records)
                     if new_history_records:
+                        # 落库即置 history_ready 并立即排期后处理，顺序由待处理表保证
                         self._sync_handler._timed_sync_call(
                             "history_persist",
                             self._sync_handler.append_history_records,
                             new_history_records,
                         )
-                        pending_finalize_keys = {
-                            str(r.get("finalize_key") or "").strip()
-                            for r in new_history_records
-                            if str(r.get("finalize_key") or "").strip()
-                        }
-                        if pending_finalize_keys and self._sync_handler:
-                            try:
-                                if hasattr(self, "_run_offline_monitor"):
-                                    self._run_offline_monitor(
-                                        force=True, pending_keys=pending_finalize_keys
-                                    )
-                                else:
-                                    self._sync_handler.monitor_offline_strm_tasks(
-                                        force=True, pending_keys=pending_finalize_keys
-                                    )
-                            except Exception as finalize_err:
-                                logger.debug(
-                                    f"订阅组完成后执行文件后处理异常：{finalize_err}"
-                                )
                     # 只完成了前几个任务却因整批收尾未执行而漏发通知。
                     completed_details = result.get("transfer_details") or []
                     if completed_details:

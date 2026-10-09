@@ -100,7 +100,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.7"
+    plugin_version = "1.6.8"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -859,7 +859,6 @@ class CloudSubscribe(_PluginBase):
         self._init_subscribe_handler()
         self._search_handler = SearchHandler(plugin=self)
         self._sync_handler = SyncHandler(plugin=self)
-        self._sync_handler.reconcile_orphaned_history()
 
         self._webhook_handler = WebhookHandler(
             enabled=self._webhook_enabled,

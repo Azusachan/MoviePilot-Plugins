@@ -337,9 +337,6 @@ class SyncRuntimeService(OwnerDelegator):
             )
         ]
 
-    def _pending_finalize_count(self, subscribe: Any) -> int:
-        return len(self._pending_finalize_items(subscribe))
-
     def _postprocessing_text(
             self, items: List[Dict[str, Any]]
     ) -> Tuple[str, str]:
@@ -710,20 +707,6 @@ class SyncRuntimeService(OwnerDelegator):
                 )
                 if pending_count and not stopped:
                     self._refresh_postprocessing_sync_tasks()
-                    pending_keys = {
-                        str(item.get("pending_key") or "").strip()
-                        for item in pending_items
-                        if str(item.get("pending_key") or "").strip()
-                    }
-                    if pending_keys and self._sync_handler:
-                        try:
-                            self._sync_handler.monitor_offline_strm_tasks(
-                                force=True, pending_keys=pending_keys
-                            )
-                        except Exception as finalize_err:
-                            logger.debug(
-                                f"单订阅完成后执行文件后处理异常：{finalize_err}"
-                            )
             except Exception as error:
                 logger.error(f"订阅 {getattr(subscribe, 'name', '')} 处理异常：{error}")
                 self._update_sync_task(

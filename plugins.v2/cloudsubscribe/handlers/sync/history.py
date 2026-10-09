@@ -386,6 +386,8 @@ class HistoryService(OwnerDelegator):
                     elif failed_scope_index.get(scope) == index:
                         failed_scope_index.pop(scope, None)
             self._save_data("history", history)
+            # 顺序契约：历史记录先落库，随后才把待处理任务标记为可调度，
+            # 因此后处理完成回调一定命中已存在的记录，不存在先完成再落库的竞态。
             finalize_keys = {
                 str(record.get("finalize_key") or "")
                 for record in records
@@ -736,57 +738,77 @@ class HistoryService(OwnerDelegator):
         )
         return prepared
 
-    def reconcile_orphaned_history(self) -> int:
-        """将 pending 已消失但 STRM 已存在的假下载中记录纠正为成功。"""
-        if (
-                not self._get_data
-                or not self._save_data
-                or not self._strm_generator
-                or not self._local_resource_path
-        ):
-            return 0
-        repaired = 0
-        repaired_records = []
+    def reconcile_real_history_status(self) -> Dict[str, Any]:
+        """手动校准：残留的暂态记录若产物（STRM）已就绪则收敛为成功。
+
+        正常流程由顺序契约保证不再产生此类残留，此入口仅用于历史遗留数据恢复。
+        """
+        if not self._get_data or not self._save_data:
+            return {"success": False, "message": "数据存储未就绪"}
+        success_count = 0
+        pending_count = 0
+        remaining_count = 0
+        converged: List[Dict[str, Any]] = []
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             history = self._get_data("history") or []
             for record in history:
-                if str(record.get("status") or "") not in {"下载中", "处理中"}:
+                if str(record.get("status") or "") not in {"处理中", "下载中"}:
                     continue
-                pending_key = str(record.get("finalize_key") or "")
-                if not pending_key:
-                    pending_key = self._offline_hash(str(record.get("share_url") or ""))
-                if pending_key and pending_key in pending:
+                key = str(record.get("finalize_key") or "").strip()
+                if key and key in pending:
+                    pending_count += 1
                     continue
-                cloud_dir = str(record.get("cloud_dir") or "").strip()
-                file_name = str(record.get("file_name") or "").strip()
-                if not cloud_dir or not file_name:
-                    continue
-                try:
-                    strm_path = self._strm_generator.local_path(
-                        local_root=self._local_resource_path,
-                        cloud_root=self._CLOUD_MEDIA_ROOT,
-                        cloud_dir=cloud_dir,
-                        file_name=file_name,
-                    )
-                except Exception as error:
-                    logger.debug(f"检查遗留历史 STRM 失败：{file_name}，{error}")
-                    continue
-                if not strm_path.is_file():
+                strm_path = self._strm_local_path(record)
+                if not strm_path:
+                    remaining_count += 1
                     continue
                 record["status"] = "成功"
                 record.pop("finalize_key", None)
                 record.pop("failure_reason", None)
-                repaired_records.append(copy.deepcopy(record))
-                repaired += 1
-            if repaired:
+                success_count += 1
+                converged.append(copy.deepcopy(record))
+            if success_count:
                 self._save_data("history", history)
-        if repaired:
-            logger.info(f"已自动修复 {repaired} 条 STRM 已存在但状态未完成的历史记录")
-            self._record_platform_transfer_histories(repaired_records)
+        if converged:
+            self._record_platform_transfer_histories(converged)
             if self._history_changed:
                 self._history_changed()
-        return repaired
+        message = f"已按真实产物收敛 {success_count} 条记录"
+        if pending_count:
+            message += f"，{pending_count} 条仍在处理中"
+        if remaining_count:
+            message += f"，{remaining_count} 条产物未就绪"
+        return {
+            "success": True,
+            "message": message,
+            "data": {
+                "success": success_count,
+                "pending": pending_count,
+                "remaining": remaining_count,
+            },
+        }
+
+    def _strm_local_path(self, record: Dict[str, Any]) -> Optional[Path]:
+        """返回记录对应的已就绪 STRM 路径；不存在则返回 None。"""
+        cloud_dir = str(record.get("cloud_dir") or "").strip()
+        file_name = str(record.get("file_name") or "").strip()
+        if not cloud_dir or not file_name:
+            return None
+        if not self._strm_generator or not self._local_resource_path:
+            return None
+        try:
+            strm_path = self._strm_generator.local_path(
+                local_root=self._local_resource_path,
+                cloud_root=getattr(self, "_CLOUD_MEDIA_ROOT", "/"),
+                cloud_dir=cloud_dir,
+                file_name=file_name,
+            )
+            if strm_path and strm_path.is_file() and strm_path.stat().st_size > 0:
+                return strm_path
+        except OSError:
+            return None
+        return None
 
     def _pending_history_record(self, pending_key: str) -> Optional[Dict[str, Any]]:
         history = (self._get_data("history") or []) if self._get_data else []
@@ -1050,40 +1072,32 @@ class HistoryService(OwnerDelegator):
 
     def _mark_offline_history_status(
             self, pending_key: str, status: str, reason: str = "",
-            updates: Optional[Dict[str, Any]] = None,
     ) -> None:
-        batch_updates = {pending_key: updates} if updates else None
-        self._mark_offline_history_status_batch({pending_key}, status, reason, updates=batch_updates)
+        self._mark_offline_history_status_batch({pending_key}, status, reason)
 
     def _mark_offline_history_status_batch(
             self, pending_keys: Set[str], status: str, reason: str = "",
-            updates: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
-        """一次扫描并持久化多个离线任务对应的历史记录。"""
-        if not self._get_data or not self._save_data:
-            return
+        """按 finalize_key 收敛历史状态。
+
+        顺序契约：`append_history_records` 先落库、后置 `history_ready`，
+        后处理只在 `history_ready` 为真时才被调度，因此此处必定命中已存在的记录。
+        """
         normalized_keys = {
-            str(value or "").strip() for value in pending_keys
+            str(value or "").strip().upper() for value in pending_keys
             if str(value or "").strip()
         }
-        if not normalized_keys:
+        if not normalized_keys or not self._get_data or not self._save_data:
             return
-        uppercase_keys = {value.upper() for value in normalized_keys}
         platform_records = []
+        changed = False
         with self._offline_pending_lock:
             history = self._get_data("history") or []
-            changed = False
             for item in history:
-                link = str(item.get("share_url") or "").upper()
-                item_key = str(item.get("finalize_key") or "")
-                matched_key = None
-                if item_key in normalized_keys:
-                    matched_key = item_key
-                elif any(value in link for value in uppercase_keys):
-                    matched_key = next((k for k in normalized_keys if k.upper() in link), None)
-                if not matched_key:
+                item_key = str(item.get("finalize_key") or "").strip().upper()
+                if item_key not in normalized_keys:
                     continue
-                if status == "失败" and item.get("status") == "成功":
+                if status == "失败" and str(item.get("status") or "") == "成功":
                     continue
                 item["status"] = status
                 item.pop("finalize_key", None)
@@ -1091,10 +1105,6 @@ class HistoryService(OwnerDelegator):
                     item["failure_reason"] = reason
                 else:
                     item.pop("failure_reason", None)
-                if updates and matched_key in updates and updates[matched_key]:
-                    for up_key, up_val in updates[matched_key].items():
-                        if up_val is not None:
-                            item[up_key] = copy.deepcopy(up_val)
                 if status == "成功":
                     platform_records.append(copy.deepcopy(item))
                 changed = True
@@ -1105,7 +1115,7 @@ class HistoryService(OwnerDelegator):
             self._history_changed()
 
     def get_pending_finalize_tasks(self) -> List[Dict[str, Any]]:
-        """返回等待115文件就绪、重命名或生成STRM的持久任务。"""
+        """返回等待网盘文件就绪、重命名或生成STRM的持久任务。"""
         if not self._get_data:
             return []
         with self._offline_pending_lock:

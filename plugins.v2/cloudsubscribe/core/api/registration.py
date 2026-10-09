@@ -339,6 +339,13 @@ class MoviePilotRegistration(OwnerDelegator):
                 "summary": "重试当前网盘离线下载或文件后处理任务",
             },
             {
+                "path": "/history/reconcile_status",
+                "endpoint": self.api_vue_reconcile_history_status,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "根据网盘与本地文件真实状态核验并校准待处理记录",
+            },
+            {
                 "path": "/history/clear",
                 "endpoint": self.api_vue_clear_history,
                 "methods": ["POST"],

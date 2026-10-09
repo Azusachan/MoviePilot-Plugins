@@ -1756,7 +1756,8 @@ class SyncHandler:
                 "created_at": now,
                 "next_check_at": now + self._OFFLINE_CHECK_DELAYS[0],
                 "check_index": 0,
-                "history_ready": True,
+                # 记录落库前不得进入后处理：由 append_history_records 置为 True 后才会被调度
+                "history_ready": bool((pending.get(pending_key) or {}).get("history_ready")),
                 "mediainfo": self._serialize_mediainfo(mediainfo),
                 "subscribe_id": subscribe_id,
                 "season": season,
@@ -2052,7 +2053,11 @@ class SyncHandler:
             "created_at": float(current.get("created_at") or now),
             "next_check_at": now + self._OFFLINE_CHECK_DELAYS[0],
             "check_index": int(current.get("check_index") or 0),
-            "history_ready": bool(skip_history or current.get("skip_history")),
+            "history_ready": bool(
+                skip_history
+                or current.get("skip_history")
+                or current.get("history_ready")
+            ),
             "skip_history": bool(skip_history or current.get("skip_history")),
             "mediainfo": (
                 media_data

@@ -113,12 +113,14 @@
                 :filter-options="historyPage.filterOptions"
                 :emby-play-items="embyPlayItems"
                 :loading="loading"
+                :reconciling="reconcilingHistory"
                 :retrying-key="retryingHistoryKey"
                 :deleting-key="deletingHistoryKey"
                 :notifying-key="notifyingHistoryKey"
                 :upgrading-key="upgradingHistoryKey"
                 :enable-cloud-upgrade="historyPage.enableCloudUpgrade"
                 @refresh="loadPage"
+                @reconcile="confirmReconcileHistory"
                 @query-change="updateHistoryQuery"
                 @clear="openClearHistory"
                 @retry="confirmRetryHistory"
@@ -213,7 +215,7 @@
       body="确认清理本插件的转存历史？此操作不可逆。"
       :options="[
         { key: 'forceClear', label: '强制清理全部历史记录（含处理中）', color: 'error' },
-        { key: 'clearPoints', label: '同时清空 HDHive/Dian115 已花费积分记录', color: 'warning' },
+        { key: 'clearPoints', label: '同时清空已花费积分记录', color: 'warning' },
       ]"
       confirm-text="确认清空"
       confirm-color="error"
@@ -266,7 +268,7 @@ import HistoryTable from "./dashboard/HistoryTable.vue";
 import StatsGrid from "./dashboard/StatsGrid.vue";
 import {useHistoryPageData} from "../composables/usePageData.js";
 import {useRuntimeData} from "../composables/useRuntimeData.js";
-import {CACHE_CATEGORIES, useCacheActions} from "../composables/useCacheActions.js";
+import {CACHE_CATEGORIES} from "../composables/useCacheActions.js";
 
 const ConfirmDialog = defineAsyncComponent(() => import("./dialogs/ConfirmDialog.vue"));
 const ManualResourceDialog = defineAsyncComponent(() => import("./dialogs/ManualResourceDialog.vue"))
@@ -317,7 +319,7 @@ const message = ref(""),
   searchStarting = ref(false),
   historyDirty = ref(true),
   historySelection = ref({ groupCount: 0, subscribeIds: [], targets: [] })
-
+let historyRefreshTimer = null;
 function notify(text, type = "success") {
   message.value = text
   messageType.value = type
@@ -351,9 +353,21 @@ const {
   deleteHistory: deleteHistoryRequest,
   deleteHistoryBatch: deleteHistoryBatchRequest,
   notifyHistory: notifyHistoryRequest,
+  reconcileHistoryStatus: reconcileHistoryStatusRequest,
 } = useHistoryPageData(api, notify)
-const { clearCache: clearCacheRequest } = useCacheActions(api)
-let historyRefreshTimer = null
+const reconcilingHistory = ref(false);
+
+async function confirmReconcileHistory() {
+  reconcilingHistory.value = true;
+  try {
+    const msg = await reconcileHistoryStatusRequest();
+    notify(msg || "历史状态已成功校准");
+  } catch (err) {
+    notify(err?.message || "校准状态失败", "error");
+  } finally {
+    reconcilingHistory.value = false;
+  }
+}
 
 function scheduleHistoryRefresh() {
   historyDirty.value = true

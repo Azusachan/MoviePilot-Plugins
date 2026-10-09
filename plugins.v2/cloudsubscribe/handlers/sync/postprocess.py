@@ -148,6 +148,9 @@ class PostprocessService(OwnerDelegator):
     )
 
     _FINALIZE_MAX_FAILURES = 5
+    # 记录落库是后处理的前置条件；超过该时限仍未落库说明该轮同步已放弃，
+    # 放行以避免遗留任务被永久阻塞（正常同步在秒级内即完成落库）。
+    _HISTORY_READY_GRACE = 30 * 60
     _FINALIZE_DEAD_LOG = "文件后处理连续失败 {} 次，已终止重试：{}"
     _FINALIZE_DEAD_REASON = "文件后处理连续失败 {} 次，已停止自动重试"
     _FINALIZE_DEAD_TITLE = "网盘文件后处理失败"
@@ -302,6 +305,10 @@ class PostprocessService(OwnerDelegator):
             key
             for key, item in pending.items()
             if (not selected or key in selected)
+               and (
+                       item.get("history_ready")
+                       or now - float(item.get("created_at") or now) >= PostprocessService._HISTORY_READY_GRACE
+               )
                and (bool(selected and key in selected) or now >= float(item.get("_monitor_until") or 0))
                and (force or now >= float(item.get("next_check_at") or 0))
         ]
@@ -2260,10 +2267,8 @@ class PostprocessService(OwnerDelegator):
         达到连续失败上限后返回 True，并将任务标记为死任务（finalize_dead），
         由后续监控扫描彻底移出队列并记录失败历史与通知，终止无限重试。
         """
-        task_type = str(item.get("task_type") or "share").strip().lower()
-        is_offline = task_type in {"ed2k", "magnet", "offline"}
-        threshold = max_failures if max_failures is not None else (
-            self._FINALIZE_MAX_FAILURES if is_offline else 2
+        threshold = (
+            max_failures if max_failures is not None else self._FINALIZE_MAX_FAILURES
         )
         fail_count = int(item.get("fail_count") or 0) + 1
         item["fail_count"] = fail_count
