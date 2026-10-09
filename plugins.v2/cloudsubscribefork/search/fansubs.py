@@ -6,7 +6,7 @@ Encoding groups alone do not establish subtitle provenance.
 import re
 
 TIERS = (
-    r"SweetSub|千夏|Airota|拨雪寻春|撥雪尋春|Haru[ &]+Hana|喵萌奶茶|Nekomoe[ ._-]*Kissaten",
+    r"SweetSub|千夏|Airota|拨雪寻春|撥雪尋春|\bHaru[ &]*Hana\b|喵萌奶茶|Nekomoe[ ._-]*Kissaten",
     r"诸神|諸神|Kamigami|澄空|Sumisora|华盟|華盟|CASO|北宇治|Kitauji|霜庭云花|霜庭雲花|STYH",
     r"桜都|樱都|櫻都|Sakurato|豌豆|Dymy|动漫国|動漫國|DMG|极影|極影|KTXP",
 )

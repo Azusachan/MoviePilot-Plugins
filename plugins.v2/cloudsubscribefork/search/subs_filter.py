@@ -15,7 +15,7 @@ DEFAULT_FANSUB_ORDER = (
     r"SweetSub", r"千夏",
     r"动漫国|動漫國|DMG", r"极影|極影|KTXP", r"桜都|樱都|櫻都|Sakurato", r"诸神|諸神|Kamigami",
     r"北宇治|Kitauji", r"悠哈璃羽|UHA-WINGS", r"爱恋字幕|愛戀字幕|KissSub", r"拨雪寻春|撥雪尋春",
-    r"Haru[ &]+Hana", r"澄空|Sumisora", r"华盟|華盟|CASO", r"霜庭云花|霜庭雲花|STYH",
+    r"\bHaru[ &]*Hana\b", r"澄空|Sumisora", r"华盟|華盟|CASO", r"霜庭云花|霜庭雲花|STYH",
     r"豌豆|Dymy", r"Airota", r"Lilith-Raws", r"DBD制作组|DBD-Raws",
     r"\bNC-Raws\b", r"雪飘|FLsnow", r"幻樱|HYSub",
 )
