@@ -14,7 +14,7 @@ jobs:
           persist-credentials: false
       - name: Verify merge and backend
         run: |
-          python3 -m pip install beautifulsoup4 pycryptodome qrcode torf httpx apscheduler
+          python3 -m pip install beautifulsoup4 pycryptodome qrcode torf httpx apscheduler curl_cffi
           python3 .github/scripts/apply_plex_patch.py
           python3 .github/scripts/apply_mikan_patch.py
           git diff --exit-code
