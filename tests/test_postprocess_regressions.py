@@ -27,6 +27,21 @@ def load_nodes(path, names, namespace):
 
 
 class BracketMatchingTests(unittest.TestCase):
+    def test_haruhana_real_files_and_chinese_release_alias(self):
+        fixtures = (
+            ('[❀拨雪寻春❀] 命运 - 奇异赝品 / Fate/strange Fake - 13 [WebRip][简繁日内封]',
+             '[Haruhana] Fate strange Fake - 13 [WebRip][HEVC-10bit 1080p][CHI_JPN].mkv', 13),
+            ('[❀拨雪寻春❀] 上伊那牡丹，醉姿如百合 / Kamiina Botan, Yoeru Sugata wa Yuri no Hana [01-12 精校合集][WebRip][简繁日内封]',
+             '[Haruhana] Kamiina Botan, Yoeru Sugata wa Yuri no Hana - 01 [WebRip][HEVC-10bit 1080p][CHI_JPN].mkv', 1),
+        )
+        for release, name, episode in fixtures:
+            file = {'name': name}
+            self.assertEqual(policy.anime_file_candidates([file], release, 1, [episode]), {episode: [file]})
+            for rejected in (name.replace('Haruhana', 'Unknown'),
+                             name.replace('Haruhana', 'NotHaruhana'),
+                             name.replace('CHI_JPN', 'JPN'), name.replace('CHI_JPN', '无字幕')):
+                self.assertEqual(policy.anime_file_candidates([{'name': rejected}], release, 1, [episode]), {episode: []})
+
     release = '[爱恋字幕社&猫恋汉化组][7月新番][拔作岛][Nukitashi The Animation][08][1080P][BIG5][MP4][繁中]'
 
     def test_real_files_all_eight_episodes(self):
