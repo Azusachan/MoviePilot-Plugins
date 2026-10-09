@@ -33,6 +33,33 @@ from ...utils.cache import normalize_platform_cache_key
 class SyncMetadataService(OwnerDelegator):
     """负责 TMDB 刮削、季页面解析、日历与 TMDBID 修复。"""
 
+    def _correct_bangumi_episode_total(self, subscribe: Any, mediainfo: Any) -> None:
+        """Do not carry a Bangumi mixed OP/ED total into TMDB S01."""
+        from ...core.episodes import bangumi_main_episode_total
+        bangumi_id = getattr(subscribe, 'bangumiid', None)
+        current = getattr(subscribe, 'total_episode', None)
+        season = normalize_season(getattr(subscribe, 'season', 1))
+        if not bangumi_id or season != 1 or media_identity(mediainfo)[0] != 'themoviedb':
+            return
+        episodes = (getattr(mediainfo, 'seasons', None) or {}).get(season)
+        if not isinstance(episodes, (list, tuple, set)) or not episodes:
+            return
+        try:
+            numbers = {int(value) for value in episodes}
+            main = max(numbers)
+            if numbers != set(range(1, main + 1)) or int(current or 0) <= main:
+                return
+            from app.modules.bangumi import BangumiModule
+            subject = BangumiModule().bangumi_info(bangumiid=int(bangumi_id))
+            corrected = bangumi_main_episode_total(current, season, main, subject)
+            if corrected == current:
+                return
+            if SubscribeOper().update(subscribe.id, {'total_episode': corrected}):
+                subscribe.total_episode = corrected
+                logger.warning(f'已纠正 Bangumi 混合条目集数：{subscribe.name} S01 {current}->{corrected}；OP/ED 不作为正片')
+        except Exception as error:
+            logger.debug(f'Bangumi 正片集数交叉核对未完成，保持原配置：{type(error).__name__}')
+
     @staticmethod
     def _calendar_date(value: Any) -> Optional[datetime.date]:
         normalized = str(value or "").strip()[:10]

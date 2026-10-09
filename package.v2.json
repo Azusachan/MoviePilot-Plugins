@@ -3,7 +3,7 @@
     "name": "网盘订阅助手 · Azusa",
     "description": "整合网盘能力与多渠道资源搜索，自动查找并补充订阅缺失的影视内容",
     "labels": "订阅,网盘,转存,搜索,通知,刮削,签到,ed2k,magnet",
-    "version": "1.6.8.57.1108271846.17",
+    "version": "1.6.8.57.1108271846.18",
     "icon": "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "odomu",
     "level": 1,
@@ -75,7 +75,8 @@
       "v1.6.1.51.1558850929.16": "Plex compatibility build based on upstream 5cea2d71dc54",
       "v1.6.2.52.3731595780.16": "Plex compatibility build based on upstream de6ba20417d1",
       "v1.6.8.57.1108271846.16": "Plex compatibility build based on upstream 420ee2e6e64e",
-      "v1.6.8.57.1108271846.17": "Plex compatibility build based on upstream 420ee2e6e64e"
+      "v1.6.8.57.1108271846.17": "Plex compatibility build based on upstream 420ee2e6e64e",
+      "v1.6.8.57.1108271846.18": "Plex compatibility build based on upstream 420ee2e6e64e"
     }
   }
 }
