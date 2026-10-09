@@ -134,7 +134,7 @@ from unittest.mock import patch
 from app.plugins.cloudsubscribefork.handlers.sync.postprocess import PostprocessService
 for fails in (False, True):
     pending = {'fixture': dict(task_type='magnet', task_id='ABC',
-                              subscribe_id=0, created_at=time.time())}
+                              subscribe_id=0, created_at=time.time(), history_ready=True)}
     def save_pending(values):
         pending.clear()
         pending.update(copy.deepcopy(values))

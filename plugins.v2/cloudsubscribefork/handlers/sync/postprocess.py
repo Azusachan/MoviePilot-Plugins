@@ -1182,15 +1182,13 @@ class PostprocessService(OwnerDelegator):
             return task, False
 
         # 2. 检查完成状态（网盘暂存目录已有文件 或 任务标记完成）
-        staging_dir = str(item.get("staging_dir") or item.get("cloud_dir") or "/")
-        directory_valid, file_index = self._cloud_directory_snapshot(
-            staging_dir, ctx.directory_snapshots
-        )
-        task_done = bool(
-            (directory_valid and file_index)
-            or item.get("moved_at")
-            or (task and task.get("completed"))
-        )
+        task_done = bool(item.get("moved_at") or (task and task.get("completed")))
+        if not task_done:
+            staging_dir = str(item.get("staging_dir") or item.get("cloud_dir") or "/")
+            directory_valid, file_index = self._cloud_directory_snapshot(
+                staging_dir, ctx.directory_snapshots
+            )
+            task_done = bool(directory_valid and file_index)
 
         if task_done:
             item.setdefault("download_completed_at", ctx.now)
