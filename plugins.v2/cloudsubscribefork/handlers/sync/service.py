@@ -1748,7 +1748,10 @@ class SyncHandler:
             pending[pending_key] = {
                 "pending_key": pending_key,
                 "task_type": prefix,
-                "task_id": str(context.get("task_id") or "").strip() or pending_key,
+                "task_id": (str(context.get("task_id") or "").strip()
+                            or extract_magnet_hash(share_url)
+                            or next(iter(re.findall(r'^ed2k://\|file\|[^|]+\|\d+\|([0-9a-f]{32})\|', share_url, re.I)), '')
+                            or pending_key),
                 "share_url": share_url,
                 "staging_dir": staging_dir,
                 "cloud_dir": target_dir or staging_dir,
@@ -1786,6 +1789,29 @@ class SyncHandler:
         logger.info(
             f"离线任务已提交：{pending[pending_key].get('staging_name') or pending[pending_key]['file_name']}"
         )
+        try:
+            self._persist_offline_pending_history(pending[pending_key], pending_key)
+        except Exception as error:
+            # Never roll back an accepted cloud download because local history
+            # IO failed. The monitor repairs this outbox on its next pass.
+            logger.error(f'离线下载已提交，历史激活待恢复：{pending_key}，{type(error).__name__}')
+
+    def _persist_offline_pending_history(self, item: Dict[str, Any], key: str) -> bool:
+        """Idempotently persist accepted task history before activating it."""
+        media, _ = self._restore_pending_media_context(item, key)
+        if not media:
+            return False
+        subscribe = SubscribeOper().get(int(item.get('subscribe_id') or 0))
+        if not subscribe:
+            return False
+        records = []
+        self._append_magnet_pending_history(
+            history=records, mediainfo=media, subscribe=subscribe,
+            share_url=item.get('share_url') or '',
+            cloud_dir=item.get('staging_dir') or item.get('cloud_dir') or '/',
+            resource=item.get('resource') or {}, finalize_key=key,
+            season=item.get('season'), target_episodes=item.get('target_episodes') or [])
+        return bool(records and self.append_history_records(records))
 
     def _rollback_offline_submission(self, context: Dict[str, Any]) -> None:
         pending_key = str(context.get("pending_key") or "")

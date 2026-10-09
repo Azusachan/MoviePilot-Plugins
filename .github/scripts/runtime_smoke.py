@@ -133,7 +133,8 @@ import time
 from unittest.mock import patch
 from app.plugins.cloudsubscribefork.handlers.sync.postprocess import PostprocessService
 for fails in (False, True):
-    pending = {'fixture': dict(task_type='magnet', task_id='ABC',
+    pending = {'fixture': dict(task_type='magnet', task_id='magnet:' + 'A'*40 + ':7',
+                              share_url='magnet:?xt=urn:btih:' + 'a'*40,
                               subscribe_id=0, created_at=time.time(), history_ready=True)}
     def save_pending(values):
         pending.clear()
@@ -158,8 +159,9 @@ for fails in (False, True):
          patch.object(PostprocessService, '_flush_batch_postprocess'), \
          patch.object(PostprocessService, '_postprocess_task_id', return_value=''):
         result = PostprocessService(owner).monitor_offline_strm_tasks(
-            offline_tasks=[dict(id='ABC', completed=True)], offline_tasks_valid=True)
+            offline_tasks=[dict(id='A'*40, completed=True)], offline_tasks_valid=True)
         assert finalize.call_args.kwargs['offline_task']['completed']
+        assert finalize.call_args.kwargs['offline_task']['id'] == 'A'*40
         if fails:
             assert result['pending'] == 1 and pending['fixture']['check_index'] == 1
             assert '_monitor_token' not in pending['fixture']
