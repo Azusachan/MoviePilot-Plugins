@@ -392,7 +392,16 @@ class ResourceTransferService(OwnerDelegator):
         """按 torrent 真实媒体文件追加待完成历史，并避免同任务重复记录。"""
         entries = self._magnet_history_entries(resource, season, target_episodes)
         if not entries:
-            return 0
+            # A validated provider-only candidate can lack a torrent manifest.
+            # Record the accepted TASK, not a guessed physical filename. Final
+            # file/episode validation remains mandatory during postprocessing.
+            name = str(resource.get('title') or resource.get('name') or '').strip()
+            targets = sorted({int(ep) for ep in (target_episodes or []) if int(ep) > 0})
+            if not name or (season is not None and not targets):
+                return 0
+            fields = {**fields, 'manifest_pending': True}
+            entries = [{'file_name': name, 'file_size': 0, 'season': season,
+                        'episode': ep} for ep in (targets if season is not None else [None])]
         existing = {
             (
                 str(item.get("finalize_key") or ""),
@@ -416,7 +425,7 @@ class ResourceTransferService(OwnerDelegator):
                 "file_size": entry["file_size"],
                 "season": entry["season"],
                 "episode": entry["episode"],
-                "target_episodes": [entry["episode"]],
+                "target_episodes": [entry["episode"]] if entry["episode"] else [],
                 "finalize_key": finalize_key,
             })
             history.append(self._build_transfer_history_item(

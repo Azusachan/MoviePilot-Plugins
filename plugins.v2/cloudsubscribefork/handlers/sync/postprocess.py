@@ -304,10 +304,7 @@ class PostprocessService(OwnerDelegator):
             key
             for key, item in pending.items()
             if (not selected or key in selected)
-               and (
-                       item.get("history_ready")
-                       or now - float(item.get("created_at") or now) >= PostprocessService._HISTORY_READY_GRACE
-               )
+               and item.get("history_ready")
                and (bool(selected and key in selected) or now >= float(item.get("_monitor_until") or 0))
                and (force or now >= float(item.get("next_check_at") or 0))
         ]
@@ -579,6 +576,17 @@ class PostprocessService(OwnerDelegator):
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             if not pending:
                 return None
+
+            # Upgrade old queue-key placeholders to the actual torrent hash.
+            from ...search.magnet import extract_magnet_hash
+            repaired = False
+            for key, item in pending.items():
+                native_hash = extract_magnet_hash(item.get('share_url') or '')
+                if native_hash and str(item.get('task_id') or '').startswith('magnet:'):
+                    item['task_id'] = native_hash
+                    repaired = True
+            if repaired:
+                self._save_offline_pending(pending)
 
             now = time.time()
             due_keys = self._due_pending_keys(
@@ -1751,6 +1759,19 @@ class PostprocessService(OwnerDelegator):
             offline_tasks_valid: Optional[bool] = None,
     ) -> Dict[str, int]:
         """检查离线下载和网盘文件后处理；手动刷新可立即重试指定任务。"""
+        repair_history = getattr(self, '_persist_offline_pending_history', None)
+        if callable(repair_history) and self._get_data:
+            snapshot = self._get_data(self._OFFLINE_PENDING_KEY) or {}
+            now = time.time()
+            for key, item in snapshot.items():
+                if (item.get('history_ready') or item.get('status') == 'submitting'
+                        or now - float(item.get('created_at') or now) < 60):
+                    continue
+                try:
+                    if repair_history(item, key):
+                        logger.warning(f'已恢复遗漏的离线任务历史与激活状态：{key}')
+                except Exception as error:
+                    logger.error(f'离线任务历史恢复失败，保留任务：{key}，{type(error).__name__}')
         ctx = self._prepare_postprocess_context(
             force=force,
             pending_keys=pending_keys,

@@ -232,7 +232,7 @@ class TestPostprocessServiceHelpers(unittest.TestCase):
         )
 
     def test_due_pending_keys_grace_for_abandoned_tasks(self):
-        """超过落库宽限期仍未就绪的遗留任务放行，避免被永久阻塞。"""
+        """旧任务也必须先恢复历史，不能靠超时绕过落库契约。"""
         now = 100000.0
         abandoned = {
             "abandoned": {
@@ -247,7 +247,7 @@ class TestPostprocessServiceHelpers(unittest.TestCase):
             },
         }
         self.assertEqual(
-            PostprocessService._due_pending_keys(abandoned, now), ["abandoned"]
+            PostprocessService._due_pending_keys(abandoned, now), []
         )
 
     def test_media_context_key(self):
