@@ -93,6 +93,9 @@ class TelevisionSyncProcessor(OwnerDelegator):
             self._set_task_phase(subscribe, "核对播出范围", 20)
             season = normalize_season(subscribe.season)
             cloud_drive_name = self._cloud_drive_name()
+            correct_count = getattr(self, '_correct_bangumi_episode_total', None)
+            if callable(correct_count) and not transient_target:
+                correct_count(subscribe, mediainfo)
             total_ep = subscribe.total_episode or 0
             start_ep = subscribe.start_episode or 1
             if total_ep <= 0 and mediainfo:
