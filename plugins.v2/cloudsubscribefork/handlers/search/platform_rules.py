@@ -61,6 +61,59 @@ class PlatformRuleService(OwnerDelegator):
             title = f"{title} {file_name}".strip()
         return title
 
+    @staticmethod
+    def _safe_subscribe_params(subscribe: Any) -> Optional[Dict[str, Any]]:
+        """安全读取订阅参数，同时兼容 MoviePilot v2 与 v3 契约。"""
+        if not subscribe:
+            return None
+        try:
+            from app.chain.subscribe import SubscribeChain
+        except ImportError:
+            try:
+                from app.chain.subscribe.query import SubscribeQueryChain as SubscribeChain
+            except ImportError:
+                SubscribeChain = None
+        if not SubscribeChain:
+            return None
+
+        # 补充所有可能字段的默认值，防止 v3 dot-access 触发 AttributeError
+        for attr in (
+            "quality", "resolution", "effect", "include", "exclude",
+            "audio_quality", "audio_format", "min_bitrate", "min_bit_depth",
+            "min_sample_rate", "filter_groups", "sites", "custom_words",
+        ):
+            if not hasattr(subscribe, attr):
+                try:
+                    setattr(subscribe, attr, None)
+                except Exception:
+                    pass
+
+        # 优先类方法/静态方法（v3）
+        get_params = getattr(SubscribeChain, "get_params", None)
+        if callable(get_params):
+            try:
+                return get_params(subscribe)
+            except TypeError:
+                try:
+                    chain = SubscribeChain() if callable(SubscribeChain) else None
+                    if chain and hasattr(chain, "get_params"):
+                        return chain.get_params(subscribe)
+                except Exception:
+                    pass
+            except Exception as err:
+                logger.debug(f"SubscribeChain.get_params 读取失败：{err}")
+                return None
+
+        # 备选实例化调用（v2）
+        try:
+            chain = SubscribeChain() if callable(SubscribeChain) else None
+            if chain and hasattr(chain, "get_params") and callable(chain.get_params):
+                return chain.get_params(subscribe)
+        except Exception:
+            pass
+
+        return None
+
     def _filter_by_platform_rules(
             self,
             resources: List[Dict],
@@ -94,10 +147,7 @@ class PlatformRuleService(OwnerDelegator):
                     TorrentHelper = None
 
             rule_groups = self._platform_rule_groups(subscribe)
-            filter_params = (
-                getattr(SubscribeChain, "get_params", lambda s: None)(subscribe)
-                if subscribe and SubscribeChain else None
-            )
+            filter_params = self._safe_subscribe_params(subscribe)
             torrent_helper = TorrentHelper() if TorrentHelper else None
 
             torrents = []
@@ -223,10 +273,7 @@ class PlatformRuleService(OwnerDelegator):
         torrents = []
         by_url = {}
         size_by_url = {}
-        filter_params = (
-            getattr(SubscribeChain, "get_params", lambda s: None)(subscribe)
-            if subscribe and SubscribeChain else None
-        )
+        filter_params = self._safe_subscribe_params(subscribe)
         torrent_helper = TorrentHelper() if TorrentHelper else None
 
         for index, item in enumerate(candidates):

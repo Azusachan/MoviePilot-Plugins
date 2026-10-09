@@ -882,12 +882,12 @@ class SyncExecutionService(OwnerDelegator):
                     new_history_records = result["history"]
                     history.extend(new_history_records)
                     if new_history_records:
+                        # 落库即置 history_ready 并立即排期后处理，顺序由待处理表保证
                         self._sync_handler._timed_sync_call(
                             "history_persist",
                             self._sync_handler.append_history_records,
                             new_history_records,
                         )
-                    # 每个并行订阅组完成并持久化历史后立即入队，避免停止同步时
                     # 只完成了前几个任务却因整批收尾未执行而漏发通知。
                     completed_details = result.get("transfer_details") or []
                     if completed_details:

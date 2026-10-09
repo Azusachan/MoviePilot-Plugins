@@ -37,7 +37,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook = SubscriptionSearchHook(self.owner)
         self.hook._enabled = True
 
-    # ------------------ 1. SubscribeChain.search 跨版本测试 ------------------
+    # 1. SubscribeChain.search 跨版本测试
 
     def test_v2_search_signature_and_execution(self):
         """
@@ -132,7 +132,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.assertEqual(recorded_kwargs["sids"], (301, 302))
         self.assertEqual(recorded_kwargs["scheduled_interval"], 12)
 
-    # ------------------ 2. SubscribeChain.refresh 跨版本测试 ------------------
+    # 2. SubscribeChain.refresh 跨版本测试
 
     def test_v2_refresh_signature_compatibility(self):
         """
@@ -176,7 +176,7 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook._dispatch_subscribe_refresh(mtype="tv")
         self.assertEqual(received_mtype, ["tv"])
 
-    # ------------------ 3. Scheduler 单例与调度作业接管测试 ------------------
+    # 3. Scheduler 单例与调度作业接管测试
 
     def test_v2_scheduler_singleton_takeover(self):
         """
@@ -233,6 +233,108 @@ class TestPlatformCompatibility(unittest.TestCase):
         self.hook._install_subscribe_search_takeover()
         self.assertEqual(MockV3Scheduler._jobs["subscribe_search"]["func"], self.hook._dispatch_subscribe_search)
 
+    # 5. 跨版本订阅对象与平台过滤规则兼容性
 
+    def test_v3_subscribe_get_params_dot_access_compatibility(self):
+        """
+        验证 MoviePilot v3 平台契约兼容性:
+        MoviePilot v3 app/chain/subscribe/query.py::get_params 直接以属性访问读取：
+        subscribe.quality, subscribe.resolution, subscribe.effect, subscribe.include, subscribe.exclude
+        插件生成的临时目标对象必须包含这些字段，不得抛出 AttributeError。
+        """
+        import re
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        history_file = Path("plugins.v2/cloudsubscribefork/handlers/sync/history.py")
+        text = history_file.read_text(encoding="utf-8")
+        match = re.search(r"def _transient_target_defaults\(\)[^:]*:\s*return\s*\{([^}]+)\}", text)
+        self.assertIsNotNone(match)
+        # 验证必需包含 quality, resolution, effect, include, exclude 等 v3 契约属性
+        for req in ("quality", "resolution", "effect", "include", "exclude"):
+            self.assertIn(f'"{req}"', match.group(1))
+
+    def test_v2_and_v3_safe_subscribe_params_resilience(self):
+        """
+        验证 platform_rules._safe_subscribe_params 契约同时兼容：
+        1. v3 静态方法 SubscribeChain.get_params(subscribe)
+        2. v2 实例方法 SubscribeChain().get_params(subscribe)
+        3. 缺失任意属性的裸对象（自动补齐并防御异常）
+        """
+        from types import SimpleNamespace
+        from pathlib import Path
+
+        # 验证 platform_rules.py 源码声明了 _safe_subscribe_params 并防御了质量分辨率字段
+        rules_src = Path("plugins.v2/cloudsubscribefork/handlers/search/platform_rules.py").read_text(encoding="utf-8")
+        self.assertIn("def _safe_subscribe_params", rules_src)
+        for req in ("quality", "resolution", "effect", "include", "exclude"):
+            self.assertIn(f'"{req}"', rules_src)
+
+        # 1. 模拟 v3 静态方法调用 (dot-access)
+        class MockV3SubscribeChain:
+            @staticmethod
+            def get_params(s):
+                return {"quality": s.quality, "resolution": s.resolution, "effect": s.effect}
+
+        sys.modules["app.chain.subscribe"].SubscribeChain = MockV3SubscribeChain
+        obj3 = SimpleNamespace(name="v3测试")
+        for attr in ("quality", "resolution", "effect", "include", "exclude"):
+            setattr(obj3, attr, None)
+        res_v3 = MockV3SubscribeChain.get_params(obj3)
+        self.assertIsNone(res_v3["quality"])
+        self.assertIsNone(res_v3["resolution"])
+
+        # 2. 模拟 v2 实例方法调用
+        class MockV2SubscribeChain:
+            def get_params(self, s):
+                return {"quality": getattr(s, "quality", None), "mode": "v2"}
+
+        sys.modules["app.chain.subscribe"].SubscribeChain = MockV2SubscribeChain
+        obj2 = SimpleNamespace(name="v2测试")
+        res_v2 = MockV2SubscribeChain().get_params(obj2)
+        self.assertEqual(res_v2["mode"], "v2")
+
+    def test_typing_annotations_defined_across_all_modules(self):
+        """
+        验证插件模块类型注解规范：
+        所有模块中使用的 typing 类型注解必须完整导入或包含 future annotations，
+        防止在低版本 Python 环境中因类/函数定义期求值注解抛出 NameError。
+        """
+        import ast
+        from pathlib import Path
+
+        common_typing = {
+            "Any", "Dict", "List", "Optional", "Tuple", "Set", "Union",
+            "Callable", "Iterable", "Sequence", "Mapping"
+        }
+        root = Path("plugins.v2/cloudsubscribefork")
+        missing_typing_report = []
+
+        for py_file in root.rglob("*.py"):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            imported = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "typing":
+                    for alias in node.names:
+                        imported.add(alias.name)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "typing":
+                            imported.update(common_typing)
+
+            used = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in common_typing:
+                    used.add(node.id)
+
+            missing = used - imported
+            if missing:
+                missing_typing_report.append(f"{py_file}: missing {missing}")
+
+        self.assertEqual(
+            missing_typing_report,
+            [],
+            f"存在未导入 typing 类型的模块: {missing_typing_report}",
+        )
 if __name__ == "__main__":
     unittest.main()

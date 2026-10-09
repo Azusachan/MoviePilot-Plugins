@@ -201,6 +201,10 @@ class SubscribeHandler:
                 subscribe, new_lack = progress
                 if new_lack != 0:
                     return new_lack
+                subscribe_id = int(getattr(subscribe, "id", 0) or 0)
+                if subscribe_id <= 0 or bool(getattr(subscribe, "_transient_target", False)):
+                    logger.debug(f"临时目标无需移至系统订阅历史记录：{getattr(subscribe, 'name', '')}")
+                    return 0
                 if bool(getattr(subscribe, "best_version", False)):
                     logger.info(
                         f"订阅 {subscribe.name} 当前版本已完成，"

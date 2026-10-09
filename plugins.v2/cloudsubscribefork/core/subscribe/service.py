@@ -404,21 +404,16 @@ class AutoSubscribeService:
             for key, value in config.items()
             if key.startswith(prefix)
         }
+        # 清除历史遗留的单值 media_type，避免旧配置污染
+        options.pop("media_type", None)
         options.setdefault("min_month", datetime.datetime.now().month)
         global_media_types = config.get("auto_subscribe_media_types")
         if global_media_types is None:
             raw_gt = config.get("auto_subscribe_media_type")
-            if raw_gt:
-                global_media_types = ["movie", "tv"] if raw_gt == "all" else [raw_gt]
-            else:
-                global_media_types = ["movie", "tv"]
+            global_media_types = ["all"] if raw_gt in (None, "all") else [str(raw_gt).strip()]
         options["media_types"] = global_media_types
-        if not options.get("media_type") or options.get("media_type") == "all":
-            options["media_type"] = (
-                "all" if set(global_media_types) >= {"movie", "tv"}
-                else (list(global_media_types)[0] if global_media_types else "all")
-            )
         return options
+
     @staticmethod
     def _debug_provider_options(options: dict[str, Any]) -> dict[str, Any]:
         """日志中保留连接诊断字段，避免输出代理密码等敏感配置。"""
@@ -475,9 +470,9 @@ class AutoSubscribeService:
     @classmethod
     def _parse_selected_media_types(cls, options: dict[str, Any]) -> set[str]:
         """从榜单配置中解析出用户选中的媒体类型集合（全小写）。"""
-        raw = options.get("media_type")
+        raw = options.get("media_types")
         if raw is None:
-            raw = options.get("media_types")
+            raw = options.get("media_type")
         if not raw:
             return set()
         if isinstance(raw, (list, tuple, set)):
@@ -494,6 +489,7 @@ class AutoSubscribeService:
             is_anime: bool,
             selected_types: set[str],
             source: str,
+            pre_filter: bool = False,
     ) -> tuple[bool, str]:
         """判定媒体类型是否符合榜单筛选要求。
 
@@ -520,12 +516,23 @@ class AutoSubscribeService:
                     return True, ""
                 return False, "未勾选动漫番剧类型"
 
-        # 普通影视类型
+        # 普通影视类型：若在预过滤阶段，普通源动漫尚未通过TMDB识别出动漫属性，
+        # 只要用户勾选了对应普通类型或对应动漫类型，均放行进入识别，避免预过滤误杀
+        if pre_filter:
+            if norm_type == "movie":
+                if "movie" in selected_types or "anime_movie" in selected_types:
+                    return True, ""
+                return False, "未勾选电影或动漫电影类型"
+            elif norm_type == "tv":
+                if "tv" in selected_types or "anime_tv" in selected_types:
+                    return True, ""
+                return False, "未勾选电视剧或动漫番剧类型"
+
+        # 后过滤阶段：普通影视类型必须严格在勾选类型中
         if norm_type not in selected_types:
             return False, f"未勾选该媒体类型：{norm_type or '未知'}"
 
         return True, ""
-
 
     def _pre_filter(
             self, candidate: MediaCandidate, options: dict[str, Any], config: dict[str, Any]
@@ -537,6 +544,7 @@ class AutoSubscribeService:
             is_anime=is_anime,
             selected_types=selected_types,
             source=candidate.source,
+            pre_filter=True,
         )
         if not accepted:
             logger.debug(f"[{candidate.source}] 预过滤排除候选：{candidate.title}（{reason}）")

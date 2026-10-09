@@ -358,7 +358,7 @@ class MovieSyncProcessor(OwnerDelegator):
                 try:
                     is_offline_resource = self._is_offline_url(share_url) or self._is_magnet_url(share_url)
                     if is_offline_resource:
-                        if self._is_offline_blacklisted(resource, share_url):
+                        if not manual_resources and self._is_offline_blacklisted(resource, share_url):
                             logger.debug(
                                 f"离线资源命中黑名单跳过：{resource_title}"
                             )
@@ -432,6 +432,7 @@ class MovieSyncProcessor(OwnerDelegator):
                             finalize_key=pending_key,
                         )
                         movie_transferred = True
+                        transferred_count += 1
                         logger.info(f"Magnet 已进入下载后真实文件匹配：{provider_name}")
                         continue
 

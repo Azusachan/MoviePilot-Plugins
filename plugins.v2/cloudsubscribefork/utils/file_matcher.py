@@ -30,8 +30,15 @@ class FileMatcher:
             return True
         expected_titles = [
             getattr(mediainfo, key, None)
-            for key in ("title", "en_title", "original_title")
+            for key in ("title", "en_title", "original_title", "original_name")
         ]
+        names = getattr(mediainfo, "names", None)
+        if names is None and isinstance(mediainfo, dict):
+            names = mediainfo.get("names")
+        if isinstance(names, (list, tuple, set)):
+            expected_titles.extend(names)
+        expected_titles = [t for t in expected_titles if t]
+
         candidate_titles = [
             getattr(meta, key, None)
             for key in ("cn_name", "en_name", "original_name")
@@ -59,12 +66,22 @@ class FileMatcher:
             return False
         candidate_type = getattr(meta, "type", None)
         expected_type = getattr(mediainfo, "type", None)
-        if (
-                candidate_type and expected_type
-                and str(getattr(candidate_type, "value", candidate_type)) not in {"未知", "unknown"}
-                and candidate_type != expected_type
-        ):
-            return False
+        if candidate_type and expected_type:
+            c_val = str(getattr(candidate_type, "value", candidate_type) or "").strip().lower()
+            e_val = str(getattr(expected_type, "value", expected_type) or "").strip().lower()
+            type_map = {
+                "tv": "tv", "电视剧": "tv", "series": "tv", "teleplay": "tv",
+                "movie": "movie", "电影": "movie",
+            }
+            norm_c = type_map.get(c_val, c_val)
+            norm_e = type_map.get(e_val, e_val)
+            if (
+                    norm_c and norm_e
+                    and norm_c not in {"未知", "unknown"}
+                    and norm_e not in {"未知", "unknown"}
+                    and norm_c != norm_e
+            ):
+                return False
         return True
 
     @staticmethod

@@ -1,5 +1,6 @@
 """Dian115 资源搜索、客户端生命周期与积分解锁。"""
 
+import copy
 import re
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlencode
@@ -442,6 +443,12 @@ class Dian115SearchService(OwnerDelegator):
                     result.get("actual_points")
                 ) or 0
                 url = self._unlock_payload_url(result)
+                data = result.get("payload") or {}
+                if isinstance(data, dict):
+                    if data.get("file_list"):
+                        candidate["file_list"] = copy.deepcopy(data["file_list"])
+                    if data.get("urls"):
+                        candidate["urls"] = copy.deepcopy(data["urls"])
                 actual_points, before_task, before_subscribe = (
                     self._dian115_budget.record_result(
                         cache_key, url, actual_points
