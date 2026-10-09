@@ -525,6 +525,10 @@ class SyncNamingService(OwnerDelegator):
                     episode_files[episode] = item
         return True, episode_files, cloud_path
 
+    def _cloud_drive_name(self) -> str:
+        """当前目标网盘名称，未获取到时回退为通用称呼。"""
+        return str(getattr(getattr(self, "_cloud_drive", None), "name", "") or "网盘")
+
     def _scan_cloud_resource_episodes(
             self,
             subscribe,
@@ -541,7 +545,8 @@ class SyncNamingService(OwnerDelegator):
             start_episode=start_episode,
             total_episode=total_episode,
         )
-        label = f"115媒体路径 {cloud_path}" if cloud_path else ""
+        drive_name = self._cloud_drive_name()
+        label = f"{drive_name}媒体路径 {cloud_path}" if cloud_path else f"{drive_name}媒体路径"
         return valid, set(episode_files), label
 
     def _find_cloud_movie_file(
@@ -559,7 +564,9 @@ class SyncNamingService(OwnerDelegator):
                 f"{getattr(subscribe, 'name', None) or mediainfo.title}.mkv",
             )
         except Exception as error:
-            logger.debug(f"115电影目标路径计算失败：{mediainfo.title_year}，{error}")
+            logger.debug(
+                f"{self._cloud_drive_name()}电影目标路径计算失败：{mediainfo.title_year}，{error}"
+            )
             return None
         cloud_directories = getattr(self, "_cloud_directories", None)
         if not cloud_directories:

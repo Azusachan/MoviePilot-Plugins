@@ -1,6 +1,6 @@
 """洗版基线、评分与自动升级。"""
 
-from ...core.media import normalize_season
+from .utils import normalize_season
 
 import datetime
 from typing import Any, Dict, List, Optional, Set
@@ -417,6 +417,18 @@ class UpgradeService(OwnerDelegator):
                     if not share_files:
                         continue
 
+                    if manual_resources:
+                        # 手动提交的分享以实际包含的集数为准：已存在集数按洗版规则比较后替换或跳过，
+                        # 新增集数正常转存，避免只处理已有基线集数而漏掉新集。
+                        _, share_episodes = self._summarize_share_episodes(
+                            share_files,
+                            season,
+                            mediainfo if is_cross_batch else None,
+                        )
+                        pending_episodes = tuple(
+                            sorted(set(pending_episodes) | share_episodes)
+                        )
+
                     # 匹配需要升级的集数
                     self._set_upgrade_phase(subscribe, "比较版本", 65)
                     matched_items = []
@@ -436,7 +448,7 @@ class UpgradeService(OwnerDelegator):
                             continue
 
                         file_name = matched_file.get('name', '')
-                        # 候选文件大小（115 API 搜索已自带）
+                        # 候选文件大小（搜索接口已自带元数据）
                         candidate_size = self._resource_size_bytes(matched_file.get("size"))
 
                         # 现有文件信息（MoviePilot 规则优先级）

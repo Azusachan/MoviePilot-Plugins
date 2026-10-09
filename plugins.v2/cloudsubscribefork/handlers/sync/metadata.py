@@ -2,7 +2,6 @@
 TMDB 剧集解析、日历与订阅元数据识别修复服务。
 """
 
-from ...core.media import normalize_season
 import datetime
 import re
 from concurrent.futures import Future
