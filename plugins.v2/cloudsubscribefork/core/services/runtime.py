@@ -1117,12 +1117,9 @@ class SyncRuntimeService(OwnerDelegator):
                 filtered_groups.append(filtered_group)
             groups = filtered_groups
         if not groups:
-            return {
-                "checked": 0,
-                "completed": 0,
-                "failed": 0,
-                "pending": len(sync_handler.get_pending_finalize_tasks()),
-            }
+            # No ready group may mean an orphaned accepted task whose history
+            # never committed. Run the recovery boundary before declaring idle.
+            return sync_handler.monitor_offline_strm_tasks(**kwargs)
         shared_kwargs = dict(kwargs)
         if (
                 any(group["needs_offline"] for group in groups)

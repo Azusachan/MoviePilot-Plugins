@@ -20,6 +20,21 @@ def method(filename, name):
     return scope[name]
 
 class OfflineActivationRegressionTests(unittest.TestCase):
+    def test_outer_scheduler_does_not_skip_orphan_recovery(self):
+        tree = ast.parse((ROOT.parent.parent / 'core/services/runtime.py').read_text(encoding='utf-8'))
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == '_monitor_offline_task_groups')
+        scope = dict(Any=Any, Dict=Dict, Optional=Optional)
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'runtime.py', 'exec'), scope)
+        host = Mock()
+        host._sync_tasks_lock = RLock()
+        host._sync_tasks = {}
+        handler = Mock()
+        handler.get_due_offline_task_groups.return_value = []
+        handler.monitor_offline_strm_tasks.return_value = {'pending': 0, 'completed': 1}
+        self.assertEqual(scope['_monitor_offline_task_groups'](host, handler, None, {}),
+                         {'pending': 0, 'completed': 1})
+        handler.monitor_offline_strm_tasks.assert_called_once_with()
+
     def test_monitor_repairs_orphan_but_not_inflight_history(self):
         host = Mock()
         host._get_data.return_value = {
