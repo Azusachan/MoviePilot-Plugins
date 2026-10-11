@@ -282,10 +282,13 @@ class SubscriptionSearchHook(OwnerDelegator):
             execution_context = kwargs.pop("execution_context")
 
         subscribe_id = getattr(subscribe, "id", None)
-        subscribe_state = getattr(subscribe, "state", "R")
+        subscribe_state = str(getattr(subscribe, "state", "R") or "R").strip().upper()
+        manual = bool(kwargs.get("manual"))
         use_plugin = self._is_takeover_active()
         if subscribe_state == "N" and self._enabled and self._takeover_new_subscribes:
             use_plugin = True
+        if subscribe_state not in {"N", "R"} and not manual:
+            use_plugin = False
         if subscribe_id and self._is_subscribe_excluded(subscribe_id):
             use_plugin = False
 

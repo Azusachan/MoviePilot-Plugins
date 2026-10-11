@@ -11,7 +11,6 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.chain.mediaserver import MediaServerChain
 from app.core.context import MediaInfo
-from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory
@@ -619,9 +618,15 @@ class HistoryService(OwnerDelegator):
                     or "unknown"
             )
             record.update(self._history_page_fields(record))
+            target_drive = str(
+                record.get("target_drive_name")
+                or record.get("cloud_drive_name")
+                or ""
+            ).strip()
+            record["target_drive_name"] = target_drive
+            record["cloud_drive_name"] = target_drive or str(record.get("cloud_drive_name") or "").strip()
             is_cross = str(record.get("transfer_mode") or "") == "cross"
             record["is_cross_transfer"] = is_cross
-            record["task_types"] = self._history_task_types(record)
             if is_cross:
                 source_name = str(
                     record.get("source_drive_name")
@@ -710,6 +715,11 @@ class HistoryService(OwnerDelegator):
                 if str(record.get("resource_type") or "").strip()
             )),
         })
+        prepared["target_drives"] = list(dict.fromkeys(
+            str(record.get("target_drive_name") or record.get("cloud_drive_name") or "").strip()
+            for record in records
+            if str(record.get("target_drive_name") or record.get("cloud_drive_name") or "").strip()
+        ))
         prepared["sources"] = list(dict.fromkeys(
             "manual"
             if str(record.get("source") or "").strip().casefold()
@@ -965,15 +975,11 @@ class HistoryService(OwnerDelegator):
                 normalize_season(item.get("season")),
             )
         if notify_path and mediainfo:
-            scheduled = self._media_server_notifier.notify(
+            self._media_server_notifier.notify(
                 path=notify_path,
                 mediainfo=mediainfo,
                 file_name=str(item.get("file_name") or ""),
             )
-            if scheduled:
-                logger.debug(
-                    f"已加入媒体目录通知批次：{item.get('file_name') or Path(notify_path).name}"
-                )
         elif strm_path:
             logger.warning(
                 f"STRM 已生成但缺少媒体信息，无法发送入库通知：{strm_path}"
@@ -1000,6 +1006,7 @@ class HistoryService(OwnerDelegator):
             "year": getattr(target_subscribe, "year", None) or mediainfo.year,
             "image": getattr(mediainfo, "get_poster_image", lambda: None)(),
             "file_name": item.get("file_name"),
+            "strm_path": str(strm_path) if strm_path else "",
             "notification_kind": (
                 "upgrade"
                 if self._is_upgrade_history(history_record)

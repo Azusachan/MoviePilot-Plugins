@@ -27,6 +27,7 @@ class P115PlaybackReference:
     """将 115 文件的 pickcode 映射为通用 STRM 模板变量。"""
 
     template_variables: FrozenSet[str] = frozenset({"pickcode"})
+    proxy_identifier: str = "pickcode"
 
     @staticmethod
     def reference_values(file_item: CloudFile) -> Dict[str, str]:

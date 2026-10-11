@@ -61,12 +61,7 @@ class UpgradeService(OwnerDelegator):
                 logger.warning(f"【洗版转存】无法识别媒体信息 {subscribe.name}")
                 return transferred_count
 
-            # 读取已有评分，并以整季整理历史、插件历史和 Emby 构建统一基线。
-            self._set_upgrade_phase(subscribe, "建立洗版基线", 20)
-            existing_ep_pri = self._read_ep_priority(subscribe)
-            baseline = self._build_episode_baseline(
-                subscribe, mediainfo, season, include_saved=True
-            )
+            # 目标网盘为空时不存在洗版语义：按全新转存，避免误显示“建立洗版基线”
             cloud_valid, cloud_episode_files, cloud_dir = self._timed_sync_call(
                 "cloud_scan",
                 self._scan_cloud_resource_episode_files,
@@ -75,13 +70,38 @@ class UpgradeService(OwnerDelegator):
                 season=season,
                 start_episode=max(1, int(subscribe.start_episode or 1)),
                 total_episode=max(0, int(subscribe.total_episode or 0)),
+                cleanup_backups=True,
             )
+            has_unparsed = bool(getattr(self, "_season_unparsed_videos", None))
             if not cloud_valid:
                 logger.warning(
                     f"【洗版转存】{mediainfo.title} S{season:02d} "
                     "无法确认真实网盘文件，本轮跳过洗版"
                 )
                 return transferred_count
+            if not cloud_episode_files:
+                upgrade_title = f"【洗版转存】{mediainfo.title} S{season:02d}"
+                if manual_upgrade:
+                    logger.warning(f"{upgrade_title} 目标网盘无既有文件，洗版无对象，已跳过")
+                    return transferred_count
+                logger.info(f"{upgrade_title} 目标网盘无既有文件，按全新转存处理")
+                return self.process_tv_subscribe(
+                    subscribe=subscribe, history=history,
+                    transfer_details=transfer_details,
+                    transferred_count=transferred_count,
+                    exclude_ids=exclude_ids,
+                    allow_upgrade=False,
+                    manual_resources=manual_resources,
+                    manual_upgrade=False,
+                    target_episodes=target_episodes,
+                )
+
+            # 读取已有评分，并以整季整理历史、插件历史和 Emby 构建统一基线。
+            self._set_upgrade_phase(subscribe, "建立洗版基线", 20)
+            existing_ep_pri = self._read_ep_priority(subscribe)
+            baseline = self._build_episode_baseline(
+                subscribe, mediainfo, season, include_saved=True
+            )
 
             verified_baseline = {}
             for episode, baseline_item in baseline.items():
@@ -98,7 +118,7 @@ class UpgradeService(OwnerDelegator):
                         "target_file_name": cloud_name,
                         "cloud_file_id": str(getattr(cloud_file, "id", "") or ""),
                     })
-                verified_baseline[int(episode)] = item_data
+                    verified_baseline[int(episode)] = item_data
             for episode, cloud_file in cloud_episode_files.items():
                 if int(episode) not in verified_baseline:
                     cloud_name = str(getattr(cloud_file, "name", "") or "")
@@ -272,6 +292,7 @@ class UpgradeService(OwnerDelegator):
                                         int(baseline.get(episode, {}).get("file_size") or 0),
                                         self._resource_size_bytes(file_item.get("size")),
                                         has_existing=episode in baseline,
+                                        suppress_when_unparsed=has_unparsed,
                                     )[0]
                                     for episode, file_item, score in preview_candidates
                                 )
@@ -469,6 +490,7 @@ class UpgradeService(OwnerDelegator):
                             int(baseline.get(episode, {}).get("file_size") or 0),
                             candidate_size,
                             has_existing=episode in baseline,
+                            suppress_when_unparsed=has_unparsed,
                         )
                         if not should_upgrade:
                             logger.debug(
@@ -675,7 +697,7 @@ class UpgradeService(OwnerDelegator):
         from app.db.subscribe_oper import SubscribeOper
 
         with SessionFactory() as db:
-            all_subs = SubscribeOper(db=db).list() or []
+            all_subs = SubscribeOper(db=db).list("N,R") or []
 
         targets = [
             subscribe for subscribe in all_subs
@@ -734,7 +756,7 @@ class UpgradeService(OwnerDelegator):
 
         try:
             with SessionFactory() as db:
-                subscribes = SubscribeOper(db=db).list() or []
+                subscribes = SubscribeOper(db=db).list("N,R") or []
                 subscribes = [
                     item for item in subscribes
                     if getattr(item, "episode_priority", None)

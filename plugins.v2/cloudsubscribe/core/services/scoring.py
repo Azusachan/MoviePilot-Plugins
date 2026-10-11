@@ -16,7 +16,7 @@ class SubscriptionScoringService(OwnerDelegator):
         if not selected_ids:
             return []
         with SessionFactory() as db:
-            subscribes = SubscribeOper(db=db).list() or []
+            subscribes = SubscribeOper(db=db).list("N,R") or []
         return [
             subscribe for subscribe in subscribes
             if subscribe.id in selected_ids and subscribe.type == MediaType.TV.value

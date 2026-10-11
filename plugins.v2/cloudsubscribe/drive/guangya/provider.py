@@ -32,6 +32,7 @@ class GuangyaDrive:
 @dataclass(frozen=True)
 class GuangyaPlaybackReference:
     template_variables: FrozenSet[str] = frozenset({"file_id", "gcid"})
+    proxy_identifier: str = "file_id"
 
     @staticmethod
     def reference_values(file_item: CloudFile) -> Dict[str, str]:

@@ -739,7 +739,7 @@ class ResourceTransferService(OwnerDelegator):
             self,
             share_url: str,
             resource_title: str = "",
-            target_season: Optional[int] = None,
+            target_season: Optional[Any] = None,
             log_prefix: str = "",
             target_file_ids: Optional[List[str]] = None,
             target_file_names: Optional[List[str]] = None,
@@ -754,6 +754,28 @@ class ResourceTransferService(OwnerDelegator):
             if not files:
                 logger.debug(f"所选网盘路径没有可处理文件：{self._cloud_resource_path(share_url)}")
             return files
+
+        cache_season_key = (
+            tuple(sorted(int(s) for s in target_season if str(s).isdigit()))
+            if isinstance(target_season, (set, list, tuple))
+            else target_season
+        )
+        file_cache_key = (
+            str(share_url).strip(),
+            cache_season_key,
+            tuple(sorted(target_file_ids or ())),
+            tuple(sorted(target_file_names or ())),
+        )
+        if not hasattr(self, "_validated_files_cache"):
+            self._validated_files_cache = {}
+        cached = self._validated_files_cache.get(file_cache_key)
+        if cached is not None:
+            logger.debug(
+                f"{log_prefix + ' ' if log_prefix else ''}复用已解析的分享文件列表："
+                f"{self._resource_log_reference(share_url)}（共 {len(cached)} 个文件）"
+            )
+            return copy.deepcopy(cached)
+
         if not self._validate_resource_url(
                 share_url, resource_label="分享链接", log_prefix=log_prefix
         ):
@@ -788,6 +810,8 @@ class ResourceTransferService(OwnerDelegator):
             target_file_names=target_file_names,
             log_prefix=log_prefix,
         )
+        if files:
+            self._validated_files_cache[file_cache_key] = copy.deepcopy(files)
         return files
 
     def preview_resource_files(self, share_url: str) -> List[Dict[str, Any]]:

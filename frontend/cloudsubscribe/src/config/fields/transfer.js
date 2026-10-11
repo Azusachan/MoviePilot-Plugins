@@ -1,6 +1,7 @@
-import {enabled} from "./helpers.js";
+import {enabled, renderStrmSample, strmProxyStatusLine, strmProxySuggestion, strmVariableHint} from "./helpers.js";
 
 export function createTransferSection(options) {
+  const variableHint = strmVariableHint(options);
   return {
     value: "transfer",
     title: "转存设置",
@@ -242,7 +243,7 @@ export function createTransferSection(options) {
         ],
       },
       {
-        title: "本地路径与 STRM",
+        title: "本地路径",
         icon: "mdi-folder-play-outline",
         fields: [
           {
@@ -260,37 +261,94 @@ export function createTransferSection(options) {
             default: "/tmp",
             cols: 6,
           },
+        ],
+      },
+      {
+        title: "STRM 与元数据",
+        icon: "mdi-file-link-outline",
+        fields: [
           {
             key: "strm_generate_enabled",
             label: "转存后直接生成 STRM",
+            hint: "转存完成后按模板为媒体生成 STRM 文件",
             type: "switch",
-            cols: 4,
+            cols: 6,
+          },
+          {
+            key: "strm_proxy_enabled",
+            label: "STRM 播放代理",
+            hint: "播放时解析直链并 302 跳转",
+            type: "switch",
+            cols: 6,
+            show: enabled("strm_generate_enabled"),
           },
           {
             key: "nfo_scrape_enabled",
             type: "switch",
             label: "刮削生成 NFO",
-            cols: 4,
+            hint: "入库时补齐缺失的 NFO 元数据文件",
+            cols: 6,
           },
           {
             key: "image_scrape_enabled",
             type: "switch",
             label: "刮削生成图片",
-            cols: 4,
+            hint: "入库时补齐缺失的海报/背景/剧照图片",
+            cols: 6,
           },
           {
             key: "strm_base_url",
-            label: "STRM 基础地址",
-            placeholder: "http://172.17.0.1:9527",
-            hint: "STRM 播放前缀地址",
-            cols: 8,
+            label: "STRM 基础地址 / 播放代理地址",
+            placeholder: "http://192.168.1.10:3001",
+            hint: "不含端口，端口单独填写",
+            cols: 6,
+            show: enabled("strm_generate_enabled"),
+          },
+          {
+            key: "strm_proxy_port",
+            label: "代理监听端口",
+            type: "proxy-port",
+            autoCheckWhen: (config) => Boolean(config.strm_proxy_enabled),
+            min: 0,
+            max: 65535,
+            hint: "默认 9527",
+            cols: 3,
+            show: enabled("strm_generate_enabled"),
+          },
+          {
+            key: "strm_proxy_route",
+            label: "代理短链路由",
+            placeholder: "d",
+            hint: "路径前缀，如 d",
+            cols: 3,
+            show: enabled("strm_generate_enabled"),
+          },
+          {
+            key: "strm_proxy_help",
+            type: "info",
+            label: "播放代理与 STRM 示例",
+            lines: (config) => {
+              const sample = renderStrmSample(config);
+              return [
+                sample
+                  ? `STRM 内容：${sample}`
+                  : "填写基础地址、端口与模板后此处实时显示 STRM 内容",
+                strmProxyStatusLine(config, options),
+                strmProxySuggestion(config, options),
+                variableHint,
+                "示例中的 <变量> 为网盘标识占位，生成时替换为真实值",
+              ].filter(Boolean);
+            },
+            cols: 12,
             show: enabled("strm_generate_enabled"),
           },
           {
             key: "strm_url_template",
             label: "STRM URL 模板",
             type: "textarea",
-            hint: "支持 {base_url}、{file_path} 及各网盘 ID 变量",
+            hint: variableHint,
+            rows: 3,
+            monospace: true,
             cols: 12,
             show: enabled("strm_generate_enabled"),
           },

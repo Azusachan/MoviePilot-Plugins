@@ -1,7 +1,9 @@
 """STRM 内容与本地目标路径生成。"""
+import re
 from pathlib import Path, PurePosixPath
 from string import Formatter
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from urllib.parse import urlparse
 
 
 class StrmTemplateError(ValueError):
@@ -14,6 +16,66 @@ class StrmGenerator:
     CORE_VARIABLES = {"base_url", "file_name", "file_path"}
     DEFAULT_BASE_URL = "http://172.17.0.1:9527"
     DEFAULT_TEMPLATE = "{base_url}{file_path}"
+    # 播放代理路由（插件 API 全路径）与其 STRM 模板
+    PROXY_DEFAULT_ROUTE = "d"
+    # 可按网盘标识独立解析直链的变量（按此优先级生成短链）
+    PROXY_IDENTIFIER_VARIABLES = ("pickcode", "file_id")
+
+    @classmethod
+    def proxy_identifier_variable(
+            cls, reference: Any = None, provider_variables: Any = ()
+    ) -> str:
+        """可用于代理短链定位的标识变量（以网盘声明的 proxy_identifier 为准）。"""
+        declared = str(getattr(reference, "proxy_identifier", "") or "").strip()
+        if declared:
+            return declared
+        variables = provider_variables or getattr(reference, "template_variables", ())
+        available = {str(value or "").strip() for value in (variables or ())}
+        for name in cls.PROXY_IDENTIFIER_VARIABLES:
+            if name in available:
+                return name
+        return ""
+
+    @classmethod
+    def with_port(cls, base_url: Any, port: Any = 0) -> str:
+        """把监听端口并入基础地址；基础地址已显式带端口时保持不变。"""
+        base = str(base_url or "").strip().rstrip("/") or cls.DEFAULT_BASE_URL
+        try:
+            port_number = int(port or 0)
+        except (TypeError, ValueError):
+            port_number = 0
+        if port_number <= 0 or urlparse(base).port:
+            return base
+        return f"{base}:{port_number}"
+
+    @classmethod
+    def proxy_route_segment(cls, value: Any = "") -> str:
+        """规范化短链路由段：仅允许单段安全字符，默认 ``d``。"""
+        segment = str(value or "").strip().strip("/").split("/")[-1]
+        if not segment or not re.fullmatch(r"[A-Za-z0-9._-]+", segment):
+            return cls.PROXY_DEFAULT_ROUTE
+        return segment
+
+    @classmethod
+    def proxy_template(
+            cls, identifier_variable: str = "", route: Any = ""
+    ) -> str:
+        """代理短链模板；无可用标识变量时返回空串（该网盘不支持短链代理）。"""
+        if not identifier_variable:
+            return ""
+        segment = cls.proxy_route_segment(route)
+        return (
+            f"{{base_url}}/{segment}/{{{identifier_variable}}}"
+            "?/{file_name}"
+        )
+
+    @classmethod
+    def build_proxy_template(
+            cls, base_url: str, identifier_variable: str = "", route: Any = ""
+    ) -> Tuple[str, str]:
+        """播放代理的 STRM 基址与短链模板；基址复用 STRM 基础地址。"""
+        normalized = str(base_url or "").strip().rstrip("/") or cls.DEFAULT_BASE_URL
+        return normalized, cls.proxy_template(identifier_variable, route)
 
     def __init__(
             self,

@@ -1,10 +1,11 @@
 """基于TMDB 刮削器批量生成本地媒体元数据。"""
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 from app.core.config import settings
 from app.core.metainfo import MetaInfoPath
+from app.log import logger
 from app.modules.themoviedb.scraper import TmdbScraper
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
@@ -18,15 +19,29 @@ class MediaScraper:
         self._nfo_enabled = bool(nfo_enabled)
         self._image_enabled = bool(image_enabled)
         self._scraper = TmdbScraper()
+        # 批次内逐文件日志先缓存，批次结束合并为数组输出
+        self._batch_log: Optional[Dict[str, list]] = None
 
-    @staticmethod
-    def _write_missing(path: Path, content: bytes) -> bool:
+    def _note(self, kind: str, name: str) -> None:
+        if self._batch_log is None:
+            logger.debug(f"{kind}：{name}")
+            return
+        self._batch_log.setdefault(kind, []).append(str(name))
+
+    def _flush_batch_log(self) -> None:
+        buffer, self._batch_log = self._batch_log, None
+        for kind, names in (buffer or {}).items():
+            if names:
+                logger.debug(f"{kind} {len(names)} 个：{names}")
+
+    def _write_missing(self, path: Path, content: bytes) -> bool:
         if path.exists():
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_suffix(f"{path.suffix}.tmp")
         temp_path.write_bytes(content)
         temp_path.replace(path)
+        self._note("元数据写入", path.name)
         return True
 
     @staticmethod
@@ -45,8 +60,7 @@ class MediaScraper:
 
         return has_image
 
-    @staticmethod
-    def _download_missing(path: Path, url: str) -> bool:
+    def _download_missing(self, path: Path, url: str) -> bool:
         if path.exists() or not url:
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +76,12 @@ class MediaScraper:
                         if chunk:
                             temp.write(chunk)
             temp_path.replace(path)
+            self._note("元数据图片下载", path.name)
             return True
+        except Exception as error:
+            # 单张图片失败不应中断整批刮削，记录后继续补齐其余文件
+            logger.warning(f"元数据图片下载失败：{path.name} - {error}")
+            return False
         finally:
             if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
@@ -135,7 +154,14 @@ class MediaScraper:
                 shared_missing = False
         return selected
 
-    def _scrape_movie(self, media_path: Path, mediainfo: MediaInfo) -> int:
+    def _scrape_movie(
+            self,
+            media_path: Path,
+            mediainfo: MediaInfo,
+            progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
+        if progress:
+            progress(1, 1, media_path.name)
         media_path.parent.mkdir(parents=True, exist_ok=True)
         meta = MetaInfoPath(media_path)
         has_image = self._cached_image_checker()
@@ -157,7 +183,12 @@ class MediaScraper:
                     )
         return created
 
-    def _scrape_tv_batch(self, items: Iterable[Dict], mediainfo: MediaInfo) -> int:
+    def _scrape_tv_batch(
+            self,
+            items: Iterable[Dict],
+            mediainfo: MediaInfo,
+            progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
         normalized = []
         for item in items:
             media_path = Path(item["media_path"])
@@ -204,7 +235,10 @@ class MediaScraper:
                 for image_name, url in self._scraper.get_metadata_img(mediainfo, season=season).items():
                     created += self._download_missing(show_dir / image_name, url)
 
-        for media_path, season, episode, meta in normalized:
+        total_episodes = len(normalized)
+        for index, (media_path, season, episode, meta) in enumerate(normalized, start=1):
+            if progress:
+                progress(index, total_episodes, media_path.name)
             if not episode:
                 continue
             if self._nfo_enabled and not media_path.with_suffix(".nfo").exists():
@@ -223,11 +257,29 @@ class MediaScraper:
                     )
         return created
 
-    def scrape_batch(self, items: Iterable[Dict], mediainfo: MediaInfo) -> int:
-        """批量补齐元数据，并对剧根与季目录去重。"""
+    def scrape_batch(
+            self,
+            items: Iterable[Dict],
+            mediainfo: MediaInfo,
+            progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
+        """批量补齐元数据，并对剧根与季目录去重；``progress`` 逐文件回报进度。"""
         items = list(items or [])
         if not items or not mediainfo or not getattr(mediainfo, "tmdb_id", None):
             return 0
-        if mediainfo.type == MediaType.MOVIE:
-            return sum(self._scrape_movie(Path(item["media_path"]), mediainfo) for item in items)
-        return self._scrape_tv_batch(items, mediainfo)
+        self._batch_log = {}
+        try:
+            if mediainfo.type == MediaType.MOVIE:
+                total = len(items)
+                created = 0
+                for index, item in enumerate(items, start=1):
+                    created += self._scrape_movie(
+                        Path(item["media_path"]), mediainfo,
+                        None if progress is None else (
+                            lambda _i, _t, name, _n=index, _total=total: progress(_n, _total, name)
+                        ),
+                    )
+                return created
+            return self._scrape_tv_batch(items, mediainfo, progress)
+        finally:
+            self._flush_batch_log()

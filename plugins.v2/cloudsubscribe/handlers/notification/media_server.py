@@ -572,7 +572,7 @@ class MediaServerNotifier:
                     )
         if submitted:
             logger.info(
-                f"媒体库刷新批次完成：成功 {refreshed}/{submitted}，"
+                f"媒体库刷新批次完成：{len(paths)} 个文件，成功 {refreshed}/{submitted}，"
                 f"耗时 {time.monotonic() - started_at:.2f} 秒"
             )
         return refreshed > 0
@@ -643,7 +643,6 @@ class MediaServerNotifier:
             api_key: str,
             tmdb_id: Optional[Any] = None,
             title: Optional[str] = None,
-            folder: Optional[Path] = None,
     ) -> Optional[str]:
         """按 TMDB ID 或标题精准快速定位 Emby 媒体条目 ID。"""
         # 1. 优先使用 TMDB ID（最精准，100% 对应）
@@ -690,58 +689,54 @@ class MediaServerNotifier:
 
         return None
 
+    @staticmethod
+    def _entry_fully_deleted(entry: Dict[str, Any]) -> bool:
+        """通知中出现无扩展名的目录路径（整目录已删）才可移除媒体库条目。"""
+        deleted_paths = [str(path or "") for path in (entry.get("deleted_paths") or ())]
+        return bool(deleted_paths) and any(
+            not Path(path).suffix for path in deleted_paths if path
+        )
+
     @classmethod
-    def _send_emby_action(
-            cls,
-            host: str,
-            api_key: str,
-            item_id: str,
-            action: str = "refresh",
-    ) -> bool:
-        """执行单项 Emby 刷新或删除，绝不触发全库扫描。"""
+    def _delete_emby_item(cls, host: str, api_key: str, item_id: str) -> bool:
+        """从 Emby 媒体库移除条目；批量删除接口对管理员 API Key 可用。"""
         try:
-            if action == "delete":
-                url = f"{host}/emby/Items/{item_id}"
-                params = {"api_key": api_key, "deleteFiles": "false"}
-                client = RequestUtils(timeout=15)
-                if hasattr(client, "delete_res"):
-                    response = client.delete_res(url=url, params=params)
-                elif hasattr(client, "request"):
-                    response = client.request("DELETE", url=url, params=params)
-                else:
-                    import requests
-                    response = requests.delete(url=url, params=params, timeout=15)
-                # Emby DELETE 成功返回 204 No Content，RequestUtils 对无响应体返回 None，视为成功
-                status_code = getattr(response, "status_code", None) if response else None
-                if status_code in {200, 204} or status_code is None:
-                    return True
-                if status_code == 400:
-                    logger.debug(
-                        f"Emby 单项 delete 返回 400，该条目可能不支持直接删除或已移除 (Item {item_id})，已跳过"
-                    )
-                    return False
-                logger.warning(f"Emby 单项 delete 失败 (Item {item_id})：HTTP {status_code}")
-                return False
-            else:
-                url = f"{host}/emby/Items/{item_id}/Refresh"
-                response = RequestUtils(timeout=15).post_res(
-                    url=url,
-                    params={
-                        "Recursive": "true",
-                        "MetadataRefreshMode": "Default",
-                        "ImageRefreshMode": "Default",
-                        "ReplaceAllMetadata": "false",
-                        "ReplaceAllImages": "false",
-                        "api_key": api_key,
-                    },
-                )
-                status_code = getattr(response, "status_code", None) if response else None
-                if status_code in {200, 204}:
-                    return True
-                logger.warning(f"Emby 单项 refresh 失败 (Item {item_id})：HTTP {status_code}")
-                return False
+            response = RequestUtils(timeout=15).post_res(
+                url=f"{host}/emby/Items/Delete",
+                headers={"X-Emby-Token": api_key},
+                params={"Ids": item_id},
+            )
+            status_code = getattr(response, "status_code", None) if response else None
+            if status_code in {200, 204}:
+                return True
+            logger.warning(f"Emby 条目删除失败 (Item {item_id})：HTTP {status_code}")
+            return False
         except Exception as error:
-            logger.warning(f"Emby 单项 {action} 异常 (Item {item_id})：{error}")
+            logger.warning(f"Emby 条目删除异常 (Item {item_id})：{error}")
+            return False
+
+    @classmethod
+    def _refresh_emby_item(cls, host: str, api_key: str, item_id: str) -> bool:
+        """递归 FullRefresh 单个 Emby 条目，由 Emby 自行清理已删文件（无需额外配置）。"""
+        try:
+            response = RequestUtils(timeout=15).post_res(
+                url=f"{host}/emby/Items/{item_id}/Refresh",
+                headers={"X-Emby-Token": api_key},
+                params={
+                    "Recursive": "true",
+                    "MetadataRefreshMode": "FullRefresh",
+                    "ImageRefreshMode": "FullRefresh",
+                    "ReplaceAllMetadata": "false",
+                    "ReplaceAllImages": "false",
+                },
+            )
+            status_code = getattr(response, "status_code", None) if response else None
+            if status_code in {200, 204}:
+                return True
+            logger.warning(f"Emby 条目刷新失败 (Item {item_id})：HTTP {status_code}")
+            return False
+        except Exception as error:
+            logger.warning(f"Emby 条目刷新异常 (Item {item_id})：{error}")
             return False
 
 
@@ -751,7 +746,7 @@ class MediaServerNotifier:
             service: Any,
             entries: List[Dict[str, Any]],
     ) -> bool:
-        """精简直达：直接联动删除或局部单项刷新 Emby 媒体项目，杜绝全库扫描。"""
+        """精简直达：按媒体条目递归刷新 Emby，杜绝全库扫描。"""
         connection = self._emby_refresh_connection(service)
         if not connection:
             logger.warning(f"Emby 刷新配置无效：{name}")
@@ -760,70 +755,71 @@ class MediaServerNotifier:
 
         success_count = 0
         total_targets = 0
+        handled_items: set = set()
+        missing_items: Dict[str, Any] = {}
 
         for entry in entries:
             is_deleted = bool(entry.get("deleted_paths"))
             tmdb_id = entry.get("tmdb_id")
             title = entry.get("title") or getattr(entry.get("item"), "title", "")
-            folder = Path(entry["folder"])
 
             item_id = self._find_emby_item_id(
                 host=host,
                 api_key=api_key,
                 tmdb_id=tmdb_id,
                 title=title,
-                folder=folder,
             )
+            # 同一媒体可能出现在多条删除记录中（多集/多路径），按条目去重
+            if item_id and item_id in handled_items:
+                logger.debug(
+                    f"Emby ({name}) 同一媒体条目已处理，跳过重复：{title} (Item ID: {item_id})"
+                )
+                continue
+            if item_id:
+                handled_items.add(item_id)
 
-            if is_deleted:
-                if not item_id:
-                    logger.debug(f"Emby ({name}) 中未找到媒体条目（或已被移除）：{title}")
-                    continue
-
-                total_targets += 1
-                media_root = folder.parent if folder.name.lower().startswith("season") else folder
-                has_remaining_files = False
-                if media_root.is_dir():
+            if not item_id:
+                if is_deleted:
+                    # 同一媒体可能对应多条删除记录（多集/多路径），合并为一条汇总日志
+                    key = str(tmdb_id or title or "").strip().lower()
+                    record = missing_items.setdefault(key, {"title": title, "count": 0})
+                    record["count"] += 1
+                elif hasattr(service.instance, "refresh_library_by_items"):
                     try:
-                        has_remaining_files = any(
-                            p.is_file() and p.suffix.lower() in {".strm", ".mkv", ".mp4", ".ts", ".iso"}
-                            for p in media_root.rglob("*")
-                        )
-                    except OSError:
-                        has_remaining_files = False
-
-                if not has_remaining_files:
-                    total_targets += 1
-                    if self._send_emby_action(host, api_key, item_id, action="delete"):
+                        service.instance.refresh_library_by_items([entry["item"]])
                         success_count += 1
-                        logger.info(f"已请求 Emby ({name}) 精确删除已清理媒体：{title} (Item ID: {item_id})")
-                    else:
-                        # 删除失败（含 400 静默跳过），降级为刷新尝试
-                        total_targets -= 1
-                        if self._send_emby_action(host, api_key, item_id, action="refresh"):
-                            total_targets += 1
-                            success_count += 1
-                            logger.info(f"已请求 Emby ({name}) 降级刷新（删除不支持）：{title} (Item ID: {item_id})")
+                    except Exception as err:
+                        logger.warning(f"Emby ({name}) 原生单项入库刷新失败：{err}")
+                continue
 
-                else:
-                    if self._send_emby_action(host, api_key, item_id, action="refresh"):
-                        success_count += 1
-                        logger.info(f"已请求 Emby ({name}) 局部单项刷新剩余剧集：{title} (Item ID: {item_id})")
-            else:
-                if item_id:
-                    total_targets += 1
-                    if self._send_emby_action(host, api_key, item_id, action="refresh"):
-                        success_count += 1
-                        logger.info(f"已请求 Emby ({name}) 单项局部刷新：{title} (Item ID: {item_id})")
-                else:
-                    if hasattr(service.instance, "refresh_library_by_items"):
-                        try:
-                            service.instance.refresh_library_by_items([entry["item"]])
-                            success_count += 1
-                        except Exception as err:
-                            logger.warning(f"Emby ({name}) 原生单项入库刷新失败：{err}")
+            total_targets += 1
+            if self._entry_fully_deleted(entry) and self._delete_emby_item(host, api_key, item_id):
+                success_count += 1
+                logger.info(
+                    f"已删除 Emby ({name}) 媒体库条目：{title} (Item ID: {item_id})"
+                )
+                continue
+            if self._refresh_emby_item(host, api_key, item_id):
+                success_count += 1
+                logger.info(
+                    f"已请求 Emby ({name}) "
+                    f"{'删除后重扫' if is_deleted else '单项'}刷新："
+                    f"{title} (Item ID: {item_id})"
+                )
 
-        logger.info(f"Emby ({name}) 媒体处理完成：成功 {success_count}/{max(total_targets, 1)}")
+        for record in missing_items.values():
+            title = record["title"]
+            count = record["count"]
+            logger.debug(
+                f"Emby ({name}) 中未找到媒体条目（或已被移除）：{title}"
+                + (f"（{count} 条记录已合并）" if count > 1 else "")
+            )
+        if total_targets:
+            logger.info(f"Emby ({name}) 媒体处理完成：成功 {success_count}/{total_targets}")
+        else:
+            logger.info(
+                f"Emby ({name}) 媒体处理完成：成功 {success_count} 个，无命中的待刷新条目"
+            )
         return True
 
     def _schedule_emby_mediainfo(
@@ -867,15 +863,16 @@ class MediaServerNotifier:
             return
         host, api_key, user_id = connection
         file_path = path.as_posix()
+        headers = {"X-Emby-Token": api_key}
         try:
             with RequestUtils(timeout=15).get_res(
                     url=f"{host}/emby/Items",
+                    headers=headers,
                     params={
                         "Path": file_path,
                         "Recursive": "true",
                         "Fields": "Path",
                         "IncludeItemTypes": "Movie,Episode,Folder,Series",
-                        "api_key": api_key,
                     },
             ) as response:
                 items = response.json().get("Items", []) if response else []
@@ -898,10 +895,10 @@ class MediaServerNotifier:
                 return
             with RequestUtils(timeout=30).post_res(
                     url=f"{host}/emby/Items/{item_id}/PlaybackInfo",
+                    headers=headers,
                     params={
                         "AutoOpenLiveStream": "true",
                         "IsPlayback": "true",
-                        "api_key": api_key,
                         "UserId": user_id,
                     },
             ) as response:

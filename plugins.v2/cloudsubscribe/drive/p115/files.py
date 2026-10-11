@@ -727,7 +727,18 @@ class P115FileService(OwnerDelegator):
         if cid == -1:
             return []
 
-        return self.list_files_by_cid(cid)
+        checked, items = self.list_files_by_cid_checked(cid)
+        if checked:
+            return items
+        normalized = normalize_path(str(path or "").replace("\\", "/"))
+        self.path_cache.delete(normalized)
+        walked, walk_cid = self._resolve_pid_by_path_walk(normalized, False)
+        if walked and walk_cid not in (None, "", -1) and str(walk_cid) != str(cid):
+            checked, items = self.list_files_by_cid_checked(walk_cid)
+            if checked:
+                self.path_cache.set(normalized, walk_cid)
+                return items
+        return []
 
     def list_files_by_cid(self, cid: Any) -> List[dict]:
         """使用已解析的目录 CID 列出文件，避免重复进行路径定位。"""

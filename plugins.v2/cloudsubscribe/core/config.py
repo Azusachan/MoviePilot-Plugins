@@ -2,7 +2,6 @@
 
 import datetime
 from typing import Any, Dict, List
-from urllib.parse import urlsplit, urlunsplit
 
 from app.db import SessionFactory
 from app.db.site_oper import SiteOper
@@ -134,13 +133,16 @@ class UIConfig:
             "image_scrape_enabled": False,
             "strm_base_url": "http://172.17.0.1:9527",
             "strm_url_template": "{base_url}/d/{pickcode}?/{file_name}",
+            "strm_proxy_enabled": False,
+            "strm_proxy_port": 9527,
+            "strm_proxy_route": "d",
             "media_server_refresh_enabled": False,
             "media_servers": [],
             "media_server_path_mappings": "",
             "media_server_refresh_delay": 0,
             "emby_mediainfo_enabled": False,
             "platform_media_sync_enabled": False,
-            "platform_deep_delete_enabled": False,
+            "platform_delete_linkage_enabled": True,
             "platform_transfer_history_enabled": False,
             "timeout_enabled": True,
             "timeout_default_connect": 30,
@@ -298,36 +300,6 @@ class UIConfig:
             except (TypeError, ValueError):
                 month = current_month
             config[key] = month if 1 <= month <= 12 else current_month
-
-    @staticmethod
-    def _normalize_rsshub_instance_url(value: Any) -> str:
-        """规范公告中的实例地址，拒绝维护者主页、查询参数和本地地址。"""
-        try:
-            parsed = urlsplit(str(value or "").strip())
-            if parsed.scheme.lower() not in {"http", "https"}:
-                return ""
-            if (
-                    not parsed.hostname
-                    or parsed.username is not None
-                    or parsed.password is not None
-                    or parsed.query
-                    or parsed.fragment
-            ):
-                return ""
-            port = parsed.port
-        except ValueError:
-            return ""
-        hostname = parsed.hostname.rstrip(".").lower()
-        if (
-                "." not in hostname
-                or hostname == "localhost"
-                or hostname.endswith(".local")
-                or any(character.isspace() for character in parsed.path)
-        ):
-            return ""
-        netloc = hostname if port is None else f"{hostname}:{port}"
-        path = parsed.path.rstrip("/")
-        return urlunsplit((parsed.scheme.lower(), netloc, path, "", ""))
 
     @staticmethod
     def _subscribes() -> list:

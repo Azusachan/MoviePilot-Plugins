@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
@@ -21,6 +20,23 @@ class HistoryCleanupService(OwnerDelegator):
     _METADATA_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
     _SEASON_DIRECTORY_PATTERN = re.compile(r"^season[ ._-]*\d+$", re.IGNORECASE)
 
+    def _record_belongs_to_target_drive(self, record: Dict[str, Any]) -> bool:
+        """仅当删除记录属于当前目标网盘时才联动媒体库，避免误删其他网盘的媒体。"""
+        drive = getattr(self, "_cloud_drive", None)
+        current_key = str(getattr(drive, "key", "") or "").strip().lower()
+        current_name = str(getattr(drive, "name", "") or "").strip().lower()
+        record_key = str(
+            record.get("target_drive_key") or record.get("cloud_drive_key") or ""
+        ).strip().lower()
+        record_name = str(
+            record.get("target_drive_name") or record.get("cloud_drive_name") or ""
+        ).strip().lower()
+        if record_key and current_key:
+            return record_key == current_key
+        if record_name and current_name:
+            return record_name == current_name
+        return True
+
     def _refresh_deleted_media(self, records: List[Dict[str, Any]]) -> None:
         """删除关联文件后，按受影响 STRM 路径与媒体目录刷新媒体库。"""
         if not self._media_server_notifier or not records:
@@ -30,6 +46,11 @@ class HistoryCleanupService(OwnerDelegator):
             cloud_dir = str(record.get("cloud_dir") or "").strip()
             file_name = str(record.get("file_name") or "").strip()
             if not cloud_dir or not file_name or not self._local_resource_path:
+                continue
+            if not self._record_belongs_to_target_drive(record):
+                logger.debug(
+                    f"历史记录不属于当前目标网盘，跳过媒体库联动删除：{file_name}"
+                )
                 continue
             try:
                 local_path = self._path_mapper.local_path(

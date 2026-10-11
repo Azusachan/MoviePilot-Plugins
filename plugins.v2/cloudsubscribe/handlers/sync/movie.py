@@ -560,6 +560,11 @@ class MovieSyncProcessor(OwnerDelegator):
                         staging_dir = self._resource_staging_dir(
                             share_url, matched_file
                         )
+                        if organize_enabled and not direct_cloud_resource:
+                            staging_dir = (
+                                f"{self._cloud_transfer_path.rstrip('/')}/"
+                                f"{self._staging_label(subscribe, mediainfo, None)}"
+                            )
                         if organize_enabled:
                             save_dir, target_name = self._platform_target(
                                 self._CLOUD_MEDIA_ROOT, subscribe, mediainfo, file_name
@@ -605,7 +610,7 @@ class MovieSyncProcessor(OwnerDelegator):
                                 self._transfer_file,
                                 share_url,
                                 matched_file,
-                                staging_dir if not organize_enabled else self._cloud_transfer_path,
+                                staging_dir,
                                 transfer_target_name,
                                 matched_file.get("sha1"),
                                 media_type="movie",

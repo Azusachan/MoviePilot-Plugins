@@ -147,7 +147,16 @@ class UpgradeBaselineService(OwnerDelegator):
         tmdbid = self._int_or_zero(tmdb_id_of(subscribe))
         title = str(getattr(subscribe, "name", "") or "")
         episode_files: Dict[int, List[Dict[str, Any]]] = {}
+        current_drive_name = str(getattr(getattr(self, "_cloud_drive", None), "name", "") or "").strip().lower()
+        current_drive_key = str(getattr(getattr(self, "_cloud_drive", None), "key", "") or "").strip().lower()
         for record in (self._get_data("history") or []) if self._get_data else []:
+            rec_drive_name = str(
+                record.get("cloud_drive_name") or record.get("target_drive_name") or "").strip().lower()
+            rec_drive_key = str(record.get("target_drive_key") or record.get("cloud_drive_key") or "").strip().lower()
+            if rec_drive_key and current_drive_key and rec_drive_key != current_drive_key:
+                continue
+            if rec_drive_name and current_drive_name and rec_drive_name != current_drive_name:
+                continue
             record_tmdbid = self._int_or_zero(record.get("tmdb_id"))
             if tmdbid and record_tmdbid != tmdbid:
                 continue

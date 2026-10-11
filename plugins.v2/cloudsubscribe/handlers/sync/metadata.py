@@ -6,14 +6,11 @@ import re
 from concurrent.futures import Future
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
-from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
-from app.utils.http import RequestUtils
 
 from .utils import normalize_season
 from ...core import OwnerDelegator
@@ -241,7 +238,7 @@ class SyncMetadataService(OwnerDelegator):
             legacy_media_ids(subscribe).get("doubanid") or ""
         ).strip()
         if source_douban_id:
-            for candidate in SubscribeOper().list() or []:
+            for candidate in SubscribeOper().list("N,R") or []:
                 if int(getattr(candidate, "id", 0) or 0) == subscribe_id:
                     continue
                 candidate_douban_id = str(

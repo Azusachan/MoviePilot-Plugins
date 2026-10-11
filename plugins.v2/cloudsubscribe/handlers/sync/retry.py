@@ -7,9 +7,7 @@ from threading import Lock, Thread
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
-from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.types import MediaType
@@ -492,7 +490,7 @@ class HistoryRetryService(OwnerDelegator):
                 if not candidates and media_type == MediaType.MOVIE:
                     candidates = [
                         item
-                        for item in (SubscribeOper().list() or [])
+                        for item in (SubscribeOper().list("N,R") or [])
                         if tmdb_id_of(item) == int(tmdb_id)
                     ]
                 subscribe = next(

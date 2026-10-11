@@ -1,11 +1,9 @@
 """订阅同步任务提交 API。"""
 
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from app.core.metainfo import MetaInfo
 from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
@@ -240,7 +238,7 @@ class SyncApi(OwnerDelegator):
         history_search_targets: List[Dict[str, Any]] = []
         if selection_requested:
             with SessionFactory() as db:
-                subscribes = SubscribeOper(db=db).list() or []
+                subscribes = SubscribeOper(db=db).list("N,R") or []
             supported_types = {MediaType.TV.value, MediaType.MOVIE.value}
             subscriptions_by_id = {
                 int(subscribe.id): subscribe
@@ -675,19 +673,11 @@ class SyncApi(OwnerDelegator):
             link for link in links
             if offline_download and offline_download.is_magnet_url(link)
         ]
-        magnet_info_by_url = {}
-        if magnet_links:
-            with ThreadPoolExecutor(
-                    max_workers=min(3, len(magnet_links)),
-                    thread_name_prefix="cloudsubscribe-magnet-metadata",
-            ) as executor:
-                results = executor.map(
-                    lambda value: offline_download.parse_magnet_link(
-                        value, fetch_metadata=True
-                    ),
-                    magnet_links,
-                )
-                magnet_info_by_url = dict(zip(magnet_links, results))
+        # 请求线程内零网络：完整 torrent 元数据交由 worker 后台抓取回填
+        magnet_info_by_url = {
+            link: offline_download.parse_magnet_link(link, fetch_metadata=False)
+            for link in magnet_links
+        }
 
         resources = []
         skip_history = bool((payload or {}).get("skip_history"))
@@ -731,10 +721,8 @@ class SyncApi(OwnerDelegator):
             elif offline_download and offline_download.is_magnet_url(link):
                 resource_type = "magnet"
                 magnet_info = magnet_info_by_url.get(link)
-                valid = bool(
-                    magnet_info
-                    and (magnet_info.get("metadata") or {}).get("metadata_available")
-                )
+                # 只校验磁力链接本身可解析；内容元数据由 worker 后台抓取后判定
+                valid = bool(magnet_info and magnet_info.get("hash"))
             else:
                 metadata_type = normalize_resource_type(
                     metadata.get("resource_type") or metadata.get("pan_type")
@@ -763,7 +751,7 @@ class SyncApi(OwnerDelegator):
                 valid = self._manual_share_info_valid(resource_type, share_info)
             if not valid:
                 reason = (
-                    "Magnet 必须能解析出名称或完整文件元数据"
+                    "Magnet 链接缺少有效的 info_hash"
                     if resource_type == "magnet"
                     else (
                         f"无法解析有效的 {self._manual_resource_name(resource_type)}"
@@ -776,13 +764,15 @@ class SyncApi(OwnerDelegator):
             # 优先使用真实资源标题，以便 MoviePilot 刮削整理能准确识别集数、压制组与分辨率
             real_title = title_map.get(link)
             if not real_title and resource_type == "magnet" and magnet_info:
-                real_title = (magnet_info.get("metadata") or {}).get("name")
+                real_title = str(magnet_info.get("name") or "").strip()
             if not real_title:
                 canonical_media_name = (media_target or {}).get("title")
                 real_title = f"{canonical_media_name} - 资源 {index}" if canonical_media_name else f"手动添加 {index}"
 
             target_cloud_param = str((payload or {}).get("target_cloud") or "").strip().lower()
-            metadata = resource_meta_by_url.get(link) or {}
+            metadata = resource_meta_by_url.get(link) or (
+                resource_items[index - 1] if index <= len(resource_items) else {}
+            ) or {}
             resources.append({
                 "url": link,
                 "title": real_title,
@@ -800,6 +790,7 @@ class SyncApi(OwnerDelegator):
                         "target_episodes", "supports_file_preview",
                         "target_file_ids", "target_file_names",
                     )
+                    if metadata.get(key) is not None
                 },
                 **(
                     {"magnet_metadata": magnet_info["metadata"]}

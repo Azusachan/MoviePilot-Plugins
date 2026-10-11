@@ -243,10 +243,13 @@ class TestSyncHandlerEpisodeBatchTransfer(unittest.TestCase):
         self.mediainfo = MagicMock()
         self.mediainfo.type.name = "tv"
         self.mediainfo.title = "美国人质"
+        self.mediainfo.year = 2026
         self.subscribe = MagicMock()
+        self.subscribe.name = "美国人质"
+        self.subscribe.year = 2026
 
     def test_partial_transfer_preserves_parent_folder_when_organize_disabled(self):
-        """场景：Issue #10 核心问题——关闭整理时，哪怕仅转存一部分（更02集），也必须保留母文件夹。"""
+        """ 关闭整理时，哪怕仅转存一部分（更02集），也必须保留母文件夹。"""
         self.handler._organize_after_transfer = False
         share_url = "https://115.com/s/sample_share"
 
@@ -381,8 +384,8 @@ class TestSyncHandlerEpisodeBatchTransfer(unittest.TestCase):
         self.assertIn("/待整理/大剧/Season 1", called_paths)
         self.assertIn("/待整理/大剧/Season 2", called_paths)
 
-    def test_organize_enabled_transfers_all_to_root(self):
-        """场景：开启自动整理时，所有文件统一转存到根转存目录。"""
+    def test_organize_enabled_transfers_to_named_staging_dir(self):
+        """场景：开启自动整理时，文件统一转存到「订阅名 (年度) S季」命名暂存目录。"""
         self.handler._organize_after_transfer = True
         share_url = "https://115.com/s/sample_share"
 
@@ -418,10 +421,10 @@ class TestSyncHandlerEpisodeBatchTransfer(unittest.TestCase):
             sub_key="tv_239618",
         )
 
-        # 开启整理时全部归入根目录 /待整理
+        # 开启整理时归入命名暂存目录「美国人质 (2026) S01」
         self.assertEqual(self.handler._share_transfer.transfer_files_batch.call_count, 1)
         _, kwargs = self.handler._share_transfer.transfer_files_batch.call_args
-        self.assertEqual(kwargs["save_path"], "/待整理")
+        self.assertEqual(kwargs["save_path"], "/待整理/美国人质 (2026) S01")
         self.assertEqual(sorted(kwargs["file_ids"]), ["ep1_id", "ep2_id"])
 
     def test_precheck_skips_existing_files_in_subfolder(self):

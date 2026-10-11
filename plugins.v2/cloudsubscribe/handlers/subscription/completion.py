@@ -92,12 +92,6 @@ class SubscribeHandler:
         self._is_excluded_func = is_excluded_func
         self._progress_lock = RLock()
 
-    def _is_excluded(self, subscribe_id: int) -> bool:
-        """判断订阅是否不归本插件处理"""
-        if self._is_excluded_func:
-            return bool(self._is_excluded_func(subscribe_id))
-        return subscribe_id in set(self._exclude_subscribes or [])
-
     def _update_progress_locked(
             self,
             subscribe,
@@ -211,8 +205,15 @@ class SubscribeHandler:
                         "保留订阅继续洗版"
                     )
                     return 0
+                # 订阅被其它插件暂停/禁用时不触发完成迁移，避免改写其状态
+                current_state = str(getattr(subscribe, "state", "") or "").strip().upper()
+                if current_state not in {"", "N", "R"}:
+                    logger.info(
+                        f"订阅 {subscribe.name} 当前状态为 {current_state}（暂停/禁用），"
+                        "跳过完成迁移，保留订阅"
+                    )
+                    return new_lack
                 logger.debug(f"订阅 {subscribe.name} 已完成，准备移至历史记录")
-
                 meta = MetaInfo(subscribe.name)
                 meta.year = subscribe.year
                 meta.begin_season = subscribe.season or None

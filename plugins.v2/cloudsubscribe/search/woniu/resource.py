@@ -136,6 +136,12 @@ class WoniuResourceService:
                 try:
                     cards = self._client.search_vods(kw)
                     self._search_cache[cache_key] = cards
+                except WoniuError as error:
+                    # 频控/封禁需冒泡给搜索编排做熔断，否则会被静默吞掉成“0 条候选”
+                    if error.code in {"woniu_rate_limited", "woniu_account_banned"}:
+                        raise
+                    logger.debug(f"蜗牛搜索关键词 '{kw}' 失败：{error}")
+                    cards = []
                 except Exception as error:
                     logger.debug(f"蜗牛搜索关键词 '{kw}' 失败：{error}")
                     cards = []

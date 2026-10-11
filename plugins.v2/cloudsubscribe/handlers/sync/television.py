@@ -1,5 +1,5 @@
 """电视剧订阅搜索、匹配与转存流程。"""
-
+import copy
 from typing import Any, Dict, List, Optional, Set
 
 from app.log import logger
@@ -8,12 +8,18 @@ from app.schemas.types import MediaType
 from app.utils.string import StringUtils
 
 from .utils import normalize_season
-from ..notification import MediaServerResolver
 from ...core import OwnerDelegator
 
 
 class TelevisionSyncProcessor(OwnerDelegator):
     """处理电视剧订阅同步。"""
+
+    def clear_series_sync_caches(self) -> None:
+        """清空同剧集在任务期间跨季复用的搜索与文件树缓存。"""
+        if hasattr(self, "_series_search_cache"):
+            self._series_search_cache.clear()
+        if hasattr(self, "_validated_files_cache"):
+            self._validated_files_cache.clear()
 
     def process_tv_subscribe(
             self,
@@ -27,10 +33,10 @@ class TelevisionSyncProcessor(OwnerDelegator):
             manual_upgrade: bool = False,
             target_episodes: Optional[Set[int]] = None,
             transient_target: bool = False,
+            all_target_seasons: Optional[Set[int]] = None,
     ) -> int:
         """
         处理单个电视剧订阅
-
         :param subscribe: 订阅对象
         :param history: 历史记录列表
         :param transfer_details: 转存详情列表
@@ -119,36 +125,9 @@ class TelevisionSyncProcessor(OwnerDelegator):
             missing_episodes: List[int] = []
             discovered_manual_episodes: Set[int] = set()
             target_episode_air_dates: Dict[int, str] = {}
-            # 1. 先读取媒体服务器实际剧集，不混入订阅 note。
-            self._set_task_phase(subscribe, "检查媒体库内容", 30)
-            media_server_valid, media_server_episodes = self._timed_sync_call(
-                "media_server_scan",
-                MediaServerResolver.episode_numbers,
-                self._chain,
-                mediainfo,
-                season,
-            )
             existing_episodes_in_resources: Set[int] = set()
-            if not media_server_valid:
-                if transient_target:
-                    media_server_episodes = set()
-                    logger.debug(
-                        f"{mediainfo.title_year} S{season:02d} 未读取到媒体服务器数据，"
-                        "临时媒体目标继续按网盘实际内容检查"
-                    )
-                else:
-                    logger.warning(
-                        f"{mediainfo.title_year} S{season:02d} 无法读取媒体服务器实际数据，"
-                        f"本轮跳过且不访问{cloud_drive_name}，不修改订阅进度"
-                    )
-                    return transferred_count
-            logger.debug(
-                f"媒体服务器实际存在剧集："
-                f"{self._format_episode_ranges(media_server_episodes & expected_episodes)}"
-            )
-
-            # 2. 再读取目标网盘目录；不扫描本地 STRM 路径。
-            self._set_task_phase(subscribe, "检查网盘内容", 40)
+            # 以目标网盘实际剧集计算缺集（不依赖媒体服务器）
+            self._set_task_phase(subscribe, "检查网盘内容", 35)
             cloud_valid, cloud_episodes, cloud_label = self._timed_sync_call(
                 "cloud_scan",
                 self._scan_cloud_resource_episodes,
@@ -165,7 +144,6 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 )
                 return transferred_count
             cloud_matched = set(cloud_episodes & expected_episodes)
-            # 以当前目标网盘实际存在的剧集为准计算缺集，彻底解耦外部媒体库可能残留的旧源索引
             existing_episodes_in_resources = set(cloud_matched)
             existing_episodes_for_manual = set(cloud_episodes) if discover_manual_episodes else set()
             logger.debug(
@@ -248,29 +226,50 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 55,
             )
             if not manual_resources:
-                def on_tv_search_progress(data: Dict[str, Any]) -> None:
-                    completed = data.get("completed", 0)
-                    total = max(1, data.get("total", 1))
-                    current_prog = 45 + int((completed / total) * 20)  # 45% -> 65%
+                series_id = getattr(mediainfo, "tmdb_id", None) or getattr(subscribe, "tmdb_id", None) or getattr(
+                    mediainfo, "title", "")
+                series_search_key = f"{getattr(mediainfo, 'type', 'tv')}:{series_id}"
+                cached_series_results = getattr(self, "_series_search_cache", {}).get(series_search_key)
+                if cached_series_results is not None:
+                    prefetched_results = copy.deepcopy(cached_series_results)
+                    total_cands = sum(len(v) for v in prefetched_results.values())
+                    logger.info(
+                        f"📺 复用同剧集多季搜索结果：{mediainfo.title} S{season:02d}，"
+                        f"跳过外部渠道重复检索（共 {total_cands} 个候选）"
+                    )
                     self._set_task_phase(
                         subscribe,
-                        data.get("summary") or "搜索缺失剧集",
-                        current_prog,
-                        search_active=data.get("active", False),
-                        search_channels=data.get("channels", []),
-                        search_total_results=data.get("total_results", 0),
+                        f"复用同剧集候选资源 ({total_cands} 个)",
+                        65,
                     )
+                else:
+                    def on_tv_search_progress(data: Dict[str, Any]) -> None:
+                        completed = data.get("completed", 0)
+                        total = max(1, data.get("total", 1))
+                        current_prog = 45 + int((completed / total) * 20)  # 45% -> 65%
+                        self._set_task_phase(
+                            subscribe,
+                            data.get("summary") or "搜索缺失剧集",
+                            current_prog,
+                            search_active=data.get("active", False),
+                            search_channels=data.get("channels", []),
+                            search_total_results=data.get("total_results", 0),
+                        )
 
-                prefetched_results = self._search_handler.search_sources(
-                    sources=enabled_sources,
-                    mediainfo=mediainfo,
-                    media_type=MediaType.TV,
-                    season=season,
-                    target_episodes=missing_episodes,
-                    target_episode_air_dates=target_episode_air_dates,
-                    subscribe=subscribe,
-                    progress_callback=on_tv_search_progress,
-                )
+                    prefetched_results = self._search_handler.search_sources(
+                        sources=enabled_sources,
+                        mediainfo=mediainfo,
+                        media_type=MediaType.TV,
+                        season=season,
+                        target_episodes=missing_episodes,
+                        target_episode_air_dates=target_episode_air_dates,
+                        subscribe=subscribe,
+                        progress_callback=on_tv_search_progress,
+                    )
+                    if prefetched_results and series_search_key:
+                        if not hasattr(self, "_series_search_cache"):
+                            self._series_search_cache = {}
+                        self._series_search_cache[series_search_key] = copy.deepcopy(prefetched_results)
             resource_batches = self._build_transfer_resource_batches(
                 enabled_sources, prefetched_results
             )
@@ -484,15 +483,21 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                         val_kwargs["target_file_names"] = val[1]
                             except Exception:
                                 pass
+                        dir_target_season = None
+                        if self._skip_other_season_dirs:
+                            if all_target_seasons and len(all_target_seasons) > 1:
+                                dir_target_season = all_target_seasons
+                            else:
+                                dir_target_season = season
+
                         for current_url in resource_urls:
                             share_files.extend(self._validated_resource_files(
                                 current_url,
                                 resource_title=resource_title,
-                                target_season=(season if self._skip_other_season_dirs else None),
+                                target_season=dir_target_season,
                                 log_prefix=search_prefix,
                                 **val_kwargs,
                             ))
-                        if not share_files:
                             continue
 
                         video_count, share_episodes = self._summarize_share_episodes(
@@ -552,6 +557,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             require_media_match=is_cross_batch,
                         )
 
+                        matched_pairs = []
                         for episode in episodes_to_match:
                             matched_file, current_score = matched_files.get(
                                 episode, (None, 0)
@@ -559,7 +565,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                             if matched_file:
                                 file_name = matched_file.get('name', '')
-                                logger.debug(f"找到匹配文件：{file_name} -> E{episode:02d}")
+                                matched_pairs.append((episode, file_name))
 
                                 is_upgrade = False
 
@@ -593,6 +599,11 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     ),
                                 })
 
+                        if matched_pairs:
+                            logger.debug(
+                                f"匹配到 {len(matched_pairs)} 个文件："
+                                f"{StringUtils.format_ep([ep for ep, _ in matched_pairs])}"
+                            )
                         if not matched_items:
                             logger.debug(
                                 f"该{resource_input_label}未匹配到 S{season} 的任何缺失剧集，"
@@ -636,6 +647,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                             break
                         self._set_task_phase(subscribe, "登记文件后处理", 95)
                         batch_success_episodes = []
+                        batch_failed_episodes = []
                         batch_detail_episodes = {}
                         completed_missing_episodes = set()
 
@@ -683,11 +695,6 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 if not is_upgrade and not pending_key:
                                     success_episodes.append(episode)
 
-                                score_info = f"(平台优先级:{current_score})"
-                                upgrade_info = " [洗版升级]" if is_upgrade else ""
-                                logger.debug(
-                                    f"成功转存：{mediainfo.title} S{season:02d}E{episode:02d} {score_info}{upgrade_info}")
-
                                 if not pending_key:
                                     notification_kind = (
                                         "upgrade"
@@ -702,7 +709,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                                 batch_success_episodes.append(episode)
                             else:
-                                logger.error(f"转存失败：{mediainfo.title} S{season:02d}E{episode:02d}")
+                                batch_failed_episodes.append(episode)
 
                         if completed_missing_episodes:
                             if discover_manual_episodes:
@@ -713,6 +720,16 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 episode for episode in missing_episodes
                                 if episode not in completed_missing_episodes
                             ]
+                        if batch_success_episodes:
+                            logger.debug(
+                                f"转存成功 {len(batch_success_episodes)} 集："
+                                f"{StringUtils.format_ep(batch_success_episodes)}"
+                            )
+                        if batch_failed_episodes:
+                            logger.error(
+                                f"转存失败 {len(batch_failed_episodes)} 集："
+                                f"{StringUtils.format_ep(batch_failed_episodes)}"
+                            )
                         for notification_kind, episodes in batch_detail_episodes.items():
                             self._append_tv_transfer_detail(
                                 transfer_details, mediainfo, season, episodes,

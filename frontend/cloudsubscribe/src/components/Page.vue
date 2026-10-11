@@ -241,9 +241,14 @@
       icon="mdi-delete-outline"
       icon-color="error"
       :body="deletingGroupCount
-        ? `确认删除所选 ${deletingGroupCount} 个汇总项中的 ${deletingRecords.length} 条转存历史？`
+        ? `确认删除所选 ${deletingGroupCount} 个汇总项下的 ${deletingRecords.length} 条转存历史？`
         : `确认删除“${deletingRecord?.file_name || '此记录'}”的转存历史？`"
-      :options="[{ key: 'deleteLinked', label: '同时删除关联的网盘文件和STRM', color: 'error' }]"
+      :options="[{
+        key: 'deleteLinked',
+        label: '同时删除关联的网盘文件、本地 STRM 与媒体库条目',
+        desc: '删除网盘源文件与本地 STRM 后，按路径刷新媒体库，已无文件的条目会被移除；未勾选时仅删除历史记录',
+        color: 'error'
+      }]"
       confirm-text="确认删除"
       confirm-color="error"
       :loading="Boolean(deletingHistoryKey)"
@@ -415,7 +420,11 @@ const activeTaskCount = computed(
 const stoppableTaskCount = computed(
   () => (runtime.tasks || []).filter((task) => ["queued", "running"].includes(task.status)).length,
 )
-const selectedHistoryCount = computed(() => Math.max(0, Number(historySelection.value.groupCount || 0)))
+const selectedHistoryCount = computed(() => {
+  const selection = historySelection.value;
+  const groups = Math.max(0, Number(selection.groupCount || 0));
+  return groups || (Math.max(0, Number(selection.recordCount || 0)) ? 1 : 0);
+});
 const immediateSearchLabel = computed(() =>
   selectedHistoryCount.value ? `搜索所选（${selectedHistoryCount.value}）` : "搜索全部",
 )
@@ -427,6 +436,7 @@ const immediateSearchDialogTitle = computed(() => (selectedHistoryCount.value ? 
 function updateHistorySelection(selection) {
   historySelection.value = {
     groupCount: Math.max(0, Number(selection?.groupCount || 0)),
+    recordCount: Math.max(0, Number(selection?.recordCount || 0)),
     subscribeIds: Array.isArray(selection?.subscribeIds) ? [...selection.subscribeIds] : [],
     targets: Array.isArray(selection?.targets) ? [...selection.targets] : [],
   }

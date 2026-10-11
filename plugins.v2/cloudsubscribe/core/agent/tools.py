@@ -6,10 +6,7 @@ from typing import Optional, Type
 from app.agent.tools.base import MoviePilotTool
 from app.agent.tools.tags import ToolTag
 from app.core.plugin import PluginManager
-from app.utils.string import StringUtils
 from pydantic import BaseModel
-
-from ...drive.common import format_size
 
 from .schemas import (
     CloudSubscribeCacheClearInput,
@@ -23,6 +20,7 @@ from .schemas import (
     CloudSubscribeStatusInput,
     CloudSubscribeSyncInput,
 )
+from ...drive.common import format_size
 
 
 def _plugin():

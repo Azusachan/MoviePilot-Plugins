@@ -246,6 +246,22 @@
           </div>
         </template>
 
+        <template #item.target_drives="{ item }">
+          <div v-if="(item.target_drives || []).length === 1" class="summary-chips">
+            <v-chip size="x-small" variant="tonal" :color="driveColor(item.target_drives)">
+              {{ item.target_drives[0] }}
+            </v-chip>
+          </div>
+          <div v-else-if="(item.target_drives || []).length > 1" class="mixed-resource-types">
+            <v-chip size="x-small" variant="tonal" color="info" prepend-icon="mdi-cloud-outline">
+              多网盘 ({{ item.target_drives.length }})
+            </v-chip>
+          </div>
+          <div v-else class="text-caption text-medium-emphasis">
+            --
+          </div>
+        </template>
+
         <template #item.resource_types="{ item }">
           <div v-if="item.resource_types.length === 1" class="summary-chips">
             <v-chip size="x-small" variant="tonal" :color="resourceTypeColor(item.resource_types[0])">
@@ -353,14 +369,15 @@
                 <thead>
                 <tr>
                   <th class="subtable-select-th" style="width: 44px; padding: 0 4px;"></th>
-                  <th>名称</th>
-                  <th>类型</th>
-                  <th>格式</th>
-                  <th>来源</th>
-                  <th>资源</th>
-                  <th>大小</th>
-                  <th>状态</th>
-                  <th>时间</th>
+                  <th>文件名称</th>
+                  <th>目标网盘</th>
+                  <th>资源类型</th>
+                  <th>视频格式</th>
+                  <th>来源渠道</th>
+                  <th>资源链接</th>
+                  <th>资源大小</th>
+                  <th>任务状态</th>
+                  <th>完成时间</th>
                   <th class="action-column">操作</th>
                 </tr>
                 </thead>
@@ -401,6 +418,12 @@
                         :title="record.title || item.title || '-'">
                       {{ record.title || item.title || "-" }}
                     </div>
+                  </td>
+                  <td>
+                    <v-chip size="x-small" variant="tonal"
+                            :color="driveColor(record.cloud_drive_name || record.target_drive_name)">
+                      {{ record.cloud_drive_name || record.target_drive_name || "-" }}
+                    </v-chip>
                   </td>
                   <td>
                     <v-chip size="x-small" variant="tonal" :color="resourceTypeColor(resourceType(record))">
@@ -621,9 +644,11 @@
                       :disabled="!canDeleteRecord(record)"
                       density="compact"
                       color="primary"
-                      class="mr-1"
+                      class="history-mobile-check"
                       @update:model-value="toggleRecordSelect(record, item, $event)"
                       @click.stop />
+                    <div class="history-mobile-record-body">
+                    <div class="history-mobile-record-name-line">
                     <span class="record-name" :title="record.display_name || '-'">
                       {{ record.display_name || "-" }}
                     </span>
@@ -650,6 +675,14 @@
                         {{ record.failure_reason }}
                       </v-tooltip>
                     </v-chip>
+                    </div>
+                    <div
+                      v-if="record.type !== '电影'"
+                      class="history-mobile-file text-caption text-medium-emphasis"
+                      :title="record.title || item.title || '-'">
+                      {{ record.title || item.title || "-" }}
+                    </div>
+                    </div>
                     <v-spacer />
                     <div class="action-buttons history-mobile-actions">
                       <v-btn
@@ -680,12 +713,6 @@
                         :title="deleteTitle(record)"
                         @click.stop="emit('delete', record)" />
                     </div>
-                  </div>
-                  <div
-                    v-if="record.type !== '电影'"
-                    class="history-mobile-file text-caption text-medium-emphasis"
-                    :title="record.title || item.title || '-'">
-                    {{ record.title || item.title || "-" }}
                   </div>
                   <div class="history-mobile-record-footer">
                     <div class="history-mobile-record-meta text-caption text-medium-emphasis">
@@ -740,6 +767,7 @@
 import {computed, ref, watch} from "vue";
 import {useDisplay} from "vuetify";
 import {
+  getDriveColor,
   getResourceTypeName,
   getSourceColor,
   getSourceIcon,
@@ -786,6 +814,7 @@ const selectedStatuses = ref([]);
 const expanded = ref([]);
 const selectedGroupKeys = ref([]);
 const selectedRecordKeys = ref([]);
+let groupSelectionFromRecord = false;
 const filtersVisible = ref(false);
 const searchVisible = ref(false);
 let lastQuerySignature = "";
@@ -801,12 +830,13 @@ const pageSizes = [
   {value: 50, title: "50"},
 ]
 const headers = [
-  {title: "媒体", key: "media", sortable: false, width: "25%"},
-  {title: "类型", key: "resource_types", sortable: false, width: "8%"},
-  {title: "来源", key: "sources", sortable: false, width: "10%"},
-  {title: "资源", key: "resource_links", sortable: false, width: "8%"},
-  {title: "汇总", key: "summary", sortable: false, width: "17%"},
-  {title: "时间", key: "latest_time", width: 172},
+  {title: "媒体名称", key: "media", sortable: false, width: "23%"},
+  {title: "目标网盘", key: "target_drives", sortable: false, width: "10%"},
+  {title: "资源类型", key: "resource_types", sortable: false, width: "8%"},
+  {title: "来源渠道", key: "sources", sortable: false, width: "10%"},
+  {title: "资源链接", key: "resource_links", sortable: false, width: "8%"},
+  {title: "汇总统计", key: "summary", sortable: false, width: "15%"},
+  {title: "完成时间", key: "latest_time", width: 172},
   {title: "", key: "actions", sortable: false, width: 112},
   {title: "", key: "data-table-expand", width: 44},
 ]
@@ -837,7 +867,12 @@ const activeFilterCount = computed(
 )
 const selectedGroups = computed(() => {
   const keys = new Set(selectedGroupKeys.value);
-  return historyGroups.value.filter((group) => keys.has(group.group_key));
+  const recordKeys = new Set(selectedRecordKeys.value);
+  return historyGroups.value.filter(
+    (group) =>
+      keys.has(group.group_key) ||
+      (group.records || []).some((record) => recordKeys.has(recordIdentifier(record))),
+  );
 })
 const deletableSelectedGroups = computed(() => selectedGroups.value.filter((group) => group.deletable));
 const groupedItemKeys = computed(() => new Set(historyGroups.value.map((group) => group.group_key)));
@@ -921,11 +956,47 @@ watch(groupedItemKeys, (keys) => {
   selectedGroupKeys.value = selectedGroupKeys.value.filter((key) => keys.has(key));
 })
 
+watch(selectedGroupKeys, (keys, previous) => {
+  const derived = groupSelectionFromRecord;
+  groupSelectionFromRecord = false;
+  const prev = new Set(previous || []);
+  const current = new Set(keys);
+  const recordKeys = new Set(selectedRecordKeys.value);
+  let changed = false;
+  for (const group of historyGroups.value) {
+    const groupKey = group.group_key;
+    const wasSelected = prev.has(groupKey);
+    const isSelected = current.has(groupKey);
+    if (wasSelected === isSelected) continue;
+    for (const record of group.records || []) {
+      if (!canDeleteRecord(record)) continue;
+      const key = recordIdentifier(record);
+      if (!key) continue;
+      if (isSelected) {
+        if (derived) continue;          // 记录派生的分组选中：不补齐同组其它记录
+        recordKeys.add(key);
+      } else {
+        recordKeys.delete(key);
+      }
+      changed = true;
+    }
+  }
+  if (changed) selectedRecordKeys.value = [...recordKeys];
+});
+
 watch(
   selectedGroups,
   (groups) => {
+    const recordKeys = new Set(selectedRecordKeys.value);
+    const recordCount = historyGroups.value.reduce(
+      (count, group) =>
+        count +
+        (group.records || []).filter((record) => recordKeys.has(recordIdentifier(record))).length,
+      0,
+    );
     emit("selection-change", {
       groupCount: groups.length,
+      recordCount,
       subscribeIds: uniqueOptions(
         groups
           .flatMap((group) => group.records.map((record) => Number(record.subscribe_id || 0)))
@@ -942,7 +1013,7 @@ watch(
     });
   },
   {immediate: true},
-)
+);
 
 function uniqueOptions(values) {
   return [...new Set(values.filter(Boolean))];
@@ -990,6 +1061,11 @@ function resourceTypeLabel(value) {
 
 function resourceTypeColor(value) {
   return getTypeColor(resourceType(value));
+}
+
+function driveColor(value) {
+  const name = Array.isArray(value) ? value[0] : value;
+  return getDriveColor(name);
 }
 
 function mediaDetailLink(item) {
@@ -1092,9 +1168,7 @@ function recordIdentifier(record) {
 
 function isRecordSelected(record) {
   const key = recordIdentifier(record);
-  if (!key) return false;
-  if (selectedRecordKeys.value.includes(key)) return true;
-  return selectedGroups.value.some((group) => (group?.records || []).some((r) => recordIdentifier(r) === key));
+  return Boolean(key) && selectedRecordKeys.value.includes(key);
 }
 
 function toggleRecordSelect(record, group, checked) {
@@ -1102,21 +1176,28 @@ function toggleRecordSelect(record, group, checked) {
   const key = recordIdentifier(record);
   if (!key) return;
   const set = new Set(selectedRecordKeys.value);
-  if (checked) {
-    set.add(key);
-  } else {
-    set.delete(key);
-    if (selectedGroupKeys.value.includes(group.group_key)) {
-      selectedGroupKeys.value = selectedGroupKeys.value.filter((k) => k !== group.group_key);
-      for (const r of group.records || []) {
-        if (canDeleteRecord(r)) {
-          const rk = recordIdentifier(r);
-          if (rk !== key) set.add(rk);
-        }
-      }
-    }
-  }
+  if (checked) set.add(key);
+  else set.delete(key);
   selectedRecordKeys.value = [...set];
+  syncGroupSelection(group, set);
+}
+
+function syncGroupSelection(group, recordKeys) {
+  // 记录级勾选必须同步分组选择态，否则「搜索所选」永远拿不到数量；内容不变则不写回
+  const groupKey = group?.group_key;
+  if (!groupKey) return;
+  const current = selectedGroupKeys.value;
+  const shouldSelect = (group.records || []).some((record) => {
+    const key = recordIdentifier(record);
+    return key && recordKeys.has(key);
+  });
+  if (shouldSelect === current.includes(groupKey)) return;
+  if (shouldSelect) {
+    groupSelectionFromRecord = true;
+  }
+  selectedGroupKeys.value = shouldSelect
+    ? [...current, groupKey]
+    : current.filter((key) => key !== groupKey);
 }
 
 function isGroupAllRecordsSelected(group) {
@@ -1136,33 +1217,24 @@ function toggleGroupRecordsSelectAll(group, checked) {
   const records = (group?.records || []).filter(canDeleteRecord);
   if (!records.length) return;
   const set = new Set(selectedRecordKeys.value);
-  if (checked) {
-    for (const r of records) {
-      set.add(recordIdentifier(r));
-    }
-  } else {
-    for (const r of records) {
-      set.delete(recordIdentifier(r));
-    }
-    selectedGroupKeys.value = selectedGroupKeys.value.filter((k) => k !== group.group_key);
+  for (const r of records) {
+    const key = recordIdentifier(r);
+    if (checked) set.add(key);
+    else set.delete(key);
   }
   selectedRecordKeys.value = [...set];
+  syncGroupSelection(group, set);
 }
 
 const effectiveSelectedRecords = computed(() => {
-  const recordsMap = new Map();
-  for (const group of deletableSelectedGroups.value) {
-    for (const r of group.records || []) {
-      if (canDeleteRecord(r)) {
-        recordsMap.set(recordIdentifier(r), r);
-      }
-    }
-  }
+  // 以记录键为唯一口径：分组勾选会补齐记录键，部分取消也能被准确反映
   const selectedKeySet = new Set(selectedRecordKeys.value);
+  const recordsMap = new Map();
   for (const group of historyGroups.value) {
-    for (const r of group.records || []) {
-      if (canDeleteRecord(r) && selectedKeySet.has(recordIdentifier(r))) {
-        recordsMap.set(recordIdentifier(r), r);
+    for (const record of group.records || []) {
+      const key = recordIdentifier(record);
+      if (key && canDeleteRecord(record) && selectedKeySet.has(key)) {
+        recordsMap.set(key, record);
       }
     }
   }
@@ -1510,7 +1582,8 @@ function deleteTitle(record) {
 }
 
 .detail-table :deep(.v-table__wrapper) {
-  overflow: visible !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
 }
 
 .detail-table :deep(tbody tr:hover > td) {
@@ -1526,6 +1599,7 @@ function deleteTitle(record) {
   height: 32px !important;
   font-size: 0.75rem;
   color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
 }
 
 .detail-table :deep(th.subtable-select-th),
@@ -1541,42 +1615,48 @@ function deleteTitle(record) {
 
 .detail-table :deep(th:nth-child(2)),
 .detail-table :deep(td:nth-child(2)) {
-  width: 22%;
+  width: 16%;
   min-width: 0;
 }
 
 .detail-table :deep(th:nth-child(3)),
 .detail-table :deep(td:nth-child(3)) {
-  width: 8%;
+  width: 9%;
 }
 
 .detail-table :deep(th:nth-child(4)),
 .detail-table :deep(td:nth-child(4)) {
-  width: 7%;
+  width: 8%;
 }
 
 .detail-table :deep(th:nth-child(5)),
 .detail-table :deep(td:nth-child(5)) {
-  width: 10%;
+  width: 8%;
 }
 
 .detail-table :deep(th:nth-child(6)),
 .detail-table :deep(td:nth-child(6)) {
-  width: 8%;
+  width: 9%;
 }
 
 .detail-table :deep(th:nth-child(7)),
 .detail-table :deep(td:nth-child(7)) {
-  width: 8%;
+  width: 7%;
 }
 
 .detail-table :deep(th:nth-child(8)),
 .detail-table :deep(td:nth-child(8)) {
-  width: 8%;
+  width: 7%;
 }
 
 .detail-table :deep(th:nth-child(9)),
 .detail-table :deep(td:nth-child(9)) {
+  width: 72px;
+  min-width: 72px;
+}
+
+.detail-table :deep(th:nth-child(10)),
+.detail-table :deep(td:nth-child(10)) {
   width: 165px;
   min-width: 165px;
 }
@@ -1588,8 +1668,8 @@ function deleteTitle(record) {
 }
 
 .action-column {
-  width: 100px;
-  min-width: 100px;
+  width: 88px;
+  min-width: 88px;
   text-align: center;
   white-space: nowrap;
 }
@@ -1725,7 +1805,41 @@ function deleteTitle(record) {
 
 .history-mobile-media-line,
 .history-mobile-tags,
-.history-mobile-record-head,
+.history-mobile-record-head {
+  display: flex;
+  align-items: center;          /* 复选框 / 文字块 / 操作按钮 中线对齐 */
+  min-width: 0;
+  gap: 2px;
+}
+
+.history-mobile-record-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.history-mobile-record-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-mobile-check {
+  flex: 0 0 auto;
+  margin-top: 0;                /* 居中后不再需要上移补偿 */
+}
+
+.history-mobile-record .history-mobile-file {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-mobile-actions {
+  flex: 0 0 auto;
+}
+
 .history-mobile-record-meta {
   display: flex;
   align-items: center;

@@ -108,6 +108,38 @@ def media_identity(value: Any) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def is_tv_media_type(media_type: Any) -> bool:
+    """判断媒体类型是否为剧集，兼容 v2/v3 的枚举取值与字符串写法。"""
+    normalized = str(getattr(media_type, "value", media_type) or "").strip()
+    if not normalized:
+        return False
+    try:
+        from app.schemas.types import MediaType
+        if normalized == str(getattr(MediaType.TV, "value", "") or ""):
+            return True
+        return normalized == str(getattr(MediaType.TV, "name", "") or "")
+    except Exception:
+        return normalized.casefold() in {"tv", "电视剧"}
+
+
+def subscribe_media_key(value: Any) -> Tuple[str, str, int]:
+    """订阅/媒体目标的统一稳定键：``(媒体类型, 媒体ID, 季)``（非剧集季恒为 0）。"""
+    media_type = str(_read(value, "type") or "")
+    source, media_id = media_identity(value)
+    identity = (
+        f"{source}:{media_id}"
+        if source and media_id
+        else str(_read(value, "name") or "")
+    )
+    season = 0
+    if is_tv_media_type(media_type):
+        try:
+            season = int(_read(value, "season") or 1)
+        except (TypeError, ValueError):
+            season = 1
+    return media_type, identity, season
+
+
 def apply_media_identity(
         value: Any, media_source: Any, media_id: Any
 ) -> Any:
@@ -305,6 +337,12 @@ def search_medias(
     return method(**_accepted_kwargs(method, call_kwargs))
 
 
+def is_actionable_subscribe(item: Any) -> bool:
+    """订阅是否处于可自动化处理状态；S=暂停/禁用不处理。"""
+    state = str(getattr(item, "state", "") or "").strip().upper()
+    return state in ("", "N", "R")
+
+
 def list_subscribes_by_tmdb_id(
         oper: Any, tmdb_id: Any, season: Optional[int] = None
 ) -> List[Any]:
@@ -314,12 +352,16 @@ def list_subscribes_by_tmdb_id(
         return []
     legacy_method = getattr(oper, "list_by_tmdbid", None)
     if callable(legacy_method):
-        return list(legacy_method(parsed_id, season) or [])
+        rows = list(legacy_method(parsed_id, season) or [])
+        return [item for item in rows if is_actionable_subscribe(item)]
 
     identity_method = getattr(oper, "list_by_media_identity", None)
     if not callable(identity_method):
         return []
-    rows = list(identity_method(TMDB_SOURCE, str(parsed_id)) or [])
+    rows = [
+        item for item in (identity_method(TMDB_SOURCE, str(parsed_id)) or [])
+        if is_actionable_subscribe(item)
+    ]
     if season is None:
         return rows
     return [

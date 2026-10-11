@@ -53,13 +53,9 @@ class AnimeGardenSearchService:
 
         return {"exclude": excludes}
 
-    def _build_filters(self, strict: bool = True) -> Dict[str, Any]:
-        """获取构建好的 API 筛选条件。"""
-        return self._get_api_filters()
-
     def _cached_search(self, keyword: str, is_list_mode: bool = False) -> List[Dict[str, Any]]:
         """带 TTL 缓存的关键词底层检索。"""
-        filters = self._build_filters(strict=not is_list_mode)
+        filters = self._get_api_filters()
         cache_key = json.dumps({
             "keyword": keyword,
             "exclude": filters["exclude"],

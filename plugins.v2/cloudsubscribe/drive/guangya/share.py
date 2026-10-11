@@ -274,6 +274,7 @@ class GuangyaShareService:
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = [str(value) for value in file_ids]
+        stop_requested = kwargs.get("stop_requested")
         if self._offline.is_offline_url(share_url):
             succeeded = (
                 normalized
@@ -289,6 +290,9 @@ class GuangyaShareService:
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 50,
         ):
+            if stop_requested and stop_requested():
+                logger.debug("收到停止请求，剩余文件未转存")
+                break
             if self._restore_share(share_url, batch, save_path):
                 succeeded.extend(batch)
             else:

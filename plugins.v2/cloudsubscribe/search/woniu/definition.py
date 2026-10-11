@@ -122,7 +122,7 @@ class WoniuSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="woniu_request_interval",
                         label="请求访问间隔",
-                        hint="接口请求基础间隔秒数",
+                        hint="详情页等请求的基础间隔秒数",
                         type="number",
                         default=1.0,
                         min=0.5,

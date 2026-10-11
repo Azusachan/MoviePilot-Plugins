@@ -31,15 +31,23 @@ try:
 except Exception:
     CategoryHelper = None
 
-from ...core import CloudFile, OwnerDelegator
+from ...core import CloudFile, DirectoryListing, DirectoryLookup, OwnerDelegator
+from ...core.cloud import DirectoryReadOperations
 from ...core.media import media_identity
 from ...utils import FileMatcher, MediaFileParser
 from .baseline import normalize_platform_cache_key
-from .utils import format_episode_ranges
+from .utils import (
+    format_episode_ranges,
+    is_upgrade_backup_name,
+    strip_upgrade_backup_suffix,
+)
 
 
 class SyncNamingService(OwnerDelegator):
     """负责媒体分类根目录、重命名路径生成以及本地和网盘资源目录扫描。"""
+
+    # 最近一次季目录扫描中无法解析集号的视频文件（供洗版保守判断）
+    _season_unparsed_videos: List[str] = []
 
     def _platform_classified_root(
             self,
@@ -470,6 +478,31 @@ class SyncNamingService(OwnerDelegator):
                 found_episodes.add(int(episode))
         return found_episodes
 
+    @staticmethod
+    def _resolve_and_list(
+            cloud_directories: DirectoryReadOperations, cloud_path: str
+    ) -> Tuple[bool, List[CloudFile]]:
+        """解析目录并列出文件；列目录失败时失效目录缓存后重试一次。
+
+        返回 (是否可确认, 文件列表)；目录确认不存在时按空目录返回。
+        """
+        for attempt in (1, 2):
+            lookup: DirectoryLookup = cloud_directories.resolve_directory(cloud_path)
+            if not lookup.checked:
+                return False, []
+            if lookup.directory_id is None:
+                return True, []
+            listing: DirectoryListing = cloud_directories.list_directory(
+                lookup.directory_id
+            )
+            if listing.checked:
+                return True, list(listing.files)
+            if attempt == 2:
+                return False, []
+            logger.debug(f"网盘目录读取失败，失效目录缓存后重试：{cloud_path}")
+            cloud_directories.refresh_directories()
+        return False, []
+
     def _scan_cloud_resource_episode_files(
             self,
             subscribe,
@@ -477,8 +510,13 @@ class SyncNamingService(OwnerDelegator):
             season: int,
             start_episode: int,
             total_episode: int,
+            cleanup_backups: bool = False,
     ) -> Tuple[bool, Dict[int, CloudFile], str]:
-        """一次读取目标季目录，返回真实存在的逐集网盘文件。"""
+        """读取目标季目录逐集文件；无法解析集号的视频记入 _season_unparsed_videos。
+
+        ``cleanup_backups`` 为真时清理「同集已有同名正常文件」且未被后处理队列追踪的备份残留。
+        """
+        self._season_unparsed_videos = []
         cloud_media_root = getattr(self, "_CLOUD_MEDIA_ROOT", "/")
         cloud_dir = self._resolve_resource_season_dir(
             cloud_media_root, subscribe, mediainfo, season
@@ -490,18 +528,13 @@ class SyncNamingService(OwnerDelegator):
         if not cloud_directories:
             return False, {}, cloud_path
 
-        lookup = cloud_directories.resolve_directory(cloud_path)
-        if not lookup.checked:
+        checked, files = self._resolve_and_list(cloud_directories, cloud_path)
+        if not checked:
             return False, {}, cloud_path
-        if lookup.directory_id is None:
-            return True, {}, cloud_path
-
-        listing = cloud_directories.list_directory(lookup.directory_id)
-        if not listing.checked:
-            return False, {}, cloud_path
-        episode_files: Dict[int, CloudFile] = {}
         upgrade_mode = getattr(self, "_upgrade_mode", "largest")
-        for item in listing.files:
+        episode_all: Dict[int, List[CloudFile]] = {}
+        unparsed: List[str] = []
+        for item in files:
             if item.is_directory:
                 continue
             name = item.name
@@ -510,21 +543,114 @@ class SyncNamingService(OwnerDelegator):
             episodes = self._parse_resource_episode_names(
                 [name], season, start_episode, total_episode, subscribe=subscribe
             )
+            if not episodes:
+                unparsed.append(name)
+                continue
             for episode in episodes:
-                current = episode_files.get(episode)
-                if not current:
-                    episode_files[episode] = item
-                    continue
-                current_size = int(getattr(current, "size", 0) or 0)
+                episode_all.setdefault(int(episode), []).append(item)
+
+        self._season_unparsed_videos = unparsed
+        if unparsed:
+            logger.warning(
+                f"目标季目录有 {len(unparsed)} 个无法解析集号的视频"
+                f"（缺失集本轮保守跳过）：{cloud_path} 示例 {unparsed[:3]}"
+            )
+
+        if cleanup_backups:
+            self._cleanup_episode_backups(episode_all, cloud_path)
+
+        episode_files: Dict[int, CloudFile] = {}
+        for episode, items in episode_all.items():
+            best = items[0]
+            for item in items[1:]:
+                current_size = int(getattr(best, "size", 0) or 0)
                 candidate_size = int(getattr(item, "size", 0) or 0)
-                prefer_candidate = (
+                prefer = (
                     candidate_size < current_size
                     if upgrade_mode == "smallest"
                     else candidate_size > current_size
                 )
-                if prefer_candidate:
-                    episode_files[episode] = item
+                if prefer:
+                    best = item
+            episode_files[episode] = best
         return True, episode_files, cloud_path
+
+    def _cleanup_episode_backups(
+            self, episode_all: Dict[int, List[CloudFile]], cloud_path: str
+    ) -> int:
+        """清理同集已有同名正常文件、且未被后处理队列追踪的洗版备份残留。"""
+        tracked = self._tracked_upgrade_backups()
+        leftovers: List[CloudFile] = []
+        seen: Set[str] = set()
+        for episode, items in episode_all.items():
+            normals = [item for item in items if not is_upgrade_backup_name(item.name)]
+            if not normals:
+                continue
+            normal_stems = {Path(item.name).stem for item in normals}
+            backups = [
+                item for item in items
+                if is_upgrade_backup_name(item.name)
+                   and strip_upgrade_backup_suffix(item.name) in normal_stems
+                   and str(item.name) not in tracked
+            ]
+            if not backups:
+                continue
+            episode_all[episode] = normals
+            for item in backups:
+                key = str(getattr(item, "id", "") or item.name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                leftovers.append(item)
+        if not leftovers:
+            return 0
+        return self._delete_upgrade_backups(
+            leftovers, f"{cloud_path}（{len(leftovers)} 个残留备份）"
+        )
+
+    def _tracked_upgrade_backups(self) -> Set[str]:
+        """仍在后处理队列中的备份名称与文件 ID，禁止清理。"""
+        getter = getattr(self, "_get_data", None)
+        if not callable(getter):
+            return set()
+        try:
+            pending = getter(getattr(self, "_OFFLINE_PENDING_KEY", "")) or {}
+        except Exception as error:
+            logger.debug(f"读取待后处理队列失败，跳过备份清理：{error}")
+            return set()
+        if not isinstance(pending, dict):
+            return set()
+        tracked: Set[str] = set()
+        for item in pending.values():
+            if not isinstance(item, dict):
+                continue
+            for key in ("upgrade_backup_name", "upgrade_old_file_id"):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    tracked.add(value)
+        return tracked
+
+    def _delete_upgrade_backups(self, items: List[CloudFile], label: str) -> int:
+        """按文件 ID 批量删除备份；网盘不支持批量删除时仅记日志。"""
+        mutations = getattr(self, "_cloud_batch_mutations", None)
+        if mutations is None or not hasattr(mutations, "delete_files"):
+            logger.debug(f"当前网盘不支持批量删除，跳过备份清理：{label}")
+            return 0
+        ids = list(dict.fromkeys(
+            str(getattr(item, "id", "") or "") for item in items
+        ))
+        ids = [item_id for item_id in ids if item_id]
+        if not ids:
+            return 0
+        try:
+            deleted = mutations.delete_files(ids)
+        except Exception as error:
+            logger.warning(f"清理洗版旧文件备份失败：{label} - {error}")
+            return 0
+        count = len({str(item_id) for item_id in (deleted or ())} & set(ids))
+        if count:
+            logger.info(f"已清理洗版旧文件备份 {count} 个：{label}")
+        return count
 
     def _cloud_drive_name(self) -> str:
         """当前目标网盘名称，未获取到时回退为通用称呼。"""
@@ -572,22 +698,30 @@ class SyncNamingService(OwnerDelegator):
         cloud_directories = getattr(self, "_cloud_directories", None)
         if not cloud_directories:
             return None
-        lookup = cloud_directories.resolve_directory(cloud_dir)
-        if not lookup.checked or lookup.directory_id is None:
+        checked, files = self._resolve_and_list(cloud_directories, cloud_dir)
+        if not checked:
             return None
         expected_stem = Path(expected_name).stem
-        listing = cloud_directories.list_directory(lookup.directory_id)
-        if not listing.checked:
-            return None
-        for item in listing.files:
-            if item.is_directory:
-                continue
-            name = item.name
-            path = Path(name)
-            if not MediaFileParser.is_video(name):
-                continue
-            if path.stem == expected_stem:
-                return cloud_dir, name, item
+        videos = [
+            item for item in files
+            if not item.is_directory and MediaFileParser.is_video(item.name)
+        ]
+        expected = [
+            item for item in videos if Path(item.name).stem == expected_stem
+        ]
+        if expected:
+            tracked = self._tracked_upgrade_backups()
+            backups = [
+                item for item in videos
+                if is_upgrade_backup_name(item.name)
+                   and strip_upgrade_backup_suffix(item.name) == expected_stem
+                   and str(item.name) not in tracked
+            ]
+            if backups:
+                self._delete_upgrade_backups(
+                    backups, f"{cloud_dir}（{len(backups)} 个残留备份）"
+                )
+            return cloud_dir, expected[0].name, expected[0]
         return None
 
     @staticmethod

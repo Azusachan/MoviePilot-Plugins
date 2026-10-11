@@ -213,6 +213,7 @@ export function resKey(res, idx) {
 const displayCatalog = {
   types: [],
   typeIndex: {},
+  typeNameIndex: {},
   aliases: {},
   sources: [],
   sourceIndex: {},
@@ -224,6 +225,11 @@ export function applyDisplayCatalog(payload) {
     displayCatalog.types = payload.resource_types.slice();
     displayCatalog.typeIndex = Object.fromEntries(
       displayCatalog.types.map((item) => [String(item?.value || "").toLowerCase(), item]),
+    );
+    displayCatalog.typeNameIndex = Object.fromEntries(
+      displayCatalog.types
+        .filter((item) => String(item?.name || "").trim())
+        .map((item) => [String(item.name).trim().toLowerCase(), item]),
     );
   }
   if (payload.resource_type_aliases && typeof payload.resource_type_aliases === "object") {
@@ -313,6 +319,13 @@ export function resolveColor(colorName, fallback = "primary") {
 export function getTypeColor(type) {
   const color = typeMeta(type)?.color;
   return resolveColor(color, "#607d8b");
+}
+
+export function getDriveColor(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "#607d8b";
+  const meta = displayCatalog.typeNameIndex[raw.toLowerCase()] || typeMeta(raw);
+  return resolveColor(meta?.color, "#607d8b");
 }
 
 function isPreviewableResourceType(type) {

@@ -5,8 +5,9 @@ from __future__ import annotations
 import copy
 import datetime
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import quote, urlencode
+
 import pytz
 from app.core.config import settings
 from app.core.metainfo import MetaInfo
@@ -24,6 +25,7 @@ from ...search.types import (
     resource_type_catalog,
 )
 from ...utils.cache import create_platform_ttl_cache
+from ...utils.strm import StrmGenerator
 
 
 def _display_catalog() -> dict:
@@ -305,6 +307,85 @@ class PageApi(OwnerDelegator):
                     return cfg
         return getattr(self, "__dict__", {}) or {}
 
+    def _strm_proxy_server_status(self) -> Dict[str, Any]:
+        """代理监听运行状态：端口、是否运行、失败原因（如端口被占用）。"""
+        status = getattr(self, "_strm_proxy_status", None) or {}
+        return {
+            "running": bool(status.get("running")),
+            "port": int(status.get("port", 0) or 0),
+            "error": str(status.get("error") or ""),
+        }
+
+    def _strm_proxy_port_missing(self) -> bool:
+        """已启用代理但未配置监听端口。"""
+        config = getattr(self, "_applied_config", None) or {}
+        if not config.get("strm_proxy_enabled"):
+            return False
+        try:
+            return int(config.get("strm_proxy_port", 0) or 0) <= 0
+        except (TypeError, ValueError):
+            return True
+
+    def _strm_proxy_route(self) -> str:
+        """短链路由段（可配置）。"""
+        config = getattr(self, "_applied_config", None) or {}
+        return StrmGenerator.proxy_route_segment(config.get("strm_proxy_route", ""))
+
+    def _strm_proxy_short(self) -> bool:
+        """是否使用独立监听的短链模板（配置了端口即视为启用）。"""
+        config = getattr(self, "_applied_config", None) or {}
+        if not config.get("strm_proxy_enabled"):
+            return False
+        return int(config.get("strm_proxy_port", 0) or 0) > 0
+
+    def _provider_reference(self) -> Any:
+        """当前目标网盘的播放引用能力对象（STRM 模板变量/标识来源）。"""
+        drive = getattr(self, "_cloud_drive", None)
+        if not drive or not drive.supports(CloudDriveCapability.PLAYBACK_REFERENCE):
+            return None
+        try:
+            return drive.require(CloudDriveCapability.PLAYBACK_REFERENCE)
+        except Exception as error:
+            logger.debug(f"获取网盘播放引用能力失败：{error}")
+            return None
+
+    def _strm_proxy_identifier(self) -> str:
+        """当前网盘可用于代理短链定位的标识变量（无则为空，走路径定位）。"""
+        return StrmGenerator.proxy_identifier_variable(self._provider_reference())
+
+    def _effective_strm_template(self) -> Tuple[str, str]:
+        """当前生效的 STRM 基址与模板：始终取自配置（代理只决定入口）。"""
+        config = getattr(self, "_applied_config", None) or {}
+        port = config.get("strm_proxy_port", 0) if config.get("strm_proxy_enabled") else 0
+        return (
+            StrmGenerator.with_port(config.get("strm_base_url", ""), port),
+            str(config.get("strm_url_template") or StrmGenerator.DEFAULT_TEMPLATE),
+        )
+
+    def _strm_variables(self) -> List[str]:
+        """当前目标网盘可用的 STRM 模板变量：核心变量 + 提供方变量。"""
+        reference = self._provider_reference() or getattr(self, "_playback_reference", None)
+        provider = sorted(
+            str(value) for value in (getattr(reference, "template_variables", ()) or ())
+        )
+        return sorted(StrmGenerator.CORE_VARIABLES) + provider
+
+    def _strm_sample(self) -> str:
+        """按当前生效配置渲染一条示例 STRM 内容，便于界面核对变量取值。"""
+        base_url, template = self._effective_strm_template()
+        values = {
+            "base_url": base_url,
+            "file_name": "示例剧集.S01E01.mkv",
+            "file_path": "/电视剧/示例剧集 (2026)/Season 01/示例剧集.S01E01.mkv",
+        }
+        for variable in self._strm_variables():
+            values.setdefault(variable, f"<{variable}>")
+        try:
+            return template.format(**values)
+        except Exception as error:
+            logger.debug(f"渲染 STRM 示例失败：{error}")
+            return ""
+
     def api_vue_ui_options(self, scope: str = "base", refresh: bool = False) -> dict:
         normalized_scope = str(scope or "base").strip().lower()
         normalized_scope = {
@@ -388,6 +469,17 @@ class PageApi(OwnerDelegator):
                     "enable_cloud_upgrade": bool(
                         getattr(self, "_enable_cloud_upgrade", False)
                     ),
+                    "strm_variables": self._strm_variables(),
+                    "strm_proxy_template": StrmGenerator.proxy_template(
+                        self._strm_proxy_identifier(), self._strm_proxy_route()
+                    ),
+                    "strm_proxy_route": self._strm_proxy_route(),
+                    "strm_proxy_supported": bool(self._strm_proxy_identifier()),
+                    "strm_proxy_short": self._strm_proxy_short(),
+                    "strm_proxy_port_missing": self._strm_proxy_port_missing(),
+                    "strm_proxy_server": self._strm_proxy_server_status(),
+                    "strm_identifier_variable": self._strm_proxy_identifier(),
+                    "strm_sample": self._strm_sample(),
                     "cross_transfer_media_types": sorted(
                         str(value) for value in getattr(
                             self, "_cross_transfer_media_types", set()
@@ -476,9 +568,9 @@ class PageApi(OwnerDelegator):
                     "mediaservers": mediaservers,
                     "media_library_webhook_urls": {
                         str(item.get("value") or ""): (
-                                "/api/v1/webhook/?"
+                                "/api/v1/plugin/CloudSubscribe/webhook/emby?"
                                 + urlencode({
-                            "token": settings.API_TOKEN,
+                            "apikey": settings.API_TOKEN,
                             "source": str(item.get("value") or ""),
                         })
                         )

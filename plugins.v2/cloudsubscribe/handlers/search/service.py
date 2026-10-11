@@ -29,7 +29,7 @@ from ...search.dian115 import Dian115SearchService
 from ...search.hdhaven import HDHavenSearchService
 from ...search.hdhive import HDHiveSearchService
 from ...search.http_client import RequestGateCooldown
-from ...search.matching import is_anime_media, positive_ints, unique_texts
+from ...search.matching import is_anime_media, positive_ints
 from ...search.mikan.service import filter_fansubs
 from ...search.pansou import PanSouSearchService
 from ...search.registry import create_search_registry
@@ -50,12 +50,6 @@ class SearchHandler:
     """搜索处理器"""
 
     _TEST_RESULT_LIMIT = 10
-
-    @staticmethod
-    def _normalize_pansou_values(value: Any) -> List[str]:
-        if isinstance(value, str):
-            value = re.split(r"[,，\n]+", value)
-        return unique_texts(value)
 
     def __getattr__(self, name):
         return resolve_component(
@@ -96,11 +90,14 @@ class SearchHandler:
 
         anime_pack_preferred = get_val("anime_pack_preferred", True)
         self._anime_pack_preferred = bool(anime_pack_preferred)
-        resource_type_order = get_val("resource_type_order")
-        self._resource_type_order_config = list(
-            ["115", "ed2k"]
-            if resource_type_order is None else resource_type_order
+        resource_type_order = list(
+            get_val("resource_type_order") or ["115", "ed2k"]
         )
+        # 与插件配置归一化一致：目标网盘缺失则置顶
+        target_drive = str(get_val("cloud_drive") or "").strip().lower()
+        if target_drive and target_drive not in resource_type_order:
+            resource_type_order.insert(0, target_drive)
+        self._resource_type_order_config = resource_type_order
         self._resource_type_order_map = {}
         for index, value in enumerate(self._resource_type_order_config):
             self._resource_type_order_map.setdefault(value, index)

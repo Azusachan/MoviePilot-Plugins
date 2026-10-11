@@ -21,10 +21,6 @@ class MessageRoutingHook(OwnerDelegator):
     _signature: Optional[inspect.Signature] = None
     _active: Optional["MessageRoutingHook"] = None
 
-    @staticmethod
-    def _channel_value(channel: Any) -> str:
-        return str(getattr(channel, "value", channel) or "").strip().lower()
-
     def _message_payload(self, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self._enabled or not self._direct_transfer_enabled:
             return None

@@ -235,6 +235,13 @@ onUnmounted(() => {
 });
 
 function postprocessingSummary(task) {
+  // 已有后处理步骤时以实际步骤为准（转存完成后的刮削/登记仍在进行）
+  if (task?.postprocess_active) {
+    return currentPostprocessStep(task)?.label || "正在处理文件";
+  }
+  if (task?.postprocess_step && task?.status !== "downloading") {
+    return currentPostprocessStep(task)?.label || "正在处理文件";
+  }
   if (task?.status === "downloading") {
     const pendingCount = Number(task?.download_pending_count || 0);
     return pendingCount > 0 ? `等待离线下载 ${pendingCount} 个文件` : "等待离线下载";
@@ -242,9 +249,6 @@ function postprocessingSummary(task) {
   if (task?.status === "transferring") {
     const pendingCount = Number(task?.transfer_pending_count || 0);
     return pendingCount > 0 ? `等待网盘转存 ${pendingCount} 个文件` : "等待网盘转存";
-  }
-  if (task?.postprocess_active) {
-    return currentPostprocessStep(task)?.label || "正在处理文件";
   }
   if (task?.download_pending_count > 0) {
     return `等待离线下载 ${task.download_pending_count} 个文件`;

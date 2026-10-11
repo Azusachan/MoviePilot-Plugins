@@ -12,7 +12,7 @@ from app.log import logger
 
 from .client import is_success
 from ..common import safe_int
-from ...utils.magnet import parse_magnet_metadata
+from ...utils.magnet import extract_magnet_hash, parse_magnet_metadata
 
 _ED2K_RE = re.compile(
     r"ed2k://\|file\|([^|]+)\|(\d+)\|([0-9A-Fa-f]{32})\|/?", re.I
@@ -151,6 +151,10 @@ class P123OfflineService:
             }.get(status, "处理中"),
             "percent": max(0.0, min(percent, 100.0)),
             "add_time": add_time,
+            "res": str(
+                task.get("url") or task.get("download_url")
+                or task.get("res") or ""
+            ).strip(),
         }
 
     def _load_tasks(self, force: bool = False) -> list[Dict[str, Any]]:
@@ -264,9 +268,22 @@ class P123OfflineService:
             self._updated_at = time.time()
         return len(normalized)
 
-    def add_offline_download(self, url: str, save_path: str, **kwargs: Any) -> bool:
+    def add_offline_download(self, url: str, save_path: str, **kwargs: Any) -> Any:
+        """提交离线任务；命中同 info hash 的既有任务时直接复用，避免重复建单。"""
         if not self.is_offline_url(url):
             return False
+        target_hash = (extract_magnet_hash(url) or "").upper()
+        for task in self._load_tasks(force=True):
+            task_hash = (extract_magnet_hash(str(task.get("res") or "")) or "").upper()
+            if not target_hash or task_hash != target_hash:
+                continue
+            if task.get("failed"):
+                break
+            state_text = "已完成" if task.get("completed") else "进行中"
+            logger.info(
+                f"123 离线任务已存在（{state_text}），复用任务：{task.get('name') or url}"
+            )
+            return str(task.get("id") or task.get("native_id") or "").strip() or True
         lookup = self._files.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             logger.error(f"添加123离线下载失败：无法获取或创建目标目录 {save_path}")
@@ -280,7 +297,13 @@ class P123OfflineService:
                 return False
             with self._lock:
                 self._updated_at = 0
-            return True
+            task_id = str(
+                (response.get("data") or {}).get("task_id")
+                or (response.get("data") or {}).get("taskId")
+                or (response.get("data") or {}).get("id")
+                or ""
+            ).strip()
+            return task_id or True
         except Exception as error:
             logger.error(f"添加123离线下载异常：{error}")
             return False

@@ -1143,7 +1143,7 @@ class PlatformIntegrationService(OwnerDelegator):
             return None
         normalized_type = str(media_type or "").strip().lower()
         candidates = []
-        for subscribe in SubscribeOper().list() or []:
+        for subscribe in SubscribeOper().list("N,R") or []:
             subscribe_type = self._agent_media_type(getattr(subscribe, "type", None))
             if normalized_type and self._agent_media_type(normalized_type) != subscribe_type:
                 continue
@@ -1214,12 +1214,6 @@ class PlatformIntegrationService(OwnerDelegator):
                 f"类型={resource_type_name(resource_type, '未知')}"
             )
         return []
-
-    @staticmethod
-    def _infer_link_media(files: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """兼容旧调用：返回分享中出现频率最高的媒体。"""
-        candidates = PlatformIntegrationService._infer_link_media_candidates(files)
-        return candidates[0] if candidates else {}
 
     @staticmethod
     def _infer_link_media_candidates(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -10,7 +10,7 @@ from app.log import logger
 
 from .client import is_success
 from .files import cloud_file
-from ..common import iter_transfer_batches, safe_int
+from ..common import iter_transfer_batches, safe_int, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus
 
 
@@ -97,7 +97,10 @@ class P123ShareService:
             page += 1
         return items
 
-    def _iterate_share(self, info: Mapping[str, Any], max_depth: int = -1):
+    def _iterate_share(
+            self, info: Mapping[str, Any], max_depth: int = -1,
+            target_season: Any = None,
+    ):
         share_key = str(info.get("share_key") or "")
         share_pwd = str(info.get("share_pwd") or "")
         stack = [(0, 0, "")]
@@ -113,6 +116,8 @@ class P123ShareService:
                 yield item
                 if item.get("is_dir") and (max_depth < 0 or depth + 1 < max_depth):
                     dir_name = str(item.get("name") or "").strip()
+                    if target_season is not None and should_skip_season_dir(dir_name, target_season):
+                        continue
                     sub_parent = (
                         f"{parent_path}/{dir_name}".strip("/")
                         if parent_path else dir_name
@@ -143,25 +148,30 @@ class P123ShareService:
         if not info:
             return []
         max_depth = int(kwargs.get("max_depth", -1) or -1)
+        target_season = kwargs.get("target_season")
         cache_key = self._cache_key(info)
         cached: Dict[str, Dict[str, Any]] = {}
         files = []
         try:
-            for item in self._iterate_share(info, max_depth=max_depth):
-                file_item = cloud_file(item)
-                if not file_item or file_item.is_directory:
+            for item in self._iterate_share(
+                    info, max_depth=max_depth, target_season=target_season
+            ):
+                if not item or item.get("is_dir"):
+                    continue
+                file_id = str(item.get("id") or "")
+                if not file_id:
                     continue
                 raw = item.get("raw")
-                cached[file_item.id] = {
+                cached[file_id] = {
                     "item": dict(item),
                     "raw": dict(raw) if isinstance(raw, Mapping) else {},
                 }
-                file_dict = dict(file_item)
+                file_dict = dict(item)
                 if item.get("parent_path"):
                     file_dict["parent_path"] = item["parent_path"]
                     file_dict["relative_path"] = (
                             item.get("relative_path")
-                            or f"{item['parent_path']}/{file_item.name}"
+                            or f"{item['parent_path']}/{item.get('name')}"
                     )
                 files.append(file_dict)
             self._share_items[cache_key] = cached
@@ -262,6 +272,7 @@ class P123ShareService:
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = list(dict.fromkeys(str(value) for value in file_ids))
+        stop_requested = kwargs.get("stop_requested")
         if not normalized:
             return [], []
         succeeded, failed = [], []
@@ -269,6 +280,9 @@ class P123ShareService:
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 100,
         ):
+            if stop_requested and stop_requested():
+                logger.debug("收到停止请求，剩余文件未转存")
+                break
             if self._copy(share_url, batch, save_path):
                 succeeded.extend(batch)
             else:

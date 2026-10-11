@@ -54,17 +54,26 @@ class HDHavenClient:
         self._save_data_func = save_data_func
 
         self._proxies = normalize_proxies(proxy)
-        self._session = requests.Session()
+        self._session = requests.Session(impersonate="chrome")
+        # 站点按 Chromium 专有 sec-fetch-*/sec-ch-ua* 头判定浏览器，缺失即 403
         self._session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/128.0.0.0 Safari/537.36"
             ),
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": f"{self.base_url}/",
             "Origin": self.base_url,
+            "sec-ch-ua": '"Chromium";v="128", "Not(A:Brand";v="24", "Google Chrome";v="128"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
         })
 
         self._lock = threading.RLock()
@@ -168,11 +177,18 @@ class HDHavenClient:
                     self._turnstile_site_key = str(
                         (conf.json().get("data") or {}).get("turnstile_site_key") or ""
                     ).strip()
+            except HDHavenError:
+                # 明确错误（如网页接口被关闭）需原样上报
+                raise
             except Exception as err:
                 logger.debug(f"HDHaven 获取 registration-config 失败：{err}")
 
         if not self._turnstile_site_key:
-            raise HDHavenError("HDHaven 无法获取 Cloudflare site key", code="site_key_not_found")
+            raise HDHavenError(
+                "HDHaven 无法获取 Cloudflare site key"
+                "（registration-config 未返回 turnstile_site_key）",
+                code="site_key_not_found",
+            )
 
         if self._turnstile_solver is None:
             self._turnstile_solver = HDHavenTurnstile(base_url=self.base_url, proxy=self.proxy)
@@ -274,6 +290,17 @@ class HDHavenClient:
         if is_cloudflare_challenge(resp.text, resp.status_code, resp.headers):
             self._request_gate.activate_cooldown(120, status=resp.status_code, reason="接口触发Cloudflare质询")
             raise HDHavenError("HDHaven 触发 Cloudflare 质询拦截", code="cf_blocked", status_code=resp.status_code)
+
+        if (
+                resp.status_code == 403
+                and "BROWSER_REQUIRED" in str(getattr(resp, "text", "") or "")
+        ):
+            raise HDHavenError(
+                "HDHaven 网页接口已限制程序访问（BROWSER_REQUIRED）；"
+                "站点要求改用 OPENAPI 授权（个人中心 /me#openapi），当前渠道暂不支持",
+                code="browser_required",
+                status_code=403,
+            )
 
         if resp.status_code == 401 and auto_login and self.username and self.password:
             logger.debug("HDHaven 会话令牌过期，尝试重新登录刷新")

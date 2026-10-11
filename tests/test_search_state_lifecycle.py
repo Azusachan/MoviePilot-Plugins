@@ -40,6 +40,7 @@ register_module(
     media_identity=MagicMock(),
     recognize_media=MagicMock(),
     search_medias=MagicMock(),
+    subscribe_media_key=MagicMock(return_value=("", "", 0)),
     tmdb_id_of=MagicMock(),
     tmdb_identity_update=MagicMock(),
 )

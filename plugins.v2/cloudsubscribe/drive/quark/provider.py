@@ -31,6 +31,7 @@ class QuarkDrive:
 @dataclass(frozen=True)
 class QuarkPlaybackReference:
     template_variables: FrozenSet[str] = frozenset({"file_id"})
+    proxy_identifier: str = "file_id"
 
     @staticmethod
     def reference_values(file_item: CloudFile) -> Dict[str, str]:
