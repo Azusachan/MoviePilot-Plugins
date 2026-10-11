@@ -272,8 +272,8 @@ class TestPlatformCompatibility(unittest.TestCase):
         import re
         from pathlib import Path
 
-        history_file = Path("plugins.v2/cloudsubscribe/handlers/sync/history.py")
-        text = history_file.read_text(encoding="utf-8")
+        upgrade_file = Path("plugins.v2/cloudsubscribe/handlers/sync/upgrade.py")
+        text = upgrade_file.read_text(encoding="utf-8")
         match = re.search(r"def _transient_target_defaults\(\)[^:]*:\s*return\s*\{([^}]+)\}", text)
         self.assertIsNotNone(match)
         # 验证必需包含 quality, resolution, effect, include, exclude 等 v3 契约属性

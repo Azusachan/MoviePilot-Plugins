@@ -16,6 +16,7 @@ from ...core import (
     OwnerDelegator,
     SearchCapability,
 )
+from ...drive.common import format_size
 from ...search.types import (
     CANDIDATE_RESOURCE_TYPES,
     normalize_resource_type,
@@ -310,8 +311,24 @@ class ResourceTransferService(OwnerDelegator):
             seasons.add(structured)
         return seasons
 
-    @staticmethod
+    def _offline_link_size(self, url: str) -> int:
+        """离线链接自带的精确单文件大小；Magnet 无单文件大小信息时返回 0。"""
+        if not self._is_ed2k_url(url):
+            return 0
+        parser = getattr(self._offline_download, "parse_ed2k_link", None)
+        if not parser:
+            return 0
+        try:
+            parsed = parser(str(url).strip()) or {}
+        except Exception:
+            return 0
+        try:
+            return max(0, int(parsed.get("size") or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def _magnet_history_entries(
+            self,
             resource: Dict[str, Any],
             season: Optional[int] = None,
             target_episodes: Optional[List[int]] = None,
@@ -368,7 +385,10 @@ class ResourceTransferService(OwnerDelegator):
                 ep = eps[0] if len(eps) == 1 else 0
                 entries.append({
                     "file_name": file_name,
-                    "file_size": max(0, int(resource.get("size") or 0)),
+                    "file_size": (
+                            self._offline_link_size(str(resource.get("url") or ""))
+                            or max(0, int(resource.get("size") or 0))
+                    ),
                     "season": int(season or 0),
                     "episode": ep,
                 })
@@ -513,6 +533,10 @@ class ResourceTransferService(OwnerDelegator):
         resource["url"] = urls[0]
         resource["need_unlock"] = False
         resource["need_access"] = False
+        first_size = self._offline_link_size(urls[0])
+        if first_size:
+            resource["size"] = first_size
+            resource["size_human"] = format_size(first_size)
         file_list = [str(f).strip() for f in (resource.get("file_list") or []) if str(f or "").strip()]
         first_name = (
             file_list[0]
@@ -522,6 +546,7 @@ class ResourceTransferService(OwnerDelegator):
         if first_name:
             resource["title"] = first_name
             resource["file_name"] = first_name
+            resource["description"] = first_name
             resource["file_list"] = [first_name]
         if len(urls) > 1:
             expanded = []
@@ -529,6 +554,10 @@ class ResourceTransferService(OwnerDelegator):
                 item = copy.deepcopy(resource)
                 item["url"] = url
                 item["unlock_points"] = 0
+                item_size = self._offline_link_size(url)
+                if item_size:
+                    item["size"] = item_size
+                    item["size_human"] = format_size(item_size)
                 name = (
                     file_list[i]
                     if file_list and i < len(file_list)
@@ -537,6 +566,7 @@ class ResourceTransferService(OwnerDelegator):
                 if name:
                     item["title"] = name
                     item["file_name"] = name
+                    item["description"] = name
                     item["file_list"] = [name]
                 expanded.append(item)
             resources[resource_index + 1:resource_index + 1] = expanded

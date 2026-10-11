@@ -290,10 +290,19 @@ class SyncRuntimeService(OwnerDelegator):
                 values["pending_count"] = 0
                 values["finished_at"] = time.time()
                 values["postprocess_step"] = ""
-                if failed_count >= total_count:
+                detail = str(values.get("postprocess_detail") or "").strip()
+                if failed_count and failed_count >= total_count:
                     values["status"] = "failed"
-                    values["phase"] = "文件定位失败，后处理已停止"
-                    values["message"] = values.get("postprocess_detail") or "网盘未定位到转存文件，任务停止"
+                    values["phase"] = "文件后处理失败，任务已停止"
+                    values["message"] = detail or "全部文件后处理失败"
+                elif failed_count:
+                    # 部分文件失败必须如实反映，不能按成功收尾
+                    values["status"] = "failed"
+                    values["phase"] = (
+                        f"部分文件后处理失败（成功 {completed_count - failed_count}"
+                        f"/{total_count}）"
+                    )
+                    values["message"] = detail or "部分文件后处理失败，请检查网盘文件状态"
                 else:
                     values["status"] = "completed"
                     values["phase"] = "文件后处理已结束"

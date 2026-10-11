@@ -340,13 +340,18 @@ class PostprocessService(OwnerDelegator):
     def _cleanup_failed_offline_task(
             self, item: Dict[str, Any], reason: str
     ) -> None:
-        """失败后仅记录日志，保留离线任务及已下载文件，避免误删用户云端资产。"""
-        task_id = str(item.get("task_id") or "").strip().upper()
+        """失败后清理残留离线任务：只删任务本身，已下载文件一律保留。"""
+        task_id = str(item.get("task_id") or "").strip()
         if not task_id:
             return
-        logger.warning(
-            f"Magnet 后处理未完成，保留离线任务及已下载文件：{task_id}，原因：{reason}"
-        )
+        delete_task = getattr(getattr(self, "_offline_tasks", None), "delete_offline_task", None)
+        if callable(delete_task) and not bool(item.get("download_completed_at")):
+            try:
+                delete_task(task_id, delete_source_file=False)
+                logger.info(f"已清理未完成的离线任务：{task_id}")
+            except Exception as error:
+                logger.warning(f"清理未完成的离线任务失败：{task_id}，{error}")
+        logger.warning(f"离线任务未完成，保留已下载文件：{task_id}，原因：{reason}")
 
     @staticmethod
     def _upgrade_backup_name(file_name: str, task_id: str) -> str:
@@ -501,6 +506,38 @@ class PostprocessService(OwnerDelegator):
         except (OSError, ValueError) as error:
             logger.debug(f"洗版清理旧 STRM 失败：{old_dir}/{old_name}，{error}")
 
+    def _prime_upgrade_old_target(self, item: Dict[str, Any]) -> None:
+        """把升级基线里的旧文件信息落到替换字段，离线分支只写 upgrade_baseline。"""
+        if item.get("upgrade_old_file_name") or item.get("upgrade_old_file_id"):
+            return
+        baseline = item.get("upgrade_baseline")
+        if not isinstance(baseline, dict) or not baseline:
+            return
+        episode = item.get("episode")
+        target: Any = None
+        if episode:
+            try:
+                target = baseline.get(str(int(episode)))
+            except (TypeError, ValueError):
+                target = None
+        if not isinstance(target, dict):
+            target = next(
+                (value for value in baseline.values() if isinstance(value, dict)),
+                None,
+            )
+        if not isinstance(target, dict):
+            return
+        old_dir = str(target.get("cloud_dir") or "").strip()
+        old_name = str(target.get("file_name") or "").strip()
+        old_id = str(target.get("file_id") or "").strip()
+        if not (old_dir or old_name or old_id):
+            return
+        item["upgrade_old_cloud_dir"] = old_dir
+        item["upgrade_old_file_name"] = old_name
+        item["upgrade_old_file_id"] = old_id
+        if not int(item.get("upgrade_old_size") or 0):
+            item["upgrade_old_size"] = int(target.get("size") or 0)
+
     def _replace_upgrade_file(
             self,
             item: Dict[str, Any],
@@ -513,6 +550,9 @@ class PostprocessService(OwnerDelegator):
     ) -> Optional[Any]:
         """将新文件移入目标位置；旧文件仅临时避让，等待最终提交删除。"""
         final_dir = str(item.get("cloud_dir") or "/").rstrip("/") or "/"
+        item["_upgrade_source_file_id"] = str(
+            getattr(target_file, "id", "") or ""
+        )
         old_dir = str(item.get("upgrade_old_cloud_dir") or final_dir).rstrip("/") or "/"
         old_name = str(item.get("upgrade_old_file_name") or "").strip()
         old_id = str(item.get("upgrade_old_file_id") or "").strip()
@@ -545,6 +585,9 @@ class PostprocessService(OwnerDelegator):
             item["upgrade_old_backed_up"] = True
             item["upgrade_backup_name"] = backup_name
             item["upgrade_old_file_id"] = str(getattr(old_file, "id", "") or old_id)
+        elif old_file and not item.get("upgrade_old_backed_up"):
+            # 基线旧文件就是本次定位到的文件，无需避让与回收
+            item["upgrade_old_deleted"] = True
 
         if not item.get("moved_at"):
             if target_file.name != file_name:
@@ -603,17 +646,53 @@ class PostprocessService(OwnerDelegator):
         backup_file = backup_index.get(backup_name)
         return str(getattr(backup_file, "id", "") or "") if backup_file else ""
 
+    def _delete_unbacked_upgrade_old_file(
+            self,
+            item: Dict[str, Any],
+            old_dir: str,
+            directory_snapshot,
+    ) -> bool:
+        """旧文件未做避让备份时的兜底回收：按 ID 或名称直接删除。"""
+        old_name = str(item.get("upgrade_old_file_name") or "").strip()
+        old_id = str(item.get("upgrade_old_file_id") or "").strip()
+        if not old_name and not old_id:
+            return True
+        if old_id and old_id == str(item.get("_upgrade_source_file_id") or ""):
+            # 旧文件即刚移入的新文件，无需回收
+            item["upgrade_old_deleted"] = True
+            return True
+        if not old_id:
+            valid, index = directory_snapshot(old_dir)
+            if not valid:
+                logger.debug(f"洗版旧文件目录读取失败，删除待重试：{old_dir}/{old_name}")
+                return False
+            found = index.get(old_name)
+            old_id = str(getattr(found, "id", "") or "")
+            if old_id and old_id == str(item.get("_upgrade_source_file_id") or ""):
+                item["upgrade_old_deleted"] = True
+                return True
+        if old_id and self._cloud_mutations.delete_file(old_id):
+            item["upgrade_old_deleted"] = True
+            logger.debug(f"洗版完成，已删除未避让的旧文件：{old_dir}/{old_name or old_id}")
+            return True
+        logger.debug(f"洗版旧文件删除待重试：{old_dir}/{old_name or old_id}")
+        return False
+
     def _delete_upgrade_old_file(
             self,
             item: Dict[str, Any],
             directory_snapshot,
     ) -> bool:
         """新文件及 STRM 就绪后，提交洗版并删除临时避让的旧文件。"""
-        if item.get("upgrade_old_deleted") or not item.get("upgrade_old_backed_up"):
+        if item.get("upgrade_old_deleted"):
             return True
         old_dir = str(
             item.get("upgrade_old_cloud_dir") or item.get("cloud_dir") or "/"
         ).rstrip("/") or "/"
+        if not item.get("upgrade_old_backed_up"):
+            return self._delete_unbacked_upgrade_old_file(
+                item, old_dir, directory_snapshot
+            )
         backup_name = str(item.get("upgrade_backup_name") or "").strip()
         backup_id = self._upgrade_old_file_id(item, directory_snapshot)
         if backup_id and self._cloud_mutations.delete_file(backup_id):
@@ -955,10 +1034,9 @@ class PostprocessService(OwnerDelegator):
         """批次结束后清理空暂存目录；关闭整理时保留，非空结论短期缓存避免频繁列目录。"""
         if not (getattr(self, "_organize_after_transfer", True) and self._cloud_batch_mutations):
             return
-        pending = {
-            str(item.get("staging_dir") or "").rstrip("/")
-            for item in ctx.pending.values()
-        }
+        pending: set = set()
+        for item in ctx.pending.values():
+            pending.update(self._staging_cleanup_candidates(item, ctx))
         seen: Dict[str, float] = self.__dict__.setdefault("_staging_cleanup_seen", {})
         now = time.time()
         for path in sorted(ctx.staging_dirs_to_clean - pending):
@@ -972,20 +1050,72 @@ class PostprocessService(OwnerDelegator):
 
     def _delete_empty_dir(self, path: str) -> bool:
         """目录确认无任何条目时删除它；其余情况一律保留。"""
+        directories = getattr(self, "_cloud_directories", None)
+        if not directories or not self._cloud_batch_mutations:
+            return False
         try:
-            lookup = self._cloud_batch_mutations.resolve_directory(path)
+            lookup = directories.resolve_directory(path)
             directory_id = getattr(lookup, "directory_id", None)
             if not directory_id:
                 return False
-            listing = self._cloud_batch_mutations.list_directory(str(directory_id))
+            listing = directories.list_directory(str(directory_id))
             if not getattr(listing, "checked", False) or listing.files:
                 return False
-            self._cloud_batch_mutations.delete_files([str(directory_id)])
-            logger.debug(f"已清理空的暂存目录：{path}")
+            deleted = self._cloud_batch_mutations.delete_files([str(directory_id)])
+            if not deleted:
+                logger.warning(f"空暂存目录删除失败（网盘未删除）：{path}")
+                return False
+            logger.info(f"已清理空的暂存目录：{path}")
             return True
         except Exception as error:
-            logger.debug(f"清理暂存目录失败：{path}，{error}")
+            logger.warning(f"清理暂存目录失败：{path}，{error}")
             return False
+
+    def _staging_cleanup_candidates(
+            self, item: Dict[str, Any], ctx: "PostprocessBatchContext"
+    ) -> List[str]:
+        """本项用过、可参与空目录回收的暂存目录（转存根目录与最终目录除外）。"""
+        candidates: List[str] = []
+        root = str(getattr(self, "_cloud_transfer_path", "") or "").rstrip("/")
+        excluded = {"/", root, str(item.get("cloud_dir") or "").rstrip("/")}
+        located = item.get("_located_source_dir")
+        values: List[Any] = [item.get("staging_dir")]
+        if isinstance(located, (list, tuple, set)):
+            values.extend(located)
+        else:
+            values.append(located)
+        # 订阅级暂存目录由上下文推导，避免扫描猜测目录名
+        values.append(self._context_staging_dir(item, ctx))
+        for value in values:
+            path = str(value or "").rstrip("/")
+            if not path or path in excluded or path in candidates:
+                continue
+            candidates.append(path)
+        return candidates
+
+    def _context_staging_dir(self, item: Dict[str, Any], ctx: "PostprocessBatchContext") -> str:
+        """按订阅上下文（订阅 + 媒体 + 季）推导任务使用的暂存子目录。"""
+        try:
+            subscribe_id = int(item.get("subscribe_id") or 0)
+        except (TypeError, ValueError):
+            subscribe_id = 0
+        subscribe = ctx.subscribe_cache.get(subscribe_id) if subscribe_id else None
+        media_data = item.get("mediainfo") or {}
+        deserialize = getattr(self, "_deserialize_mediainfo", None)
+        label_func = getattr(self, "_staging_label", None)
+        if not subscribe or not media_data or not callable(deserialize) or not callable(label_func):
+            return ""
+        try:
+            mediainfo = deserialize(dict(media_data))
+        except Exception:
+            return ""
+        if not mediainfo:
+            return ""
+        transfer_root = str(getattr(self, "_cloud_transfer_path", "") or "").rstrip("/")
+        label = str(label_func(subscribe, mediainfo, item.get("season")) or "").strip()
+        if not transfer_root or not label:
+            return ""
+        return f"{transfer_root}/{label}"
 
     def _settle_pending_item(
             self,
@@ -1008,10 +1138,9 @@ class PostprocessService(OwnerDelegator):
             ctx.failed += 1
         else:
             ctx.completed += 1
-            # 仅登记候选暂存目录，批次结束统一判断，避免逐文件查询云盘
-            staging_dir = str(item.get("staging_dir") or "").rstrip("/")
-            if staging_dir and staging_dir != str(item.get("cloud_dir") or "").rstrip("/"):
-                ctx.staging_dirs_to_clean.add(staging_dir)
+        # 无论成败都登记本项用过的暂存目录，批次结束只回收确认空的目录
+        for candidate in self._staging_cleanup_candidates(item, ctx):
+            ctx.staging_dirs_to_clean.add(candidate)
         task_id = self._postprocess_task_id(item)
         if not task_id or not self._postprocess_task_update:
             return
@@ -1579,6 +1708,7 @@ class PostprocessService(OwnerDelegator):
         if not final_target:
             return None, file_name
         item["moved_at"] = ctx.now
+        item["_located_source_dir"] = final_dir
         ctx.moved_files[pending_key] = final_target
         if getattr(final_target, "name", "") != file_name:
             source_suffix = Path(final_target.name).suffix
@@ -1635,6 +1765,7 @@ class PostprocessService(OwnerDelegator):
             )
             if target_file:
                 ctx.prepared_files[pending_key] = target_file
+                item["_located_source_dir"] = staging_dir
             elif not already_moved:
                 target_file, file_name = self._recover_target_in_final_dir(
                     item, pending_key, ctx, file_name, staging_dir,
@@ -1669,6 +1800,7 @@ class PostprocessService(OwnerDelegator):
         if item.get("upgrade") and str(
                 item.get("upgrade_mode") or self._upgrade_mode
         ) != "coexist":
+            self._prime_upgrade_old_target(item)
             self._update_postprocess_progress(
                 item, pending_key, "organize", "替换旧版本文件"
             )
@@ -2353,6 +2485,12 @@ class PostprocessService(OwnerDelegator):
                     (getattr(source_file, "native", None) or {}).get("_cloud_dir")
                     or item.get("cloud_dir") or "/"
                 ).rstrip("/") or "/"
+                located_sources = item.get("_located_source_dir")
+                if not isinstance(located_sources, list):
+                    located_sources = []
+                    item["_located_source_dir"] = located_sources
+                if source_dir not in located_sources:
+                    located_sources.append(source_dir)
                 moved = self._replace_upgrade_file(
                     replace_item,
                     f"{pending_key}:{baseline_key}",
