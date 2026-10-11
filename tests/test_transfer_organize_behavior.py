@@ -18,9 +18,7 @@ install_app_mocks(
     "cloudsubscribefork.utils.cache", "cloudsubscribefork.search.types",
 )
 
-
-class OwnerDelegator:
-    pass
+from plugin_env import OwnerDelegator
 
 
 ensure_package("cloudsubscribefork.core").OwnerDelegator = OwnerDelegator

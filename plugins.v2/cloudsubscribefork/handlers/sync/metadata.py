@@ -122,6 +122,7 @@ class SyncMetadataService(OwnerDelegator):
                     return dict(entry)
                 self._subscribe_defer_cache.delete(cache_key)
         return None
+
     def get_tv_subscribe_calendar(
             self,
             subscribe: Any,
