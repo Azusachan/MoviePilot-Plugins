@@ -90,12 +90,12 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 logger.warn(f"无法识别媒体信息：{subscribe.name}")
                 return transferred_count
 
+            correct_count = getattr(self, "_correct_bangumi_episode_total", None)
+            if callable(correct_count) and not transient_target:
+                correct_count(subscribe, mediainfo)
             self._set_task_phase(subscribe, "核对播出范围", 20)
             season = normalize_season(subscribe.season)
             cloud_drive_name = self._cloud_drive_name()
-            correct_count = getattr(self, '_correct_bangumi_episode_total', None)
-            if callable(correct_count) and not transient_target:
-                correct_count(subscribe, mediainfo)
             total_ep = subscribe.total_episode or 0
             start_ep = subscribe.start_episode or 1
             if total_ep <= 0 and mediainfo:
@@ -474,12 +474,24 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 break
                             continue
                         share_files = []
+                        val_kwargs = {}
+                        explicit_func = getattr(self, "_explicit_selection_values", None)
+                        if callable(explicit_func):
+                            try:
+                                val = explicit_func(resource)
+                                if isinstance(val, (tuple, list)) and len(val) == 2:
+                                    if val[0] or val[1]:
+                                        val_kwargs["target_file_ids"] = val[0]
+                                        val_kwargs["target_file_names"] = val[1]
+                            except Exception:
+                                pass
                         for current_url in resource_urls:
                             share_files.extend(self._validated_resource_files(
                                 current_url,
                                 resource_title=resource_title,
                                 target_season=(season if self._skip_other_season_dirs else None),
                                 log_prefix=search_prefix,
+                                **val_kwargs,
                             ))
                         if not share_files:
                             continue

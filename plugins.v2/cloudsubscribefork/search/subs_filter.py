@@ -410,7 +410,7 @@ def anime_file_candidates(
     # Some groups abbreviate the release's "X The Animation" to "X" in files.
     aliases += [re.sub(r"\s+The Animation$", "", name, flags=re.I)
                 for name in aliases if re.search(r"\s+The Animation$", name, re.I)]
-    candidates: Dict[int, List[Dict[str, Any]]] = {episode: [] for episode in targets}
+    candidates: Dict[int, List[Dict[str, Any]]] = {int(episode): [] for episode in targets if int(episode) > 0}
     for file in files:
         name = str(file.get("name") or "")
         episodes = release_episodes(name, season)
