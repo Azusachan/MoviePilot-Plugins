@@ -1182,17 +1182,18 @@ class SyncHandler:
         return results
 
     def _resolve_strm_target(self, get_val) -> Tuple[str, str]:
-        """STRM 基址与模板：模板始终取自配置，播放代理只决定是否启用代理入口。"""
-        base_url = get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL)
+        """STRM 基址与模板：模板始终取自配置，代理端口按模板需要自动补全。"""
         template = get_val("strm_url_template", StrmGenerator.DEFAULT_TEMPLATE)
+        try:
+            port = int(get_val("strm_proxy_port", 0) or 0)
+        except (TypeError, ValueError):
+            port = 0
+        base_url = StrmGenerator.resolve_base_url(
+            get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL), template, port
+        )
         if bool(get_val("strm_proxy_enabled", False)):
-            try:
-                port = int(get_val("strm_proxy_port", 0) or 0)
-            except (TypeError, ValueError):
-                port = 0
             route = StrmGenerator.proxy_route_segment(get_val("strm_proxy_route", ""))
-            base_url = StrmGenerator.with_port(base_url, port)
-            entry = f"{base_url}/{route}/<标识>"
+            entry = f"{StrmGenerator.with_port(base_url, port)}/{route}/<标识>"
             logger.info(
                 f"STRM 播放代理已启用：{entry}"
                 f"（监听端口={port or '未配置'}，STRM 模板仍按配置渲染）"

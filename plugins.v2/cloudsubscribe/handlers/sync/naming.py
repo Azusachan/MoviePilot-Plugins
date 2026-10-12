@@ -448,6 +448,27 @@ class SyncNamingService(OwnerDelegator):
         return found_episodes
 
     @staticmethod
+    def _parse_existing_file_episodes(
+            file_name: str, season: int, custom_words=None
+    ) -> Set[int]:
+        """既有文件集号解析：优先插件解析器（保留扩展名），MetaInfo 仅作兜底。"""
+        text = str(file_name or "").strip()
+        if not text:
+            return set()
+        parsed = MediaFileParser.extract_season_episode(text)
+        if parsed:
+            file_season, episode = parsed
+            return {int(episode)} if int(file_season) == int(season or 1) else set()
+        file_meta = MetaInfo(text, custom_words=custom_words)
+        file_season = file_meta.begin_season or season
+        if file_season != season:
+            return set()
+        episodes = list(getattr(file_meta, "episode_list", None) or [])
+        if not episodes and file_meta.begin_episode:
+            episodes = [file_meta.begin_episode]
+        return {int(episode) for episode in episodes}
+
+    @staticmethod
     def _parse_resource_episode_names(
             file_names,
             season: int,
@@ -455,7 +476,7 @@ class SyncNamingService(OwnerDelegator):
             total_episode: Optional[int] = None,
             subscribe: Any = None,
     ) -> Set[int]:
-        """使用元数据解析器从文件名提取目标季集数，支持订阅卡片的自定义词与偏移规则。"""
+        """使用文件名季集解析器提取目标季集数，支持订阅卡片的自定义词与偏移规则。"""
         found_episodes = set()
         custom_words_list = None
         if subscribe and getattr(subscribe, "custom_words", None):
@@ -463,14 +484,8 @@ class SyncNamingService(OwnerDelegator):
             custom_words_list = [w for w in (cw.split("\n") if isinstance(cw, str) else list(cw)) if w.strip()]
 
         for file_name in file_names:
-            file_meta = MetaInfo(Path(str(file_name)).stem, custom_words=custom_words_list)
-            file_season = file_meta.begin_season or season
-            if file_season != season:
-                continue
-            episodes = list(getattr(file_meta, "episode_list", None) or [])
-            if not episodes and file_meta.begin_episode:
-                episodes = [file_meta.begin_episode]
-            for episode in episodes:
+            for episode in SyncNamingService._parse_existing_file_episodes(
+                    str(file_name), season, custom_words_list):
                 if start_episode is not None and episode < start_episode:
                     continue
                 if total_episode and episode > total_episode:

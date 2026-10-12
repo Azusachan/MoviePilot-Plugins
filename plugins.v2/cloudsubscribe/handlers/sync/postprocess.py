@@ -1031,21 +1031,15 @@ class PostprocessService(OwnerDelegator):
         )
 
     def _cleanup_staging_dirs(self, ctx: "PostprocessBatchContext") -> None:
-        """批次结束后清理空暂存目录；关闭整理时保留，非空结论短期缓存避免频繁列目录。"""
+        """批次结束后清理空暂存目录；关闭整理时保留，被待处理项占用时跳过。"""
         if not (getattr(self, "_organize_after_transfer", True) and self._cloud_batch_mutations):
             return
         pending: set = set()
         for item in ctx.pending.values():
             pending.update(self._staging_cleanup_candidates(item, ctx))
-        seen: Dict[str, float] = self.__dict__.setdefault("_staging_cleanup_seen", {})
-        now = time.time()
+        # 逐批次只检查一次：不做跨批次否决缓存，否则同订阅分批结算时目录会被永久跳过
         for path in sorted(ctx.staging_dirs_to_clean - pending):
-            if now - float(seen.get(path) or 0) < 600.0:
-                continue
-            if self._delete_empty_dir(path):
-                seen.pop(path, None)
-            else:
-                seen[path] = now
+            self._delete_empty_dir(path)
         return
 
     def _delete_empty_dir(self, path: str) -> bool:
@@ -1063,12 +1057,15 @@ class PostprocessService(OwnerDelegator):
                 return False
             deleted = self._cloud_batch_mutations.delete_files([str(directory_id)])
             if not deleted:
-                logger.warning(f"空暂存目录删除失败（网盘未删除）：{path}")
+                logger.debug(f"空暂存目录删除失败（网盘未删除）：{path}")
                 return False
-            logger.info(f"已清理空的暂存目录：{path}")
+            if getattr(directories.resolve_directory(path), "directory_id", None):
+                logger.debug(f"空暂存目录删除未生效，下次继续回收：{path}")
+                return False
+            logger.debug(f"已清理空的暂存目录：{path}")
             return True
         except Exception as error:
-            logger.warning(f"清理暂存目录失败：{path}，{error}")
+            logger.debug(f"清理暂存目录失败：{path}，{error}")
             return False
 
     def _staging_cleanup_candidates(
@@ -2285,9 +2282,13 @@ class PostprocessService(OwnerDelegator):
             self._process_due_items(ctx)
             self._run_metadata_requests(ctx)
             self._run_commit_requests(ctx)
-            self._flush_batch_postprocess(ctx)
-            self._flush_settled_status(ctx)
         finally:
+            # 收尾与暂存目录清理必须执行：中途异常也不能漏掉本轮已结算的目录
+            try:
+                self._flush_batch_postprocess(ctx)
+                self._flush_settled_status(ctx)
+            except Exception as error:
+                logger.warning(f"后处理批次收尾失败：{error}")
             result = self._reconcile_pending_state(ctx)
         return result
 

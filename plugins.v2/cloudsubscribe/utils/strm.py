@@ -3,7 +3,7 @@ import re
 from pathlib import Path, PurePosixPath
 from string import Formatter
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 class StrmTemplateError(ValueError):
@@ -47,6 +47,18 @@ class StrmGenerator:
         if port_number <= 0 or urlparse(base).port:
             return base
         return f"{base}:{port_number}"
+
+    @classmethod
+    def resolve_base_url(cls, base_url: Any, template: Any, port: Any = 0) -> str:
+        """按模板决定基址端口：代理短链模板必须带上监听端口，直链模板保持原样。"""
+        if any(
+                f"{{{name}}}" in str(template or "")
+                for name in cls.PROXY_IDENTIFIER_VARIABLES
+        ):
+            return cls.with_port(base_url, port)
+        return (
+                str(base_url or "").strip().rstrip("/") or cls.DEFAULT_BASE_URL
+        )
 
     @classmethod
     def proxy_route_segment(cls, value: Any = "") -> str:
@@ -123,10 +135,15 @@ class StrmGenerator:
 
     @staticmethod
     def _cloud_file_path(cloud_dir: str, file_name: str) -> str:
+        """网盘相对路径转 URL 路径：保留 ``/`` 分隔，其余按 URL 规则编码。"""
         normalized_dir = "/" + str(cloud_dir or "/").replace("\\", "/").strip("/")
         if normalized_dir != "/":
             normalized_dir = normalized_dir.rstrip("/")
-        return f"{normalized_dir.rstrip('/')}/{file_name}" if normalized_dir != "/" else f"/{file_name}"
+        path = (
+            f"{normalized_dir.rstrip('/')}/{file_name}"
+            if normalized_dir != "/" else f"/{file_name}"
+        )
+        return quote(path, safe="/")
 
     @staticmethod
     def _relative_cloud_dir(cloud_dir: str, cloud_root: str) -> PurePosixPath:

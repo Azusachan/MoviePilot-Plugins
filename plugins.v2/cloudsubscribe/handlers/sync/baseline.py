@@ -362,9 +362,8 @@ class UpgradeBaselineService(OwnerDelegator):
                 return baseline
         return {}
 
-    @staticmethod
     def _episode_baseline_from_files(
-            files: Any, season: int, cloud_dir: str
+            self, files: Any, season: int, cloud_dir: str
     ) -> Dict[int, Dict[str, Any]]:
         """按真实文件名解析集号，同集保留更大的文件。"""
         baseline: Dict[int, Dict[str, Any]] = {}
@@ -375,8 +374,7 @@ class UpgradeBaselineService(OwnerDelegator):
             if not MediaFileParser.is_video(name):
                 continue
             size = int(getattr(item, "size", 0) or 0)
-            for episode in UpgradeBaselineService._parse_resource_episode_names(
-                    [name], season):
+            for episode in self._parse_resource_episode_names([name], season):
                 current = baseline.get(int(episode))
                 if current and int(current.get("file_size") or 0) >= size:
                     continue
