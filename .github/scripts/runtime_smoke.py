@@ -219,7 +219,7 @@ with patch('app.plugins.cloudsubscribefork.handlers.sync.postprocess.anime_file_
     try:
         service._finalize_magnet_package(
             dict(subscribe_id=1, season=1, target_episodes=[8], resource=dict(source='mikan')),
-            'fixture', subscribe_cache={1: SimpleNamespace(id=1)}, offline_task={})
+            'fixture', SimpleNamespace(subscribe_cache={1: SimpleNamespace(id=1)}), offline_task={})
         raise AssertionError('Unmatched completed download must remain retryable')
     except RuntimeError as error:
         assert '未匹配' in str(error)
@@ -246,14 +246,16 @@ PanSouSearchService(pansou_owner).search(SearchQuery(
 assert requests_seen[0]['cloud_types'] == ['115', 'ed2k', 'magnet'], requests_seen
 
 # S00 remains distinct in deduplication, queue keys and downstream metadata.
-from app.plugins.cloudsubscribefork.core.media import normalize_season
+from app.plugins.cloudsubscribefork.core.media import normalize_season, subscribe_media_key
 from app.plugins.cloudsubscribefork.core.services.runtime import SyncRuntimeService
 from app.plugins.cloudsubscribefork.core.services.sync import SyncExecutionService
 for value, expected in [(0, 0), ('0', 0), (None, 1), (1, 1), (2, 2)]:
     assert normalize_season(value) == expected
 special = SimpleNamespace(id=3, name='Fixture', type=MediaType.TV.value, tmdbid=42, season=0)
 normal = SimpleNamespace(id=2, name='Fixture', type=MediaType.TV.value, tmdbid=42, season=1)
-assert SyncRuntimeService._sync_media_key(special) != SyncRuntimeService._sync_media_key(normal)
+assert subscribe_media_key(special) != subscribe_media_key(normal)
+# Upstream intentionally serializes all seasons of one show in the same queue.
+assert SyncRuntimeService._sync_series_group_key(special) == SyncRuntimeService._sync_series_group_key(normal)
 assert SyncExecutionService._media_key_from_subscribe(3, special)[-1] == 0
 
 class SpecialsClient:
