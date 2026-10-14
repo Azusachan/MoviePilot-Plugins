@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable
 from app.log import logger
 
 from .files import cloud_file, list_data
-from ..common import safe_int
+from ..common import safe_int, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus
 from ...utils.cache import create_platform_ttl_cache
 
@@ -160,6 +160,7 @@ class QuarkShareService:
 
     def list_share_files(self, share_url: str, **kwargs: Any) -> list:
         try:
+            target_season = kwargs.get("target_season")
             info, token = self._share_access(share_url)
             result = []
             share_items: Dict[str, Dict[str, str]] = {}
@@ -179,12 +180,13 @@ class QuarkShareService:
                         if not item:
                             continue
                         if item.is_directory:
+                            if target_season is not None and should_skip_season_dir(item.name, target_season):
+                                continue
                             sub_parent = (
                                 f"{parent_path}/{item.name}".strip("/")
                                 if parent_path else item.name
                             )
                             stack.append((item.id, sub_parent))
-                        else:
                             share_items[item.id] = {
                                 "token": str(raw.get("share_fid_token") or ""),
                                 "parent_id": str(raw.get("pdir_fid") or parent_id),
@@ -312,9 +314,9 @@ class QuarkShareService:
             self, share_url: str, file_ids: list, save_path: str, **kwargs: Any
     ) -> tuple:
         normalized = [str(value) for value in file_ids]
+        stop_requested = kwargs.get("stop_requested")
         if not normalized:
             return [], []
-        rename_items = kwargs.get("rename_items") or {}
         batch_size = max(1, min(int(kwargs.get("batch_size", 5) or 5), 20))
         interval = max(0.0, min(float(kwargs.get("batch_interval", 3) or 0), 60.0))
         self.client.risk_cooldown = max(
@@ -323,6 +325,9 @@ class QuarkShareService:
         succeeded, failed = [], []
         for offset in range(0, len(normalized), batch_size):
             batch = normalized[offset:offset + batch_size]
+            if stop_requested and stop_requested():
+                logger.debug("收到停止请求，剩余文件未转存")
+                break
             if self._save_share(share_url, batch, save_path):
                 succeeded.extend(batch)
             else:

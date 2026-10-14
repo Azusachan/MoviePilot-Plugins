@@ -6,6 +6,7 @@ from .client import Yun139Client
 from .files import Yun139FileService
 from .share import Yun139ShareService
 from .upload import Yun139UploadService
+from ..common import FileIdPlaybackReference
 from ...core.cloud import CloudDriveCapability, CloudDrivePolicy, CloudDriveProvider
 from ...core.transfer import LocalRapidUploadAdapter
 
@@ -41,6 +42,7 @@ def create_yun139_provider(drive: Yun139Drive) -> CloudDriveProvider:
                 upload, files, frozenset({"sha256"})
             ),
             CloudDriveCapability.FILE_DOWNLOAD: files,
+            CloudDriveCapability.PLAYBACK_REFERENCE: FileIdPlaybackReference(),
         },
         policy=CloudDrivePolicy(
             pagination_mode="cursor",

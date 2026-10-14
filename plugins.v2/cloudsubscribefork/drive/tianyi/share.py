@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from app.log import logger
 
-from ..common import iter_transfer_batches
+from ..common import iter_transfer_batches, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus
 from ...utils.cache import create_platform_ttl_cache
 
@@ -127,6 +127,7 @@ class TianyiShareService:
 
     def list_share_files(self, share_url: str, **kwargs) -> list:
         try:
+            target_season = kwargs.get("target_season")
             info = self._share_info(share_url)
             share_id = str(info.get("shareId") or "")
             cached: dict[str, dict[str, Any]] = {}
@@ -138,6 +139,8 @@ class TianyiShareService:
                 for folder in folder_list:
                     sub_id = str(folder.get("id") or folder.get("fileId") or "")
                     sub_name = str(folder.get("name") or folder.get("fileName") or "").strip()
+                    if target_season is not None and should_skip_season_dir(sub_name, target_season):
+                        continue
                     if sub_id:
                         sub_path = f"{parent_path}/{sub_name}".strip("/") if parent_path else sub_name
                         stack.append((sub_id, sub_path))
@@ -251,14 +254,17 @@ class TianyiShareService:
             self, share_url: str, file_ids: list, save_path: str, **kwargs,
     ) -> tuple:
         normalized = [str(value) for value in file_ids]
+        stop_requested = kwargs.get("stop_requested")
         if not normalized:
             return [], []
-        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 100,
         ):
+            if stop_requested and stop_requested():
+                logger.debug("收到停止请求，剩余文件未转存")
+                break
             if self._save(share_url, batch, save_path):
                 succeeded.extend(batch)
             else:

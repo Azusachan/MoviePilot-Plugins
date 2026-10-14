@@ -284,14 +284,6 @@ class OfflineDownloadService(OwnerDelegator):
         logger.info(f"115 离线任务已重启：{normalized_hash.upper()}")
         return True
 
-    def _offline_task_exists(self, ed2k_hash: str) -> bool:
-        """按 115 离线任务 info_hash 判断 ED2K 是否已提交。"""
-        target_hash = self._normalize_hash(ed2k_hash)
-        return any(
-            self._normalize_hash(task.get("id")) == target_hash
-            for task in self.get_offline_tasks()
-        )
-
     def add_offline_download(self, offline_url: str, save_path: str, target_name: str = None) -> bool:
         """将 ED2K 或 Magnet 资源提交到 115 离线下载。"""
         success_hashes, _ = self.add_offline_downloads_batch(

@@ -22,7 +22,7 @@ class PiankuSourceDefinition(SearchSourceDefinition):
 
     #: 片库资源列表需要过盾与流式渲染，解析节奏由插件内部统一约束，不再暴露给用户。
     DETAIL_LIMIT = 3
-    DETAIL_INTERVAL = 2.0
+    DETAIL_INTERVAL = 1.0
     GATE_TIMEOUT = 45
 
     @classmethod

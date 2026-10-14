@@ -143,7 +143,9 @@
                   <div class="text-body-2 font-weight-medium mb-1">
                     {{ field.label }}
                   </div>
-                  <div v-for="line in field.lines || []" :key="line" class="text-caption mb-1">• {{ line }}</div>
+                  <div v-for="line in resolveFieldValue(field.lines, config, [])" :key="line" class="text-caption mb-1">
+                    • {{ line }}
+                  </div>
                 </v-alert>
                 <div v-else-if="field.type === 'media-library-webhook'" class="media-library-webhook">
                   <v-alert
@@ -256,16 +258,16 @@
                   v-else-if="field.type === 'cron'"
                   v-model="config[field.key]"
                   :label="field.label"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   density="compact" />
                 <v-switch
                   v-else-if="field.type === 'switch'"
                   v-model="config[field.key]"
                   :label="field.label"
-                  :hint="field.hint"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :disabled="Boolean(field.disabled?.(config))"
                   color="primary"
                   density="compact"
@@ -323,8 +325,8 @@
                   v-model:search="selectSearch[field.key]"
                   :label="field.label"
                   :items="filteredSelectItems(field)"
-                  :hint="field.hint"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :disabled="Boolean(field.disabled?.(config))"
                   :no-filter="true"
                   no-data-text="没有匹配的订阅"
@@ -336,8 +338,8 @@
                   v-model="config[field.key]"
                   :label="field.label"
                   :items="field.items"
-                  :hint="field.hint"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :disabled="Boolean(field.disabled?.(config))"
                   density="compact"
                   variant="outlined"
@@ -346,12 +348,13 @@
                   v-else-if="field.type === 'textarea'"
                   v-model="config[field.key]"
                   :label="field.label"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :disabled="Boolean(field.disabled?.(config))"
+                  :class="{ 'config-textarea--mono': Boolean(field.monospace) }"
                   auto-grow
-                  rows="2"
+                  :rows="Number(field.rows) || 2"
                   density="compact"
                   variant="outlined"
                   hide-details="auto" />
@@ -360,8 +363,8 @@
                   v-model="config[field.key]"
                   :label="field.label"
                   :items="field.items || []"
-                  :hint="field.hint"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :loading="Boolean(field.loading)"
                   :multiple="field.multiple !== false"
                   :return-object="Boolean(field.returnObject)"
@@ -375,9 +378,9 @@
                   v-else-if="field.type === 'cloud-directory' || field.type === 'local-directory'"
                   v-model="config[field.key]"
                   :label="field.label"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   density="compact"
                   variant="outlined"
                   hide-details="auto">
@@ -392,14 +395,53 @@
                   </template>
                 </v-text-field>
                 <v-text-field
+                  v-else-if="field.type === 'proxy-port'"
+                  v-model="config[field.key]"
+                  type="number"
+                  :class="proxyPortClass(field)"
+                  :label="field.label"
+                  :hint="proxyPortHint(field)"
+                  persistent-hint
+                  density="compact"
+                  variant="outlined"
+                  hide-details="auto"
+                  @blur="maybeCheckPort(field)">
+                  <template #append-inner>
+                    <v-progress-circular
+                      v-if="proxyPortState(field).loading"
+                      size="16"
+                      indeterminate
+                      color="primary" />
+                    <v-icon
+                      v-else-if="proxyPortState(field).available === false"
+                      icon="mdi-alert-circle-outline"
+                      color="error"
+                      size="18"
+                      :title="proxyPortState(field).error || '端口被占用'" />
+                    <v-icon
+                      v-else-if="proxyPortState(field).available === true"
+                      icon="mdi-check-circle-outline"
+                      color="success"
+                      size="18"
+                      :title="proxyPortState(field).ours ? '端口由本插件监听占用' : '端口可用'" />
+                    <v-btn
+                      icon="mdi-refresh"
+                      variant="text"
+                      color="primary"
+                      size="small"
+                      title="检测端口是否被占用"
+                      @click="emit('check-port', { key: field.key, port: config[field.key] })" />
+                  </template>
+                </v-text-field>
+                <v-text-field
                   v-else-if="field.type === 'proxy'"
                   v-model="config[field.key]"
                   :name="field.key"
                   autocomplete="off"
                   :label="field.label"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   clearable
                   density="compact"
                   variant="outlined"
@@ -422,9 +464,9 @@
                   :name="field.key"
                   autocomplete="off"
                   :label="field.label"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   clearable
                   density="compact"
                   variant="outlined"
@@ -449,10 +491,10 @@
                   :min="field.min"
                   :max="field.max"
                   :suffix="field.suffix"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
                   :clearable="field.clearable"
-                  :persistent-hint="Boolean(field.hint)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   density="compact"
                   variant="outlined"
                   hide-details="auto" />
@@ -463,9 +505,9 @@
                   :type="field.type || 'text'"
                   :name="field.key"
                   :autocomplete="field.type === 'password' ? 'new-password' : field.autocomplete || 'off'"
-                  :hint="field.hint"
-                  :placeholder="field.placeholder"
-                  :persistent-hint="Boolean(field.hint)"
+                  :hint="resolveFieldValue(field.hint, config)"
+                  :placeholder="resolveFieldValue(field.placeholder, config)"
+                  :persistent-hint="Boolean(resolveFieldValue(field.hint, config))"
                   :disabled="Boolean(field.disabled?.(config))"
                   density="compact"
                   variant="outlined"
@@ -534,7 +576,39 @@ const props = defineProps({
   testingProxy: { type: Boolean, default: false },
   testingAutoSubscribeProxy: {type: Boolean, default: false},
   hdhiveOauthAction: { type: String, default: "" },
+  proxyPortStatus: {type: Object, default: () => ({})},
 })
+
+function proxyPortState(field) {
+  const key = String(field?.key || "");
+  return props.proxyPortStatus?.[key] || {};
+}
+
+function proxyPortHint(field) {
+  const base = String(resolveFieldValue(field.hint, props.config) || "");
+  const state = proxyPortState(field);
+  const suffix = base ? `　${base}` : "";
+  if (state.loading) return `检测中…${suffix}`;
+  if (state.available === false) return `端口被占用${suffix}`;
+  if (state.available === true) {
+    return `${state.ours ? "本插件监听中" : "端口可用"}${suffix}`;
+  }
+  return base;
+}
+
+function maybeCheckPort(field) {
+  const condition = field?.autoCheckWhen;
+  if (condition !== undefined && !evalShowCondition(condition, props.config)) return;
+  emit("check-port", {key: field.key, port: props.config[field.key]});
+}
+
+function proxyPortClass(field) {
+  const state = proxyPortState(field);
+  if (state.loading) return "";
+  if (state.available === false) return "proxy-port--error";
+  if (state.available === true) return "proxy-port--ok";
+  return "";
+}
 
 function getAccountInfo(field) {
   if (field.data && typeof field.data === "object" && Object.keys(field.data).length > 0) {
@@ -562,6 +636,7 @@ const emit = defineEmits([
   "test-auto-subscribe",
   "test-proxy",
   "test-auto-subscribe-proxy",
+  "check-port",
   "refresh-account",
   "hdhive-oauth-start",
   "hdhive-oauth-exchange",
@@ -808,6 +883,17 @@ function filteredSelectItems(field) {
   )
 }
 
+function resolveFieldValue(value, config, fallback = "") {
+  if (typeof value === "function") {
+    try {
+      return value(config);
+    } catch {
+      return fallback;
+    }
+  }
+  return value === undefined || value === null ? fallback : value;
+}
+
 function evalShowCondition(condition, config) {
   if (condition === undefined || condition === null || condition === "") return true;
   if (typeof condition === "function") {
@@ -846,6 +932,22 @@ function mediaLibraryWebhookUrl(field, serverName) {
 </script>
 
 <style scoped>
+.proxy-port--error :deep(.v-input__details .v-messages__message) {
+  color: rgb(var(--v-theme-error));
+  font-weight: 500;
+}
+
+.proxy-port--ok :deep(.v-input__details .v-messages__message) {
+  color: rgb(var(--v-theme-success));
+  font-weight: 500;
+}
+
+.config-textarea--mono :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
 .config-tab-content {
   width: 100%;
   max-width: 100%;
@@ -1243,13 +1345,13 @@ function mediaLibraryWebhookUrl(field, serverName) {
   margin-bottom: 8px;
 }
 
-/* 统一所有输入框规范：严格保证宽高、圆角、内边距绝对一致 */
-.config-field-col :deep(.v-input) {
+/* 统一单行输入框规范：严格保证宽高、圆角、内边距绝对一致（文本域除外，否则多行内容会被压扁） */
+.config-field-col :deep(.v-input:not(.v-textarea)) {
   width: 100%;
   min-width: 0;
 }
 
-.config-field-col :deep(.v-field) {
+.config-field-col :deep(.v-input:not(.v-textarea)) > .v-field {
   width: 100%;
   min-width: 0;
   height: 40px !important;
@@ -1257,7 +1359,7 @@ function mediaLibraryWebhookUrl(field, serverName) {
   border-radius: 8px !important;
 }
 
-.config-field-col :deep(.v-field__input) {
+.config-field-col :deep(.v-input:not(.v-textarea)) > .v-field > .v-field__input {
   height: 40px !important;
   min-height: 40px !important;
   padding-top: 0 !important;
@@ -1266,12 +1368,34 @@ function mediaLibraryWebhookUrl(field, serverName) {
   align-items: center;
 }
 
-.config-field-col :deep(.v-field__append-inner),
-.config-field-col :deep(.v-field__prepend-inner),
-.config-field-col :deep(.v-field__clearable) {
+.config-field-col :deep(.v-input:not(.v-textarea)) > .v-field > .v-field__append-inner,
+.config-field-col :deep(.v-input:not(.v-textarea)) > .v-field > .v-field__prepend-inner,
+.config-field-col :deep(.v-input:not(.v-textarea)) > .v-field > .v-field__clearable {
   padding-top: 0 !important;
   display: flex;
   align-items: center;
+}
+
+/* 文本域：保留多行排版，标签正常浮动，内容从顶部开始 */
+.config-field-col :deep(.v-textarea) {
+  width: 100%;
+  min-width: 0;
+}
+
+.config-field-col :deep(.v-textarea > .v-field) {
+  border-radius: 8px !important;
+  min-height: 0;
+}
+
+.config-field-col :deep(.v-textarea > .v-field > .v-field__input) {
+  align-items: flex-start;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+  line-height: 1.5;
+}
+
+.config-field-col :deep(.v-textarea textarea) {
+  min-height: 100%;
 }
 
 .config-field-col :deep(.v-input__details) {

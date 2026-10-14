@@ -4,7 +4,8 @@ from ...core.media import normalize_season
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from app.db import SessionFactory
@@ -17,10 +18,13 @@ from ...core.media import (
     media_identity,
     tmdb_id_of,
 )
+from ...utils import MediaFileParser
 from ...utils.cache import normalize_platform_cache_key
 
 
 class UpgradeBaselineService(OwnerDelegator):
+    """现有媒体版本基线；媒体库不可用时按历史或网盘真实文件兜底。"""
+
     @staticmethod
     def _copy_episode_items(
             value: Dict[int, List[Dict[str, Any]]]
@@ -149,7 +153,16 @@ class UpgradeBaselineService(OwnerDelegator):
         tmdbid = self._int_or_zero(tmdb_id_of(subscribe))
         title = str(getattr(subscribe, "name", "") or "")
         episode_files: Dict[int, List[Dict[str, Any]]] = {}
+        current_drive_name = str(getattr(getattr(self, "_cloud_drive", None), "name", "") or "").strip().lower()
+        current_drive_key = str(getattr(getattr(self, "_cloud_drive", None), "key", "") or "").strip().lower()
         for record in (self._get_data("history") or []) if self._get_data else []:
+            rec_drive_name = str(
+                record.get("cloud_drive_name") or record.get("target_drive_name") or "").strip().lower()
+            rec_drive_key = str(record.get("target_drive_key") or record.get("cloud_drive_key") or "").strip().lower()
+            if rec_drive_key and current_drive_key and rec_drive_key != current_drive_key:
+                continue
+            if rec_drive_name and current_drive_name and rec_drive_name != current_drive_name:
+                continue
             record_tmdbid = self._int_or_zero(record.get("tmdb_id"))
             if tmdbid and record_tmdbid != tmdbid:
                 continue
@@ -296,4 +309,84 @@ class UpgradeBaselineService(OwnerDelegator):
                     "score": score_number,
                     "rule_score": score_number,
                 })
+        return baseline
+
+    def _manual_episode_baseline(
+            self,
+            row: Any,
+            tmdb_id: int,
+            media_type: Any,
+            season: int,
+            relative: str,
+    ) -> Dict[int, Dict[str, Any]]:
+        """媒体库读不到剧集时的兜底基线：统一基线（历史）→ 网盘真实文件。"""
+        mediainfo = MediaInfo()
+        mediainfo.type = media_type
+        mediainfo.title = str(getattr(row, "title", "") or "")
+        mediainfo.year = str(getattr(row, "year", "") or "") or None
+        mediainfo.tmdb_id = tmdb_id
+        baseline = self._build_episode_baseline(
+            self._manual_baseline_subscribe(row, tmdb_id, media_type, season),
+            mediainfo,
+            season,
+        )
+        if baseline:
+            return baseline
+        return self._cloud_episode_baseline(row, season, relative)
+
+    @staticmethod
+    def _manual_baseline_subscribe(row: Any, tmdb_id: int, media_type: Any, season: int) -> Any:
+        """媒体库条目对应的订阅占位对象，供统一基线复用订阅字段。"""
+        return SimpleNamespace(
+            id=0,
+            name=str(getattr(row, "title", "") or ""),
+            year=getattr(row, "year", None),
+            tmdbid=tmdb_id,
+            type=media_type,
+            season=season,
+            episode_priority=None,
+        )
+
+    def _cloud_episode_baseline(
+            self, row: Any, season: int, relative: str
+    ) -> Dict[int, Dict[str, Any]]:
+        """历史也没有时，直接读取目标网盘目录的真实文件建立基线。"""
+        if not self._cloud_directories:
+            return {}
+        cloud_root = str(getattr(self, "_CLOUD_MEDIA_ROOT", "/") or "").rstrip("/")
+        base = PurePosixPath(f"{cloud_root}/{str(relative or '').strip('/')}")
+        for path in (str(base / f"Season {season:02d}"), str(base)):
+            valid, files = self._resolve_and_list(self._cloud_directories, path)
+            if not valid:
+                continue
+            baseline = self._episode_baseline_from_files(files, season, path)
+            if baseline:
+                return baseline
+        return {}
+
+    @staticmethod
+    def _episode_baseline_from_files(
+            files: Any, season: int, cloud_dir: str
+    ) -> Dict[int, Dict[str, Any]]:
+        """按真实文件名解析集号，同集保留更大的文件。"""
+        baseline: Dict[int, Dict[str, Any]] = {}
+        for item in files or []:
+            if getattr(item, "is_directory", False):
+                continue
+            name = str(getattr(item, "name", "") or "")
+            if not MediaFileParser.is_video(name):
+                continue
+            size = int(getattr(item, "size", 0) or 0)
+            for episode in UpgradeBaselineService._parse_resource_episode_names(
+                    [name], season):
+                current = baseline.get(int(episode))
+                if current and int(current.get("file_size") or 0) >= size:
+                    continue
+                baseline[int(episode)] = {
+                    "file_name": name,
+                    "file_size": size,
+                    "source": "网盘文件",
+                    "cloud_dir": cloud_dir,
+                    "cloud_file_id": str(getattr(item, "id", "") or ""),
+                }
         return baseline

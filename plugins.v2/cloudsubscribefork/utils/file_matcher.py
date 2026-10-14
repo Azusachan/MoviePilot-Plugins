@@ -267,6 +267,7 @@ class FileMatcher:
                     loosest_matches[episode].append(item)
 
         results = {}
+        unmatched: List[int] = []
         for episode in episode_list:
             results[episode] = (
                     strict_matches[episode]
@@ -274,7 +275,12 @@ class FileMatcher:
                     or loosest_matches[episode]
             )
             if not results[episode] and total_files:
-                logger.debug(f"S{season:02d}E{episode:02d} 未匹配到实际媒体文件")
+                unmatched.append(episode)
+        if unmatched:
+            preview = "、".join(f"E{value:02d}" for value in unmatched[:12])
+            if len(unmatched) > 12:
+                preview += f" 等 {len(unmatched)} 集"
+            logger.debug(f"S{season:02d} 未匹配到实际媒体文件：{preview}")
         return results
 
     @staticmethod

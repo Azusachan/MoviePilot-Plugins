@@ -28,9 +28,12 @@ class UpgradeRuleScoringService(OwnerDelegator):
             old_size: int = 0,
             new_size: int = 0,
             has_existing: bool = True,
+            suppress_when_unparsed: bool = False,
     ) -> tuple[bool, str]:
-        """按评分和洗版模式判断候选是否应进入原有转存流程。"""
+        """按评分与洗版模式判断候选可否转存；suppress_when_unparsed 时对无版本集保守跳过。"""
         if not has_existing:
+            if suppress_when_unparsed:
+                return False, "目标季存在无法解析集号的既有文件，保守跳过转存"
             return True, "无现有版本"
         old_score = int(old_score or 0)
         new_score = int(new_score or 0)
@@ -55,9 +58,6 @@ class UpgradeRuleScoringService(OwnerDelegator):
                 )
             return False, "同评分且候选文件未更小"
         return False, "同评分不执行替换"
-
-    def _upgrade_replaces_existing(self) -> bool:
-        return self._upgrade_mode != "coexist"
 
     @staticmethod
     def _coexist_target_name(

@@ -17,7 +17,7 @@ from Crypto.Cipher import AES
 from app.log import logger
 
 from .client import Yun139ApiError
-from ..common import safe_int
+from ..common import safe_int, should_skip_season_dir
 from ...core.cloud import CloudFile, ShareLinkStatus
 from ...core.transfer import HttpFileDownloadService
 
@@ -288,6 +288,7 @@ class Yun139ShareService:
     def list_share_files(self, share_url: str, **kwargs: Any) -> list:
         """递归遍历分享中的全部文件，供候选识别与转存使用。"""
         try:
+            target_season = kwargs.get("target_season")
             link_id, password = self._require_share(share_url)
             result: list = []
             stack = [(ROOT_NODE_ID, "")]
@@ -298,6 +299,8 @@ class Yun139ShareService:
                     node = self._share_node(link_id, password, entry, True)
                     if node:
                         dir_name = str(node.name or "").strip()
+                        if target_season is not None and should_skip_season_dir(dir_name, target_season):
+                            continue
                         sub_path = f"{parent_path}/{dir_name}".strip("/") if parent_path else dir_name
                         stack.append((str(node.native.get("node_id") or ""), sub_path))
                 for entry in files:

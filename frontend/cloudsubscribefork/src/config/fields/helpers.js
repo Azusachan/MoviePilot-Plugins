@@ -39,3 +39,56 @@ export function createSourceItems(options) {
     icon: item.icon,
   }));
 }
+
+const STRM_SAMPLE_VALUES = {
+  file_name: "示例剧集.S01E01.mkv",
+  file_path: "/电视剧/示例剧集 (2026)/Season 01/示例剧集.S01E01.mkv",
+};
+
+/** 当前目标网盘的可用 STRM 模板变量提示（由后端下发）。 */
+export function strmVariableHint(options) {
+  const variables = Array.isArray(options?.strmVariables) ? options.strmVariables : [];
+  return variables.length
+    ? `可用变量：${variables.map((name) => `{${name}}`).join("、")}`
+    : "支持 {base_url}、{file_path} 及各网盘 ID 变量";
+}
+
+/** 按当前表单状态实时渲染 STRM 示例（模板始终取自配置，代理只影响入口地址）。 */
+export function renderStrmSample(config) {
+  const baseUrl = String(config?.strm_base_url || "").replace(/\/+$/, "");
+  const values = {...STRM_SAMPLE_VALUES, base_url: baseUrl};
+  const template = String(config?.strm_url_template || "");
+  if (!template) return "";
+  return template.replace(/\{(\w+)\}/g, (match, name) =>
+    values[name] ? values[name] : `<${name}>`);
+}
+
+/** 代理模式下模板未指向代理入口时，给出建议模板（不改写用户配置）。 */
+export function strmProxySuggestion(config, options) {
+  if (!config?.strm_proxy_enabled) return "";
+  const template = String(config?.strm_url_template || "");
+  const identifier = String(options?.strmIdentifierVariable || "");
+  const route = String(config?.strm_proxy_route || options?.strmProxyRoute || "d").replace(/^\/+|\/+$/g, "") || "d";
+  const shortRoute = `/${route}/{${identifier}}`;
+  const suggested = identifier ? `{base_url}${shortRoute}?/{file_name}` : "";
+  if (!identifier) {
+    return "当前网盘不支持短链代理（需要可直取链的播放标识变量）";
+  }
+  if (options?.strmProxyPortMissing) {
+    return "未填写监听端口，代理短链不可用（0=关闭独立监听）";
+  }
+  if (template.includes(shortRoute)) return "";
+  return `当前模板未指向代理，建议填写：${suggested}`;
+}
+
+/** 代理监听状态文案：未启用/端口 0/被占用/运行中。 */
+export function strmProxyStatusLine(config, options) {
+  if (!config?.strm_proxy_enabled) return "";
+  const port = Number(config?.strm_proxy_port || 0);
+  if (port <= 0) return "监听已关闭（端口 0）：短链不可用";
+  const server = options?.strmProxyServer || {};
+  if (server.running && Number(server.port) === port) {
+    return `监听运行中：端口 ${port}`;
+  }
+  return `⚠ 监听未启动：${server.error || `端口 ${port} 被占用`}（配置可保存，代理不生效）`;
+}

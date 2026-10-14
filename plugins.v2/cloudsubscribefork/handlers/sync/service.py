@@ -16,7 +16,6 @@ from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping, Ite
 
 from app.core.config import global_vars
 from app.core.context import MediaInfo
-from app.core.metainfo import MetaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 
@@ -29,8 +28,6 @@ except Exception:
         DirectoryHelper = None
 
 from app.log import logger
-from app.modules.filemanager import FileManagerModule
-from app.modules.filemanager.transhandler import TransHandler
 from app.schemas.types import MediaType, NotificationType
 
 try:
@@ -421,8 +418,7 @@ class SyncHandler:
                 self._strm_generate_enabled = False
             else:
                 try:
-                    s_base_url = _get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL)
-                    s_template = _get_val("strm_url_template", StrmGenerator.DEFAULT_TEMPLATE)
+                    s_base_url, s_template = self._resolve_strm_target(_get_val)
                     self._strm_generator = StrmGenerator(
                         s_base_url,
                         s_template,
@@ -538,6 +534,20 @@ class SyncHandler:
         return str(getattr(subscribe, "id", "") or "") in selected_ids
 
     @staticmethod
+    def media_budget_identity(
+            media_id: Any,
+            name: str = "",
+            *,
+            is_movie: bool = False,
+            season: Optional[int] = None,
+    ) -> str:
+        """统一的媒体身份键：``tmdb_{id}_movie`` / ``tmdb_{id}_S{n}``（无 tmdb 用名称）。"""
+        identity = f"tmdb_{media_id}" if media_id else str(name or "").strip()
+        if is_movie:
+            return f"{identity}_movie"
+        return f"{identity}_S{normalize_season(season)}"
+
+    @staticmethod
     def subscription_budget_key(
             subscribe: Any, media_type: Optional[MediaType] = None
     ) -> str:
@@ -546,16 +556,12 @@ class SyncHandler:
             MediaType.MOVIE.value: MediaType.MOVIE,
             MediaType.TV.value: MediaType.TV,
         }.get(str(getattr(subscribe, "type", "") or ""))
-        tmdb_id = str(tmdb_id_of(subscribe) or "")
-        identity = (
-            f"tmdb_{tmdb_id}"
-            if tmdb_id
-            else str(getattr(subscribe, "name", "") or "").strip()
+        return SyncHandler.media_budget_identity(
+            tmdb_id_of(subscribe),
+            str(getattr(subscribe, "name", "") or ""),
+            is_movie=resolved_type == MediaType.MOVIE,
+            season=getattr(subscribe, "season", 1),
         )
-        if resolved_type == MediaType.MOVIE:
-            return f"{identity}_movie"
-        season = normalize_season(getattr(subscribe, "season", 1))
-        return f"{identity}_S{season}"
 
     def _optional_cloud_service(self, capability: CloudDriveCapability):
         if not self._cloud_drive or not self._cloud_drive.supports(capability):
@@ -804,8 +810,9 @@ class SyncHandler:
             item_url = str(file_item.get("url") or share_url).strip()
             rename_items[str(file_item["id"])] = {
                 "sha1": file_item.get("sha1"),
+                # 转存阶段不重命名：仅离线下载需要目标名，命名交给整理/后处理阶段
                 "target_name": (
-                    None if (not organize_enabled or self._is_offline_url(item_url)) else item["target_name"]
+                    item["target_name"] if self._is_offline_url(item_url) else None
                 ),
                 "url": item_url,
             }
@@ -949,11 +956,18 @@ class SyncHandler:
                         logger.warning(f"整包分享转存未成功，将尝试按文件列表转存：{share_err}")
 
                 if not share_transferred:
-                    # 确定每个文件转存的目标路径：关闭整理时按母文件夹保留层级，开启整理时使用统一转存根目录
+                    # 转存暂存目录
+                    staging_label = self._staging_label(subscribe, mediainfo, season)
+                    named_staging_dir = (
+                        f"{self._cloud_transfer_path.rstrip('/')}/{staging_label}"
+                        if staging_label else self._cloud_transfer_path
+                    )
+
+                    # 确定每个文件转存的目标路径：关闭整理时按母文件夹保留层级，开启整理时使用命名暂存目录
                     def _item_target_dir(file_dict: Dict[str, Any]) -> str:
                         if not organize_enabled:
                             return self._resource_staging_dir(str(file_dict.get("url") or share_url), file_dict)
-                        return self._cloud_transfer_path
+                        return named_staging_dir
 
                     # 本地快照缓存，避免多集同目录时重复列目录
                     staging_snapshots: Dict[str, Tuple[bool, Dict[str, Any]]] = {}
@@ -1024,6 +1038,7 @@ class SyncHandler:
                                 batch_interval=self._batch_interval,
                                 risk_cooldown=self._transfer_risk_cooldown,
                                 rename_items=rename_items,
+                                stop_requested=self._stop_requested,
                             )
                             success_ids_set.update(grp_success or [])
                             failed_ids_list.extend(grp_failed or [])
@@ -1097,8 +1112,12 @@ class SyncHandler:
                     "share_url": str(item["file"].get("url") or share_url),
                     "cloud_dir": item["target_dir"],
                     "file_name": item["target_name"],
-                    "staging_dir": self._resource_staging_dir(
-                        str(item["file"].get("url") or share_url), item["file"]
+                    "staging_dir": (
+                        named_staging_dir
+                        if organize_enabled
+                        else self._resource_staging_dir(
+                            str(item["file"].get("url") or share_url), item["file"]
+                        )
                     ),
                     "staging_name": (
                             item["file"].get("staging_name")
@@ -1164,6 +1183,24 @@ class SyncHandler:
             })
         return results
 
+    def _resolve_strm_target(self, get_val) -> Tuple[str, str]:
+        """STRM 基址与模板：模板始终取自配置，播放代理只决定是否启用代理入口。"""
+        base_url = get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL)
+        template = get_val("strm_url_template", StrmGenerator.DEFAULT_TEMPLATE)
+        if bool(get_val("strm_proxy_enabled", False)):
+            try:
+                port = int(get_val("strm_proxy_port", 0) or 0)
+            except (TypeError, ValueError):
+                port = 0
+            route = StrmGenerator.proxy_route_segment(get_val("strm_proxy_route", ""))
+            base_url = StrmGenerator.with_port(base_url, port)
+            entry = f"{base_url}/{route}/<标识>"
+            logger.info(
+                f"STRM 播放代理已启用：{entry}"
+                f"（监听端口={port or '未配置'}，STRM 模板仍按配置渲染）"
+            )
+        return base_url, template
+
     def _generate_strm(
             self,
             cloud_dir: str,
@@ -1215,6 +1252,7 @@ class SyncHandler:
             mediainfo: MediaInfo,
             season: Optional[int] = None,
             episode: Optional[int] = None,
+            progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> Optional[Path]:
         """在最终分类路径补齐元数据；失败不影响网盘文件处理。"""
         if not self._metadata_scraper or not self._local_resource_path:
@@ -1240,7 +1278,9 @@ class SyncHandler:
                 f"NFO={'是' if self._nfo_scrape_enabled else '否'}，"
                 f"图片={'是' if self._image_scrape_enabled else '否'}"
             )
-            created = self._metadata_scraper.scrape_batch(scrape_items, mediainfo)
+            created = self._metadata_scraper.scrape_batch(
+                scrape_items, mediainfo, progress
+            )
             if created:
                 logger.info(f"元数据刮削完成：{media_path.parent}，新增 {created} 个文件")
             else:
@@ -1258,10 +1298,11 @@ class SyncHandler:
             items: List[Dict[str, Any]],
             mediainfo: MediaInfo,
             season: Optional[int] = None,
-    ) -> None:
+            progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
         """按一次转存批次刮削，避免重复请求剧根与季元数据。"""
         if not self._metadata_scraper or not self._local_resource_path or not items:
-            return
+            return 0
         scrape_items = []
         try:
             for item in items:
@@ -1289,27 +1330,31 @@ class SyncHandler:
                     f"跳过批量元数据刮削：{mediainfo.title_year}，"
                     "NFO 和图片均已存在"
                 )
-                return
-            logger.debug(
+                return 0
+            logger.info(
                 f"开始批量元数据刮削：{mediainfo.title_year}，"
                 f"{len(scrape_items)} 个媒体文件，"
                 f"NFO={'是' if self._nfo_scrape_enabled else '否'}，"
                 f"图片={'是' if self._image_scrape_enabled else '否'}"
             )
-            created = self._metadata_scraper.scrape_batch(scrape_items, mediainfo)
+            created = self._metadata_scraper.scrape_batch(
+                scrape_items, mediainfo, progress
+            )
             if created:
-                logger.debug(
+                logger.info(
                     f"批量元数据刮削完成：{mediainfo.title_year}，"
                     f"{len(scrape_items)} 个媒体文件，新增 {created} 个文件"
                 )
             else:
-                logger.debug(
+                logger.info(
                     f"批量元数据刮削完成但无新增文件：{mediainfo.title_year}，"
                     f"{len(scrape_items)} 个媒体文件，"
                     "目标文件可能已存在或 TMDB 未返回内容"
                 )
+            return created
         except Exception as error:
             logger.warning(f"批量元数据刮削失败：{error}")
+            return 0
 
     @staticmethod
     def _normalize_offline_key(key_or_url: str) -> str:
@@ -1768,8 +1813,15 @@ class SyncHandler:
                 "created_at": now,
                 "next_check_at": now + self._OFFLINE_CHECK_DELAYS[0],
                 "check_index": 0,
-                # 记录落库前不得进入后处理：由 append_history_records 置为 True 后才会被调度
-                "history_ready": bool((pending.get(pending_key) or {}).get("history_ready")),
+                # 无待落库历史（跳过历史或无占位文件）时直接放行，避免等 30 分钟兜底宽限
+                "skip_history": bool(resource.get("skip_history")),
+                "history_ready": bool(
+                    resource.get("skip_history")
+                    or not self._magnet_history_entries(
+                        resource, season, target_episodes
+                    )
+                    or (pending.get(pending_key) or {}).get("history_ready")
+                ),
                 "mediainfo": self._serialize_mediainfo(mediainfo),
                 "subscribe_id": subscribe_id,
                 "season": season,
@@ -2360,6 +2412,20 @@ class SyncHandler:
         self._notify_offline_pending_changed(pending_count)
         return result
 
+    @staticmethod
+    def _staging_label(subscribe: Any, mediainfo: Any, season: Any) -> str:
+        """暂存目录名"""
+        title = str(
+            getattr(subscribe, "name", "") or getattr(mediainfo, "title", "") or ""
+        ).strip()
+        if not title:
+            return ""
+        year = str(
+            getattr(mediainfo, "year", "") or getattr(subscribe, "year", "") or ""
+        ).strip()
+        prefix = title if not year or year in title else f"{title} ({year})"
+        return f"{prefix} S{int(season):02d}" if season else prefix
+
     def _generate_or_queue_strm_batch(
             self,
             items: List[Dict[str, Any]],
@@ -2372,11 +2438,18 @@ class SyncHandler:
     ) -> Dict[str, Tuple[Optional[Path], str]]:
         """复用批量重命名缓存生成 STRM，避免逐文件查询115。"""
         results: Dict[str, Tuple[Optional[Path], str]] = {}
+        items = list(items or [])
         generated = 0
         queued_items: List[Dict[str, Any]] = []
         ready_items: List[Dict[str, Any]] = []
         organize_enabled = getattr(self, "_organize_after_transfer", True)
-        for item in items:
+        strm_task_ids = self._batch_task_ids(items)
+        strm_report = (
+            self._batch_stage_reporter(strm_task_ids, "strm") if strm_task_ids else None
+        )
+        for index, item in enumerate(items, start=1):
+            if strm_report:
+                strm_report(index - 1, len(items))
             result_key = str(item["result_key"])
             staging_dir = str(item.get("staging_dir") or "").rstrip("/")
             cloud_dir = str(item.get("cloud_dir") or "").rstrip("/")
@@ -2416,9 +2489,15 @@ class SyncHandler:
             result_key = str(item["result_key"])
             results[result_key] = (None, pending_keys.get(result_key, ""))
         if items:
+            if strm_report:
+                strm_report(len(items), len(items))
+            generated_names = [
+                str(Path(path).name) for path, _ in results.values() if path
+            ]
             logger.debug(
                 f"批量文件终态检查完成：即时生成 STRM {generated} 个，"
-                f"待移动或文件就绪 {len(pending_keys)} 个"
+                f"待移动或文件就绪 {len(pending_keys)} 个，"
+                f"已生成：{generated_names}"
             )
         return results
 
@@ -2492,10 +2571,17 @@ class SyncHandler:
                         f"订阅ID={subscribe_id}"
                     )
             if not subscribe:
-                logger.warning(
-                    f"后处理完成时未找到对应订阅：订阅ID={subscribe_id or '无'}，"
-                    f"TMDB={mediainfo.tmdb_id}，季={item.get('season') or '-'}"
-                )
+                if subscribe_id <= 0:
+                    # 手动/临时转存无订阅绑定，属预期路径，不告警
+                    logger.debug(
+                        "手动转存完成，无订阅可更新进度："
+                        f"TMDB={mediainfo.tmdb_id}，季={item.get('season') or '-'}"
+                    )
+                else:
+                    logger.warning(
+                        f"后处理完成时未找到对应订阅：订阅ID={subscribe_id}，"
+                        f"TMDB={mediainfo.tmdb_id}，季={item.get('season') or '-'}"
+                    )
                 return
             self._subscribe_handler.check_and_finish_subscribe(
                 subscribe=subscribe,
@@ -2530,6 +2616,11 @@ class SyncHandler:
                     f"{completion_source}完成，订阅进度 "
                     f"{completed_count}/{expected_count or '-'}",
                     progress,
+                    _postprocess_expected_total=max(
+                        expected_count,
+                        completed_count
+                        + int(getattr(remaining_subscribe, "lack_episode", 0) or 0),
+                    ),
                 )
                 logger.debug(
                     f"{completion_source}完成后订阅进度已更新："

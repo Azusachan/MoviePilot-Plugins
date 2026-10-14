@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import time
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import PurePosixPath
 from random import uniform
 from threading import Lock, RLock
-from typing import Any, Callable, ClassVar, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterator, List, Mapping, Optional, Sequence
 
 try:
     import requests
@@ -533,3 +533,52 @@ class CloudDriveFileServiceBase:
                 failures.append(f"{file_id}，{error}")
         self._log_batch_failures("删除", failures)
         return deleted
+
+
+def should_skip_season_dir(dir_name: str, target_season: Any) -> bool:
+    """判断分享目录是否为应跳过的非目标季目录；无法识别季数时一律不跳过。"""
+    if target_season is None:
+        return False
+    import re
+    patterns = [
+        r'[Ss]eason\s*(\d+)',
+        r'[Ss](\d+)',
+        r'第(\d+)季',
+        r'第([一二三四五六七八九十]+)季',
+    ]
+    cn_num_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+                  '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+    for pattern in patterns:
+        match = re.search(pattern, str(dir_name or ""))
+        if match:
+            season_str = match.group(1)
+            if season_str in cn_num_map:
+                found_season = cn_num_map[season_str]
+            else:
+                try:
+                    found_season = int(season_str)
+                except ValueError:
+                    continue
+
+            if isinstance(target_season, (set, list, tuple)):
+                target_set = {int(s) for s in target_season if str(s).isdigit()}
+                return found_season not in target_set
+            else:
+                return found_season != int(target_season)
+    return False
+
+
+@dataclass(frozen=True)
+class FileIdPlaybackReference:
+    """以文件 ID 直接取链的网盘播放引用（阿里云盘/天翼云盘/移动云盘等）。"""
+
+    proxy_identifier: str = "file_id"
+
+    @property
+    def template_variables(self) -> FrozenSet[str]:
+        return frozenset({"file_id"})
+
+    def reference_values(self, file_item: CloudFile) -> Dict[str, str]:
+        values = dict(file_item.playback_values or {})
+        values.setdefault("file_id", str(file_item.id or ""))
+        return values

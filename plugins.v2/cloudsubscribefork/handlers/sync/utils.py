@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import unquote
 
@@ -15,6 +17,23 @@ def extract_ed2k_filename(url: str) -> str:
     if len(parts) > 2 and parts[2]:
         return unquote(parts[2]).strip()
     return ""
+
+
+# 洗版旧文件备份命名：<原名>-<10 位任务短ID><后缀>
+_UPGRADE_BACKUP_RE = re.compile(r"-[A-Za-z0-9]{10}\.[A-Za-z0-9]+$")
+
+
+def is_upgrade_backup_name(file_name: str) -> bool:
+    """判断文件名是否为洗版旧文件备份（<原名>-<10位短ID>.ext）。"""
+    return bool(_UPGRADE_BACKUP_RE.search(str(file_name or "")))
+
+
+def strip_upgrade_backup_suffix(file_name: str) -> str:
+    """返回备份名去掉短ID后的原主干；非备份名返回空串。"""
+    name = str(file_name or "")
+    if not _UPGRADE_BACKUP_RE.search(name):
+        return ""
+    return re.sub(r"-[A-Za-z0-9]{10}$", "", Path(name).stem)
 
 
 def format_episode_ranges(episodes: Iterable[Any]) -> str:

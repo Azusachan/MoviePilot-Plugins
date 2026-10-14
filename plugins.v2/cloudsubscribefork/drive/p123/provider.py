@@ -31,6 +31,8 @@ class P123PlaybackReference:
     template_variables: FrozenSet[str] = frozenset({
         "file_id", "md5", "size", "s3_key_flag"
     })
+    # 取链还需要 etag/s3_key_flag 等字段，无法用单一标识定位
+    proxy_identifier: str = ""
 
     @staticmethod
     def reference_values(file_item: CloudFile) -> Dict[str, str]:

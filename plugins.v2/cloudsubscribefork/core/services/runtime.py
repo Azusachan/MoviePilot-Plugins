@@ -17,7 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from ...core import CloudDriveCapability
 from ...core import OwnerDelegator
-from ...core.media import media_identity
+from ...core.media import subscribe_media_key
 
 sync_lock = Lock()
 
@@ -76,22 +76,27 @@ class SyncRuntimeService(OwnerDelegator):
         )
         return bool(task_event and task_event.is_set())
 
+    @staticmethod
+    def _task_id(subscribe_id: int, budget_key: str = "") -> str:
+        """任务列表ID：订阅卡片用 ``subscribe:{id}``，无订阅（手动/临时）用 ``media:{身份键}``。"""
+        if int(subscribe_id or 0) > 0:
+            return f"subscribe:{int(subscribe_id)}"
+        return f"media:{budget_key}" if budget_key else ""
+
     def _sync_task_id(self, subscribe: Any) -> str:
         if bool(getattr(subscribe, "_transient_target", False)):
-            return f"media:{self._sync_handler.subscription_budget_key(subscribe)}"
+            budget_key = (
+                self._sync_handler.subscription_budget_key(subscribe)
+                if self._sync_handler else ""
+            )
+            return self._task_id(0, budget_key)
         return f"subscribe:{getattr(subscribe, 'id', '')}"
 
     @staticmethod
-    def _sync_media_key(subscribe: Any) -> Tuple[str, str, int]:
-        media_type = str(getattr(subscribe, "type", "") or "")
-        source, source_id = media_identity(subscribe)
-        media_id = (
-            f"{source}:{source_id}"
-            if source and source_id
-            else str(getattr(subscribe, "name", "") or "")
-        )
-        season = normalize_season(getattr(subscribe, "season", 1)) if media_type == MediaType.TV.value else 0
-        return media_type, media_id, season
+    def _sync_series_group_key(subscribe: Any) -> Tuple[str, str]:
+        """同剧集多季按媒体身份归入同一队列，避免并发重复搜索和竞态冲突。"""
+        media_type, media_id, _season = subscribe_media_key(subscribe)
+        return media_type, media_id
 
     def _register_sync_tasks(self, subscribes: List[Any]) -> None:
         queued_at = time.time()
@@ -168,6 +173,62 @@ class SyncRuntimeService(OwnerDelegator):
         if changed:
             self._mark_runtime_changed()
 
+    @staticmethod
+    def _postprocess_progress_fraction(
+            scope: Dict[str, Any],
+            file_keys: List[str],
+            completed_count: int,
+            total_count: int,
+    ) -> float:
+        """融合进度：批量刮削工作量并入总量，与批量登记（文件结算数）合并为一条动态进度。"""
+        if total_count <= 0:
+            return 0.0
+        scrape_total = max(0, int(scope.get("_postprocess_scrape_total") or 0))
+        strm_total = max(0, int(scope.get("_postprocess_strm_total") or 0))
+        expected = max(total_count, int(scope.get("_postprocess_expected_total") or 0))
+        transferred = min(expected, max(0, int(scope.get("transferred") or 0)))
+        if total_count > 1 and (
+                scrape_total
+                or strm_total
+                or transferred
+                or expected > total_count
+                or scope.get("_postprocess_batch_active")
+        ):
+            # 多文件任务：按实际启用的阶段等分
+            scraped = max(
+                completed_count,
+                min(scrape_total, max(0, int(scope.get("_postprocess_scrape_completed") or 0))),
+            )
+            staged = max(
+                scraped,
+                min(strm_total, max(0, int(scope.get("_postprocess_strm_completed") or 0))),
+            )
+            received = max(staged, transferred)
+            steps = {
+                str(step.get("key"))
+                for step in (scope.get("postprocess_steps") or [])
+                if isinstance(step, dict)
+            }
+            counts = [received]
+            if not steps or "strm" in steps:
+                counts.append(staged)
+            if not steps or "metadata" in steps:
+                counts.append(scraped)
+            counts.append(completed_count)
+            stage_count = len(counts)
+            done = 0.0
+            for index, count in enumerate(counts):
+                next_count = counts[index + 1] if index + 1 < stage_count else 0
+                done += max(0, count - next_count) * (index + 1) / stage_count
+            return min(1.0, done / max(1, expected))
+        active_key = str(scope.get("_postprocess_active_key") or "")
+        # 仅单文件任务用「当前文件步骤」估算
+        if total_count == 1 and active_key in file_keys:
+            step_index = max(0, int(scope.get("postprocess_step_index") or 0))
+            step_total = max(1, int(scope.get("postprocess_step_total") or 1))
+            return min(1.0, (step_index + 1) / step_total)
+        return min(1.0, completed_count / max(1, expected))
+
     def _update_postprocess_task(self, task_id: str, **values: Any) -> None:
         """仅更新当前后处理卡片，避免旧回调污染同订阅的新一轮任务。"""
         changed = False
@@ -203,8 +264,6 @@ class SyncRuntimeService(OwnerDelegator):
             if active is False:
                 if not active_key or pending_key == active_key:
                     task["_postprocess_active_key"] = ""
-                if total_count > 0:
-                    values["postprocess_progress"] = round(completed_count * 100 / max(1, total_count), 2)
             elif pending_key:
                 values["status"] = (
                     "downloading"
@@ -215,14 +274,14 @@ class SyncRuntimeService(OwnerDelegator):
                 )
                 task["_postprocess_active_key"] = pending_key
                 values["postprocess_file_index"] = file_keys.index(pending_key) + 1
-                step_index = max(0, int(values.get("postprocess_step_index") or 0))
-                step_total = max(1, int(values.get("postprocess_step_total") or 1))
-                file_progress = (
-                    completed_count
-                    + (step_index + 1) / step_total
-                ) / max(1, total_count)
-                values["postprocess_progress"] = round(min(1.0, file_progress) * 100, 2)
-                values["progress"] = min(99, 95 + int(file_progress * 4))
+
+            # 批量刮削与批量登记合并为一条动态进度
+            if total_count > 0:
+                fraction = self._postprocess_progress_fraction(
+                    {**task, **values}, file_keys, completed_count, total_count
+                )
+                values["postprocess_progress"] = round(min(1.0, fraction) * 100, 2)
+                values["progress"] = min(99, 95 + int(fraction * 4))
 
             # 当所有文件均已结束（无论成功或定位失败结算），后处理任务必须正确停止
             if total_count > 0 and completed_count >= total_count:
@@ -233,10 +292,19 @@ class SyncRuntimeService(OwnerDelegator):
                 values["pending_count"] = 0
                 values["finished_at"] = time.time()
                 values["postprocess_step"] = ""
-                if failed_count >= total_count:
+                detail = str(values.get("postprocess_detail") or "").strip()
+                if failed_count and failed_count >= total_count:
                     values["status"] = "failed"
-                    values["phase"] = "文件定位失败，后处理已停止"
-                    values["message"] = values.get("postprocess_detail") or "网盘未定位到转存文件，任务停止"
+                    values["phase"] = "文件后处理失败，任务已停止"
+                    values["message"] = detail or "全部文件后处理失败"
+                elif failed_count:
+                    # 部分文件失败必须如实反映，不能按成功收尾
+                    values["status"] = "failed"
+                    values["phase"] = (
+                        f"部分文件后处理失败（成功 {completed_count - failed_count}"
+                        f"/{total_count}）"
+                    )
+                    values["message"] = detail or "部分文件后处理失败，请检查网盘文件状态"
                 else:
                     values["status"] = "completed"
                     values["phase"] = "文件后处理已结束"
@@ -318,25 +386,40 @@ class SyncRuntimeService(OwnerDelegator):
             ))
             return tasks
 
+    def _pending_task_id(self, item: Dict[str, Any]) -> str:
+        """待处理后处理记录对应的任务ID；与 _sync_task_id 共用命名规则。"""
+        subscribe_id = int(item.get("subscribe_id") or 0)
+        if subscribe_id > 0:
+            return self._task_id(subscribe_id)
+        sub_key = str(item.get("sub_key") or "").strip()
+        if not sub_key and self._sync_handler:
+            media_data = item.get("mediainfo") or {}
+            media_id = media_data.get("tmdb_id") or media_data.get("media_id")
+            try:
+                media_id = int(media_id) if media_id else 0
+            except (TypeError, ValueError):
+                media_id = 0
+            if media_id or media_data.get("title"):
+                type_text = str(media_data.get("type") or "").strip()
+                # 手动/临时目标转存不带积分 sub_key，按媒体身份回推，保证任务列表可见
+                sub_key = self._sync_handler.media_budget_identity(
+                    media_id,
+                    str(media_data.get("title") or ""),
+                    is_movie=type_text in {
+                        str(MediaType.MOVIE.value), str(MediaType.MOVIE.name)
+                    },
+                    season=item.get("season"),
+                )
+        return self._task_id(0, sub_key)
+
     def _pending_finalize_items(self, subscribe: Any) -> List[Dict[str, Any]]:
         if not self._sync_handler:
             return []
-        normalized_id = int(getattr(subscribe, "id", 0) or 0)
-        sub_key = (
-            self._sync_handler.subscription_budget_key(subscribe)
-            if bool(getattr(subscribe, "_transient_target", False))
-            else ""
-        )
+        expected_task_id = self._sync_task_id(subscribe)
         return [
             item
             for item in self._sync_handler.get_pending_finalize_tasks()
-            if (
-                    normalized_id > 0
-                    and int(item.get("subscribe_id") or 0) == normalized_id
-            ) or (
-                    bool(sub_key)
-                    and str(item.get("sub_key") or "") == sub_key
-            )
+            if self._pending_task_id(item) == expected_task_id
         ]
 
     def _postprocessing_text(
@@ -419,6 +502,11 @@ class SyncRuntimeService(OwnerDelegator):
             "transfer_pending_count": 0,
             "_postprocess_active_key": "",
             "_postprocess_file_keys": [],
+            "_postprocess_scrape_completed": 0,
+            "_postprocess_scrape_total": 0,
+            "_postprocess_strm_completed": 0,
+            "_postprocess_strm_total": 0,
+            "_postprocess_batch_active": False,
         }
 
     def _refresh_postprocessing_sync_tasks(self) -> None:
@@ -431,11 +519,7 @@ class SyncRuntimeService(OwnerDelegator):
         for item in pending_items:
             subscribe_id = int(item.get("subscribe_id") or 0)
             sub_key = str(item.get("sub_key") or "").strip()
-            task_id = (
-                f"subscribe:{subscribe_id}"
-                if subscribe_id > 0
-                else f"media:{sub_key}" if sub_key else ""
-            )
+            task_id = self._pending_task_id(item)
             if not task_id:
                 continue
             media_data = item.get("mediainfo") or {}
@@ -534,6 +618,14 @@ class SyncRuntimeService(OwnerDelegator):
                 }
                 if not task:
                     values = {**self._idle_postprocess_state(), **values}
+                fraction = self._postprocess_progress_fraction(
+                    {**task, **values} if task else dict(values),
+                    file_keys,
+                    completed_count,
+                    len(file_keys),
+                )
+                values["postprocess_progress"] = round(min(1.0, fraction) * 100, 2)
+                values["progress"] = min(99, 95 + int(fraction * 4))
                 if not task or not task.get("postprocess_active"):
                     next_key = next(
                         (pending_key for pending_key in file_keys if pending_key in current_keys),
@@ -545,28 +637,7 @@ class SyncRuntimeService(OwnerDelegator):
                         "postprocess_file_index": (
                             file_keys.index(next_key) + 1 if next_key else 0
                         ),
-                        "postprocess_progress": round(
-                            completed_count * 100 / max(1, len(file_keys)), 2
-                        ),
                     })
-                else:
-                    active_key = str(task.get("_postprocess_active_key") or "")
-                    if active_key in file_keys:
-                        file_index = file_keys.index(active_key) + 1
-                        step_index = max(
-                            0, int(task.get("postprocess_step_index") or 0)
-                        )
-                        step_total = max(
-                            1, int(task.get("postprocess_step_total") or 1)
-                        )
-                        file_progress = (
-                                                file_index - 1 + (step_index + 1) / step_total
-                                        ) / max(1, len(file_keys))
-                        values.update({
-                            "postprocess_file_index": file_index,
-                            "postprocess_progress": round(file_progress * 100, 2),
-                            "progress": min(99, 95 + int(file_progress * 4)),
-                        })
                 if task:
                     if any(task.get(key) != value for key, value in values.items()):
                         task.update(values)
@@ -605,128 +676,142 @@ class SyncRuntimeService(OwnerDelegator):
         direct_cloud_paths = self._direct_cloud_manual_resources(
             manual_resources
         )
-
-        for subscribe in subscribes:
-            task_id = self._sync_task_id(subscribe)
-            with self._sync_tasks_lock:
-                task = self._sync_tasks.get(task_id) or {}
-                task_event = task.get("stop_event")
-            if (
-                    global_vars.is_system_stopped
-                    or (self._stop_event and self._stop_event.is_set())
-                    or (task_event and task_event.is_set())
-            ):
-                self._update_sync_task(
-                    task_id, status="stopped", phase="已停止", progress=100
-                )
-                continue
-
-            self._task_local.stop_event = task_event
-            self._task_local.task_id = task_id
-            manual_upgrade = bool(getattr(subscribe, "_manual_upgrade", False))
-            transient_target = bool(getattr(subscribe, "_transient_target", False))
-            target_episodes = getattr(subscribe, "_target_episodes", None)
-            upgrade_task = manual_upgrade or self._is_cloud_upgrade_subscribe(subscribe)
-            self._update_sync_task(
-                task_id,
-                status="running",
-                phase="建立洗版基线" if upgrade_task else "检查缺失内容",
-                task_kind="cloud_upgrade" if upgrade_task else "subscribe",
-                progress=10,
-                message="",
-                started_at=time.time(),
-            )
-            try:
-                if getattr(subscribe, "type", "") == MediaType.MOVIE.value:
-                    task_count = self._sync_handler.process_movie_subscribe(
-                        subscribe=subscribe,
-                        history=local_history,
-                        transfer_details=transfer_details,
-                        transferred_count=0,
-                        manual_resources=manual_resources,
-                        manual_upgrade=manual_upgrade,
-                        transient_target=transient_target,
+        tv_subscribes = [
+            s for s in subscribes
+            if str(getattr(s, "type", "") or "") == MediaType.TV.value
+        ]
+        all_target_seasons = {
+            int(getattr(s, "season", 1) or 1)
+            for s in tv_subscribes
+        }
+        try:
+            for subscribe in subscribes:
+                task_id = self._sync_task_id(subscribe)
+                with self._sync_tasks_lock:
+                    task = self._sync_tasks.get(task_id) or {}
+                    task_event = task.get("stop_event")
+                if (
+                        global_vars.is_system_stopped
+                        or (self._stop_event and self._stop_event.is_set())
+                        or (task_event and task_event.is_set())
+                ):
+                    self._update_sync_task(
+                        task_id, status="stopped", phase="已停止", progress=100
                     )
-                else:
-                    task_count = self._sync_handler.process_tv_subscribe(
-                        subscribe=subscribe,
-                        history=local_history,
-                        transfer_details=transfer_details,
-                        transferred_count=0,
-                        exclude_ids=exclude_ids,
-                        manual_resources=manual_resources,
-                        manual_upgrade=manual_upgrade,
-                        target_episodes=target_episodes,
-                        transient_target=transient_target,
-                    )
-                transferred_count += int(task_count or 0)
-                stopped = bool(task_event and task_event.is_set())
-                pending_items = self._pending_finalize_items(subscribe)
-                pending_count = len(pending_items)
-                postprocess_phase, postprocess_message = (
-                    self._postprocessing_text(pending_items)
-                )
-                postprocess_state = (
-                    {} if pending_count and not stopped
-                    else self._idle_postprocess_state()
-                )
+                    continue
+
+                self._task_local.stop_event = task_event
+                self._task_local.task_id = task_id
+                manual_upgrade = bool(getattr(subscribe, "_manual_upgrade", False))
+                transient_target = bool(getattr(subscribe, "_transient_target", False))
+                target_episodes = getattr(subscribe, "_target_episodes", None)
+                upgrade_task = manual_upgrade or (not transient_target and self._is_cloud_upgrade_subscribe(subscribe))
                 self._update_sync_task(
                     task_id,
-                    status=(
-                        "stopped" if stopped
-                        else (
-                            "downloading"
-                            if any(
-                                str(item.get("task_type") or "share").lower()
-                                in {"magnet", "ed2k", "offline"}
-                                and not bool(item.get("offline_completed") or item.get("moved_at"))
-                                for item in pending_items
-                            )
-                            else "transferring"
-                            if any(not item.get("moved_at") for item in pending_items)
-                            else "postprocessing"
-                        ) if pending_count
-                        else "completed"
-                    ),
-                    phase=(
-                        "已停止" if stopped
-                        else postprocess_phase
-                        if pending_count
-                        else (
-                            f"已整理 {int(task_count or 0)} 个文件"
-                            if direct_cloud_paths
-                            else f"已转存 {int(task_count or 0)} 个文件"
+                    status="running",
+                    phase="检查缺失内容",
+                    task_kind="cloud_upgrade" if upgrade_task else "subscribe",
+                    progress=10,
+                    message="",
+                    started_at=time.time(),
+                )
+                try:
+                    if getattr(subscribe, "type", "") == MediaType.MOVIE.value:
+                        task_count = self._sync_handler.process_movie_subscribe(
+                            subscribe=subscribe,
+                            history=local_history,
+                            transfer_details=transfer_details,
+                            transferred_count=0,
+                            manual_resources=manual_resources,
+                            manual_upgrade=manual_upgrade,
+                            transient_target=transient_target,
                         )
-                        if int(task_count or 0) > 0
-                        else "无需转存"
-                    ),
-                    progress=95 if pending_count and not stopped else 100,
-                    pending_count=pending_count,
-                    message=postprocess_message if pending_count else "",
-                    transferred=int(task_count or 0),
-                    finished_at=None if pending_count and not stopped else time.time(),
-                    **postprocess_state,
-                )
-                if pending_count and not stopped:
-                    self._refresh_postprocessing_sync_tasks()
-            except Exception as error:
-                logger.error(f"订阅 {getattr(subscribe, 'name', '')} 处理异常：{error}")
-                self._update_sync_task(
-                    task_id,
-                    status="failed",
-                    phase="处理失败",
-                    progress=100,
-                    message=str(error),
-                    finished_at=time.time(),
-                )
-            finally:
+                    else:
+                        task_count = self._sync_handler.process_tv_subscribe(
+                            subscribe=subscribe,
+                            history=local_history,
+                            transfer_details=transfer_details,
+                            transferred_count=0,
+                            exclude_ids=exclude_ids,
+                            manual_resources=manual_resources,
+                            manual_upgrade=manual_upgrade,
+                            target_episodes=target_episodes,
+                            transient_target=transient_target,
+                            all_target_seasons=all_target_seasons,
+                        )
+                    stopped = bool(task_event and task_event.is_set())
+                    pending_items = self._pending_finalize_items(subscribe)
+                    pending_count = len(pending_items)
+                    postprocess_phase, postprocess_message = (
+                        self._postprocessing_text(pending_items)
+                    )
+                    postprocess_state = (
+                        {} if pending_count and not stopped
+                        else self._idle_postprocess_state()
+                    )
+                    self._update_sync_task(
+                        task_id,
+                        status=(
+                            "stopped" if stopped
+                            else (
+                                "downloading"
+                                if any(
+                                    str(item.get("task_type") or "share").lower()
+                                    in {"magnet", "ed2k", "offline"}
+                                    and not bool(item.get("offline_completed") or item.get("moved_at"))
+                                    for item in pending_items
+                                )
+                                else "transferring"
+                                if any(not item.get("moved_at") for item in pending_items)
+                                else "postprocessing"
+                            ) if pending_count
+                            else "completed"
+                        ),
+                        phase=(
+                            "已停止" if stopped
+                            else postprocess_phase
+                            if pending_count
+                            else (
+                                f"已整理 {int(task_count or 0)} 个文件"
+                                if direct_cloud_paths
+                                else f"已转存 {int(task_count or 0)} 个文件"
+                            )
+                            if int(task_count or 0) > 0
+                            else "无需转存"
+                        ),
+                        progress=95 if pending_count and not stopped else 100,
+                        pending_count=pending_count,
+                        message=postprocess_message if pending_count else "",
+                        transferred=int(task_count or 0),
+                        finished_at=None if pending_count and not stopped else time.time(),
+                        **postprocess_state,
+                    )
+                    if pending_count and not stopped:
+                        self._refresh_postprocessing_sync_tasks()
+                except Exception as error:
+                    logger.error(f"订阅 {getattr(subscribe, 'name', '')} 处理异常：{error}")
+                    self._update_sync_task(
+                        task_id,
+                        status="failed",
+                        phase="处理失败",
+                        progress=100,
+                        message=str(error),
+                        finished_at=time.time(),
+                    )
+                finally:
+                    try:
+                        del self._task_local.stop_event
+                    except AttributeError:
+                        pass
+                    try:
+                        del self._task_local.task_id
+                    except AttributeError:
+                        pass
+        finally:
+            if hasattr(self._sync_handler, "clear_series_sync_caches"):
                 try:
-                    del self._task_local.stop_event
-                except AttributeError:
-                    pass
-                try:
-                    del self._task_local.task_id
-                except AttributeError:
+                    self._sync_handler.clear_series_sync_caches()
+                except Exception:
                     pass
 
         return {

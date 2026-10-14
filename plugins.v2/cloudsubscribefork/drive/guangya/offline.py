@@ -13,7 +13,7 @@ from urllib.parse import unquote
 from app.log import logger
 
 from ..common import safe_int
-from ...utils.magnet import parse_magnet_metadata
+from ...utils.magnet import extract_magnet_hash, parse_magnet_metadata
 
 _ED2K_RE = re.compile(
     r"ed2k://\|file\|([^|]+)\|(\d+)\|([0-9A-Fa-f]{32})\|/?", re.I
@@ -345,8 +345,13 @@ class GuangyaOfflineService:
             self._updated_at = 0
         return True
 
-    def add_offline_download(self, url: str, save_path: str, **kwargs: Any) -> bool:
-        """提交离线下载到指定目录（支持 Magnet、ED2K 以及 .torrent 种子）。"""
+    def add_offline_download(self, url: str, save_path: str, **kwargs: Any) -> Any:
+        """
+        提交离线下载到指定目录（Magnet / ED2K / .torrent）。
+
+        返回已存在或新建任务的 taskId（str），失败返回 False。
+        光鸭不对同 info hash 去重，故先比对远端任务列表复用，避免重复建单。
+        """
         if not self.is_offline_url(url):
             return False
         if not self.client.access_token:
@@ -364,16 +369,32 @@ class GuangyaOfflineService:
             except Exception as error:
                 logger.debug(f"光鸭种子解析失败：{error}")
 
+        target_hash = (extract_magnet_hash(url) or "").upper()
+        for task in self._load_tasks(force=True):
+            task_hash = (extract_magnet_hash(str(task.get("res") or "")) or "").upper()
+            if not target_hash or task_hash != target_hash:
+                continue
+            task_id = str(task.get("id") or task.get("native_id") or "").strip()
+            if task.get("failed"):
+                break
+            state_text = "已完成" if task.get("completed") else "进行中"
+            logger.info(
+                f"光鸭离线任务已存在（{state_text}），复用任务："
+                f"{task.get('name') or url}"
+            )
+            return task_id or True
+
         lookup = self._files.resolve_directory(save_path, create=True)
         if not lookup.checked or lookup.directory_id is None:
             logger.error(f"添加光鸭离线下载失败：无法获取或创建目标目录 {save_path}")
             return False
         target_name = str(kwargs.get("target_name") or "").strip()
         created = self.create_cloud_task(url, lookup.directory_id, new_name=target_name)
-        if self.client.is_success(created):
-            logger.info(f"已提交光鸭离线下载：{url} -> {save_path}")
-            with self._lock:
-                self._updated_at = 0
-            return True
-        logger.error(f"添加光鸭离线下载失败：{created.get('msg') or '任务创建失败'}")
-        return False
+        if not self.client.is_success(created):
+            logger.error(f"添加光鸭离线下载失败：{created.get('msg') or '任务创建失败'}")
+            return False
+        logger.info(f"已提交光鸭离线下载：{url} -> {save_path}")
+        with self._lock:
+            self._updated_at = 0
+        task_id = str((created.get("data") or {}).get("taskId") or "").strip()
+        return task_id or True

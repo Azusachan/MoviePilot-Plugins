@@ -10,6 +10,7 @@ from .qrcode import QRCodeService
 from .registration import MoviePilotRegistration
 from .runtime import RuntimeApi
 from .search import SearchApi
+from .strm_proxy import StrmProxyApi, StrmProxyServer
 from .sync import SyncApi
 
 __all__ = [
@@ -23,5 +24,7 @@ __all__ = [
     "QRCodeService",
     "RuntimeApi",
     "SearchApi",
+    "StrmProxyApi",
+    "StrmProxyServer",
     "SyncApi",
 ]

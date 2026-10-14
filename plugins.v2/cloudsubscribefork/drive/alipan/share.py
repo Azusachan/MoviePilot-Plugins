@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from app.log import logger
 
-from ..common import iter_transfer_batches
+from ..common import iter_transfer_batches, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus
 from ...utils.cache import create_platform_ttl_cache
 
@@ -114,6 +114,7 @@ class AliPanShareService:
 
     def list_share_files(self, share_url: str, **kwargs) -> list:
         try:
+            target_season = kwargs.get("target_season")
             info = self._prepare(share_url)
             result = []
             stack = [("root", "")]
@@ -122,6 +123,8 @@ class AliPanShareService:
                 for item in self._list(info, current_id):
                     if item.get("type") == "folder":
                         folder_name = str(item.get("name") or "").strip()
+                        if target_season is not None and should_skip_season_dir(folder_name, target_season):
+                            continue
                         sub_parent = (
                             f"{parent_path}/{folder_name}".strip("/")
                             if parent_path else folder_name
@@ -177,7 +180,6 @@ class AliPanShareService:
             self.list_share_files(share_url)
         item = info["items"].get(str(file_id)) or {}
         raw_name = str(item.get("name") or file_id)
-        name = target_name or raw_name
         lookup = self.files.resolve_directory(save_path, create=True)
         if not lookup.directory_id:
             return False
@@ -223,10 +225,6 @@ class AliPanShareService:
                 return True
             return False
 
-        if name != raw_name:
-            copied = self.files.find_file(save_path, raw_name)
-            if not copied or not self.files.rename_file(save_path, copied, name):
-                return False
         return True
 
     def transfer_share(self, share_url: str, save_path: str) -> bool:
@@ -245,17 +243,19 @@ class AliPanShareService:
             self, share_url: str, file_ids: list, save_path: str, **kwargs,
     ) -> tuple:
         normalized = [str(value) for value in file_ids]
+        stop_requested = kwargs.get("stop_requested")
         if not normalized:
             return [], []
-        rename_items = kwargs.get("rename_items") or {}
         succeeded, failed = [], []
         for batch in iter_transfer_batches(
                 normalized, kwargs.get("batch_size", 20),
                 kwargs.get("batch_interval", 3), 20,
         ):
+            if stop_requested and stop_requested():
+                logger.debug("收到停止请求，剩余文件未转存")
+                break
             for file_id in batch:
-                target_name = str((rename_items.get(str(file_id)) or {}).get("target_name") or "").strip()
-                if self.transfer_file(share_url, file_id, save_path, target_name):
+                if self.transfer_file(share_url, file_id, save_path):
                     succeeded.append(file_id)
                 else:
                     failed.append(file_id)

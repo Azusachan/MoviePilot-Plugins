@@ -118,9 +118,6 @@ class P115FileQuery:
     def list_files_recursive(self, path: str, **kwargs: Any) -> list[CloudFile]:
         return cloud_files(self.manager.list_files_recursive(path, **kwargs))
 
-    def list_offline_task_files(self, task: Any, path: str) -> list[CloudFile]:
-        return cloud_files(self.manager.list_offline_task_files(task, path))
-
     def find_file(self, path: str, file_name: str, **kwargs: Any) -> CloudFile | None:
         return cloud_file(self.manager.find_file_by_exact_name(path, file_name, **kwargs))
 
@@ -730,7 +727,18 @@ class P115FileService(OwnerDelegator):
         if cid == -1:
             return []
 
-        return self.list_files_by_cid(cid)
+        checked, items = self.list_files_by_cid_checked(cid)
+        if checked:
+            return items
+        normalized = normalize_path(str(path or "").replace("\\", "/"))
+        self.path_cache.delete(normalized)
+        walked, walk_cid = self._resolve_pid_by_path_walk(normalized, False)
+        if walked and walk_cid not in (None, "", -1) and str(walk_cid) != str(cid):
+            checked, items = self.list_files_by_cid_checked(walk_cid)
+            if checked:
+                self.path_cache.set(normalized, walk_cid)
+                return items
+        return []
 
     def list_files_by_cid(self, cid: Any) -> List[dict]:
         """使用已解析的目录 CID 列出文件，避免重复进行路径定位。"""
