@@ -45,6 +45,42 @@ const STRM_SAMPLE_VALUES = {
   file_path: "/电视剧/示例剧集 (2026)/Season 01/示例剧集.S01E01.mkv",
 };
 
+/** 仅代理短链模板（含播放标识变量）走独立监听端口。 */
+const STRM_PROXY_TEMPLATE_RE = /\{(?:pickcode|file_id)\}/;
+
+/** 基础地址是否已显式带端口（兼容 IPv6 字面量写法）。 */
+function hasExplicitPort(baseUrl) {
+  const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(String(baseUrl || ""));
+  return match ? /:\d+$/.test(match[1]) : false;
+}
+
+/** 与后端 quote(path, safe) 一致的编码：不编码字母数字与 _.~ 及 safe 字符。 */
+function quoteLikeBackend(value, safe = "") {
+  const keep = new Set(`${safe}ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-~`);
+  let out = "";
+  for (const ch of String(value ?? "")) {
+    if (keep.has(ch)) {
+      out += ch;
+      continue;
+    }
+    out += Array.from(new TextEncoder().encode(ch))
+      .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`)
+      .join("");
+  }
+  return out;
+}
+
+/** 生效入口地址：代理模板且基础地址未带端口时补上监听端口。 */
+export function resolveStrmBaseUrl(config) {
+  const base = String(config?.strm_base_url || "").replace(/\/+$/, "");
+  const template = String(config?.strm_url_template || "");
+  const port = Math.trunc(Number(config?.strm_proxy_port || 0)) || 0;
+  if (!STRM_PROXY_TEMPLATE_RE.test(template) || port <= 0 || hasExplicitPort(base)) {
+    return base;
+  }
+  return `${base}:${port}`;
+}
+
 /** 当前目标网盘的可用 STRM 模板变量提示（由后端下发）。 */
 export function strmVariableHint(options) {
   const variables = Array.isArray(options?.strmVariables) ? options.strmVariables : [];
@@ -53,12 +89,15 @@ export function strmVariableHint(options) {
     : "支持 {base_url}、{file_path} 及各网盘 ID 变量";
 }
 
-/** 按当前表单状态实时渲染 STRM 示例（模板始终取自配置，代理只影响入口地址）。 */
+/** 按当前表单状态渲染 STRM 示例：file_name 原样输出，file_path 按 URL 规则编码。 */
 export function renderStrmSample(config) {
-  const baseUrl = String(config?.strm_base_url || "").replace(/\/+$/, "");
-  const values = {...STRM_SAMPLE_VALUES, base_url: baseUrl};
   const template = String(config?.strm_url_template || "");
   if (!template) return "";
+  const values = {
+    base_url: resolveStrmBaseUrl(config),
+    file_name: STRM_SAMPLE_VALUES.file_name,
+    file_path: quoteLikeBackend(STRM_SAMPLE_VALUES.file_path, "/"),
+  };
   return template.replace(/\{(\w+)\}/g, (match, name) =>
     values[name] ? values[name] : `<${name}>`);
 }
