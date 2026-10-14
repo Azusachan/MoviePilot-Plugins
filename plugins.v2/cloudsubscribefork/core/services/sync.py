@@ -15,7 +15,7 @@ from app.schemas.types import MediaType
 
 from .runtime import sync_lock
 from ...core import CloudDriveCapability, OwnerDelegator
-from ...core.media import media_identity, tmdb_id_of
+from ...core.media import subscribe_media_key, tmdb_id_of
 from ...utils.cache import create_platform_ttl_cache
 
 _SUBSCRIBE_MEDIA_KEY_CACHE = create_platform_ttl_cache(
@@ -103,14 +103,14 @@ class SyncExecutionService(OwnerDelegator):
             tmdb_id: Any = None,
     ) -> Tuple[str, str, int]:
         normalized_type = "电影" if str(media_type or "") == MediaType.MOVIE.value else "电视剧"
-        media_identity = (
+        identity = (
             f"tmdb:{tmdb_id}"
             if str(tmdb_id or "").strip()
             else f"title:{str(title or '').strip()}"
         )
         return (
             normalized_type,
-            media_identity,
+            identity,
             normalize_season(season) if normalized_type == "电视剧" else 0,
         )
 
@@ -118,18 +118,7 @@ class SyncExecutionService(OwnerDelegator):
     def _media_key_from_subscribe(subscribe_id: int, subscribe: Any) -> tuple:
         if not subscribe:
             return ("ID", int(subscribe_id))
-        media_type = str(getattr(subscribe, "type", "") or "")
-        source, source_id = media_identity(subscribe)
-        media_id = (
-            f"{source}:{source_id}"
-            if source and source_id
-            else str(getattr(subscribe, "name", "") or "").strip()
-        )
-        season = (
-            normalize_season(getattr(subscribe, "season", 1))
-            if media_type == MediaType.TV.value else 0
-        )
-        return media_type, media_id, season
+        return subscribe_media_key(subscribe)
 
     @classmethod
     def _subscribe_search_media_keys(
@@ -252,7 +241,7 @@ class SyncExecutionService(OwnerDelegator):
         """按媒体身份保留最早订阅，并输出可定位的重复卡片明细。"""
         grouped: Dict[Tuple[str, str, int], List[Any]] = {}
         for subscribe in subscribes:
-            grouped.setdefault(self._sync_media_key(subscribe), []).append(subscribe)
+            grouped.setdefault(subscribe_media_key(subscribe), []).append(subscribe)
 
         canonical = []
         duplicate_count = 0
@@ -810,9 +799,13 @@ class SyncExecutionService(OwnerDelegator):
         grouped_subscribes = {}
         for subscribe in active_subscribes:
             grouped_subscribes.setdefault(
-                self._sync_media_key(subscribe), []
+                self._sync_series_group_key(subscribe), []
             ).append(subscribe)
-
+        for group in grouped_subscribes.values():
+            group.sort(
+                key=lambda s: int(getattr(s, "season", 1) or 1)
+                if str(getattr(s, "type", "") or "") == MediaType.TV.value else 0
+            )
         completed_subscribes = 0
         if grouped_subscribes:
             ordered_manual_seasons = bool(
@@ -844,15 +837,19 @@ class SyncExecutionService(OwnerDelegator):
                     executor.submit(
                         self._run_subscription_group,
                         group,
-                        history_by_media.get(
+                        [
+                            record
+                            for s in group
+                            for record in history_by_media.get(
                             self._history_group_key(
-                                getattr(group[0], "type", ""),
-                                getattr(group[0], "name", ""),
-                                getattr(group[0], "season", None),
-                                tmdb_id_of(group[0]),
+                                getattr(s, "type", ""),
+                                getattr(s, "name", ""),
+                                getattr(s, "season", None),
+                                tmdb_id_of(s),
                             ),
                             [],
-                        ),
+                        )
+                        ],
                         exclude_ids,
                         manual_resources,
                     ): group

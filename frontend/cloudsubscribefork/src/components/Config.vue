@@ -192,12 +192,14 @@
                   :testing-proxy="testingProxy"
                   :testing-auto-subscribe-proxy="testingAutoSubscribeProxy"
                   :hdhive-oauth-action="hdhiveOauthAction"
+                  :proxy-port-status="proxyPortStatus"
                   @scan="openQrCode"
                   @browse-directory="openDirectoryPicker"
                   @test-source="openSourceTest"
                   @test-auto-subscribe="testAutoSubscribe"
                   @test-proxy="testSearchProxy"
                   @test-auto-subscribe-proxy="testAutoSubscribeProxy"
+                  @check-port="checkProxyPort"
                   @refresh-account="refreshAccount"
                   @hdhive-oauth-start="startHdhiveOAuth"
                   @hdhive-oauth-exchange="exchangeHdhiveOAuth"
@@ -889,6 +891,13 @@ const options = reactive({
   subscribes: [],
   mediaservers: [],
   mediaLibraryWebhookUrls: {},
+  strmVariables: [],
+  strmSample: "",
+  strmProxyTemplate: "",
+  strmProxyPortMissing: false,
+  strmProxyRoute: "d",
+  strmProxyServer: {},
+  strmIdentifierVariable: "",
   notificationTypes: [],
   cloudDrives: [],
   resourceTypes: [],
@@ -1061,6 +1070,30 @@ function applyOptions(data) {
       data.media_library_webhook_urls && typeof data.media_library_webhook_urls === "object"
         ? data.media_library_webhook_urls
         : {}
+  }
+  if ("strm_variables" in data) {
+    options.strmVariables = Array.isArray(data.strm_variables) ? data.strm_variables : [];
+  }
+  if ("strm_sample" in data) {
+    options.strmSample = String(data.strm_sample || "");
+  }
+  if ("strm_proxy_template" in data) {
+    options.strmProxyTemplate = String(data.strm_proxy_template || "");
+  }
+  if ("strm_proxy_server" in data) {
+    options.strmProxyServer =
+      data.strm_proxy_server && typeof data.strm_proxy_server === "object"
+        ? data.strm_proxy_server
+        : {};
+  }
+  if ("strm_proxy_route" in data) {
+    options.strmProxyRoute = String(data.strm_proxy_route || "d");
+  }
+  if ("strm_proxy_port_missing" in data) {
+    options.strmProxyPortMissing = Boolean(data.strm_proxy_port_missing);
+  }
+  if ("strm_identifier_variable" in data) {
+    options.strmIdentifierVariable = String(data.strm_identifier_variable || "");
   }
   if ("notification_types" in data) {
     options.notificationTypes = Array.isArray(data.notification_types) ? data.notification_types : []
@@ -1607,6 +1640,58 @@ async function reloadVisibleOptionScopes() {
   await Promise.all(scopes.map((scope) => loadOptions(scope, { force: true })))
 }
 
+const proxyPortStatus = ref({});
+
+async function checkProxyPort({key, port} = {}) {
+  const fieldKey = String(key || "strm_proxy_port");
+  const portNumber = Number(port || 0);
+  proxyPortStatus.value = {
+    ...proxyPortStatus.value,
+    [fieldKey]: {loading: true},
+  };
+  try {
+    const response = unwrapResponse(
+      await api.get(`plugin/CloudSubscribeFork/strm/port_check?port=${portNumber}`),
+    );
+    const data = response.data?.data || response.data || {};
+    proxyPortStatus.value = {
+      ...proxyPortStatus.value,
+      [fieldKey]: {
+        loading: false,
+        available: Boolean(data.available),
+        error: String(data.error || ""),
+        ours: Boolean(data.ours),
+      },
+    };
+  } catch (error) {
+    proxyPortStatus.value = {
+      ...proxyPortStatus.value,
+      [fieldKey]: {
+        loading: false,
+        available: false,
+        error: String(error?.message || error || "检测失败"),
+        ours: false,
+      },
+    };
+  }
+}
+
+function autoCheckProxyPort() {
+  if (!config.strm_proxy_enabled) return;
+  void checkProxyPort({key: "strm_proxy_port", port: config.strm_proxy_port});
+}
+
+watch(
+  () => config.strm_proxy_enabled,
+  (enabled) => {
+    if (enabled) {
+      autoCheckProxyPort();
+      return;
+    }
+    proxyPortStatus.value = {};
+  },
+);
+
 async function refreshAccount(accountKey, { silent = false } = {}) {
   const normalizedKey = String(accountKey || "")
     .trim()
@@ -1904,9 +1989,11 @@ onMounted(async () => {
 
 watch(activeTab, (tab) => {
   const scope = optionScopeForTab(tab);
-  loadOptions(scope).catch((error) => {
-    notify(`加载配置选项失败：${error.message || error}`, "warning")
-  })
+  loadOptions(scope)
+    .then(() => autoCheckProxyPort())
+    .catch((error) => {
+      notify(`加载配置选项失败：${error.message || error}`, "warning");
+    });
 })
 
 onBeforeUnmount(() => {
@@ -1950,7 +2037,13 @@ watch(
   ([provider, crossTransfer, drives], [previousProvider, previousCrossTransfer, previousDrives]) => {
     if (provider === previousProvider && crossTransfer === previousCrossTransfer && drives === previousDrives) return
     const supported = new Set(createResourceTypeItems(options, config).map((item) => item.value));
-    config.resource_type_order = (config.resource_type_order || []).filter((value) => supported.has(value))
+    const order = (config.resource_type_order || []).filter((value) => supported.has(value));
+    // 切换目标网盘后需并入优先级（缺失置顶），否则仍按旧网盘优先级取候选
+    const targetDrive = String(provider || "").toLowerCase();
+    if (provider !== previousProvider && targetDrive && supported.has(targetDrive) && !order.includes(targetDrive)) {
+      order.unshift(targetDrive);
+    }
+    config.resource_type_order = order;
   },
 )
 </script>

@@ -300,6 +300,9 @@ class BatchFileMutationOperations(Protocol):
 
 @runtime_checkable
 class PlaybackReferenceOperations(Protocol):
+    # 可独立解析直链的播放标识变量名（如 115 的 pickcode、其余网盘的 file_id）；为空表示必须按路径定位
+    proxy_identifier: str
+
     @property
     def template_variables(self) -> FrozenSet[str]: ...
 

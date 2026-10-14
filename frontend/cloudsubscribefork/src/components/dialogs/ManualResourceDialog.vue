@@ -214,8 +214,6 @@
             class="mb-3" />
           <v-card variant="outlined" class="media-selection-card">
             <div class="media-selection-header">
-              <span class="text-body-2 font-weight-medium">选择媒体内容</span>
-              <v-spacer />
               <v-checkbox-btn
                 v-if="mediaContents.length"
                 :model-value="allMediaSelected"
@@ -225,6 +223,8 @@
                 :disabled="submitting"
                 aria-label="全选媒体内容"
                 @update:model-value="toggleAllMediaItems" />
+              <span class="text-body-2 font-weight-medium">选择媒体内容</span>
+              <v-spacer />
             </div>
             <v-divider />
             <div v-if="loadingMedia" class="media-selection-state">
@@ -1128,7 +1128,13 @@ watch(
   display: flex;
   min-height: 42px;
   align-items: center;
-  padding: 4px 10px 4px 14px;
+  gap: 2px;
+  padding: 4px 12px;
+}
+
+/* Vuetify 选择控件默认 flex:1 0，会撑开并把勾选框挤到行中间，这里固定为自身宽度 */
+.media-selection-header :deep(.v-selection-control) {
+  flex: 0 0 auto;
 }
 
 .media-selection-list {

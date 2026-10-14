@@ -234,9 +234,8 @@ class PiankuResourceService:
         """逐个详情页取资源（必要时过盾），离线预筛后按资源类型分组。"""
         groups: Dict[str, List[Dict[str, Any]]] = {}
         seen_rows = set()
-        # 单个详情页通常已包含整季资源；命中足够多候选后不再渲染后续详情页，
-        # 控制过盾与渲染开销（详情页上限仅是兜底）。
-        enough_rows = max(12, self._result_limit * 3)
+        # 命中足够候选即停止渲染后续详情页；阈值设上限，避免大 limit 渲染全部详情页
+        enough_rows = max(12, min(self._result_limit * 2, 40))
         for detail in selected:
             if sum(len(group) for group in groups.values()) >= enough_rows:
                 break
@@ -272,10 +271,18 @@ class PiankuResourceService:
         details: List[Dict[str, Any]] = []
         seen_ids = set()
         for keyword in keywords[:3]:
+            if getattr(self._client, "is_cooling_down", False):
+                logger.debug("片库门控处于冷却中，停止后续候选关键词检索")
+                break
             try:
                 entries = self._client.search_titles(keyword)
             except PiankuError as error:
+                err_str = str(error)
                 logger.warning(f"片库检索关键词 '{keyword}' 失败：{error}")
+                if "cooldown" in err_str.lower() or any(
+                        f"HTTP {code}" in err_str for code in (500, 502, 503, 504)
+                ):
+                    break
                 continue
             for entry in entries:
                 vod_id = str(entry.get("id") or "").strip()

@@ -6,6 +6,7 @@ from .client import AliPanClient
 from .files import AliPanFileService
 from .share import AliPanShareService
 from .upload import AliPanUploadService
+from ..common import FileIdPlaybackReference
 from ...core.cloud import CloudDriveCapability, CloudDrivePolicy, CloudDriveProvider
 
 
@@ -34,6 +35,7 @@ def create_alipan_provider(drive: AliPanDrive) -> CloudDriveProvider:
             CloudDriveCapability.BATCH_FILE_MUTATION: files,
             CloudDriveCapability.LOCAL_UPLOAD: upload,
             CloudDriveCapability.FILE_DOWNLOAD: files,
+            CloudDriveCapability.PLAYBACK_REFERENCE: FileIdPlaybackReference(),
             CloudDriveCapability.QRCODE_AUTH: drive.client,
         },
         policy=CloudDrivePolicy(

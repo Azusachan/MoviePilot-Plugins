@@ -6,6 +6,7 @@ from .client import TianyiClient
 from .files import TianyiFileService
 from .share import TianyiShareService
 from .upload import TianyiUploadService
+from ..common import FileIdPlaybackReference
 from ...core.cloud import CloudDriveCapability, CloudDrivePolicy, CloudDriveProvider
 from ...core.transfer import LocalRapidUploadAdapter
 
@@ -39,6 +40,7 @@ def create_tianyi_provider(drive: TianyiDrive) -> CloudDriveProvider:
             CloudDriveCapability.LOCAL_UPLOAD: upload,
             CloudDriveCapability.RAPID_UPLOAD: LocalRapidUploadAdapter(upload, files, frozenset({"md5"})),
             CloudDriveCapability.FILE_DOWNLOAD: files,
+            CloudDriveCapability.PLAYBACK_REFERENCE: FileIdPlaybackReference(),
         },
         policy=CloudDrivePolicy(
             pagination_mode="offset",

@@ -36,6 +36,12 @@ class WoniuClient:
     _SESSION_DATA_KEY = "woniu_auth_session"
     _LOGIN_LOCK = threading.RLock()
 
+    # 站点强制搜索间隔 ≥3 秒，否则返回“跳转提示”中间页
+    _SEARCH_MIN_INTERVAL = 3.0
+    _INTERSTITIAL_MARKERS = ("跳转提示", "请不要频繁操作，搜索时间间隔")
+    _INTERSTITIAL_RETRY_WAIT = 1.0
+    _INTERSTITIAL_MAX_ATTEMPTS = 2
+
     _HEADERS = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -62,11 +68,19 @@ class WoniuClient:
         self._save_data_func = save_data_func
         self._lock = threading.RLock()
         self._session = self._create_session()
+        configured_interval = max(1.0, float(request_interval or 1.0))
         self._request_gate = RequestGate.shared(
             "蜗牛",
             f"{self.base_url}|{self.username.casefold()}|{self._proxies}",
-            request_interval=max(1.0, float(request_interval or 1.0)),
+            request_interval=configured_interval,
             minimum_interval=1.0,
+        )
+        # 搜索端点单独限速：站点要求 ≥3 秒
+        self._search_gate = RequestGate.shared(
+            "蜗牛搜索",
+            f"{self.base_url}|{self.username.casefold()}|search",
+            request_interval=max(self._SEARCH_MIN_INTERVAL, configured_interval),
+            minimum_interval=self._SEARCH_MIN_INTERVAL,
         )
         self._is_banned = False
         self._restore_session()
@@ -136,6 +150,7 @@ class WoniuClient:
             json_data: Optional[Any] = None,
             idempotent: bool = False,
             timeout: Optional[tuple[int, int]] = None,
+            gate: Optional[RequestGate] = None,
     ) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
         req_headers = dict(self._HEADERS)
@@ -146,7 +161,7 @@ class WoniuClient:
 
         try:
             return gate_func(
-                self._request_gate,
+                gate or self._request_gate,
                 self._session_request,
                 method,
                 url,
@@ -346,6 +361,35 @@ class WoniuClient:
             },
         }
 
+    @classmethod
+    def _interstitial_reason(cls, text: str) -> str:
+        """返回命中的站点反爬中间页标记，未命中返回空串。"""
+        content = str(text or "")
+        for marker in cls._INTERSTITIAL_MARKERS:
+            if marker in content:
+                return marker
+        return ""
+
+    def _fetch_soup(self, path: str, gate: Optional[RequestGate] = None):
+        """请求并解析页面；命中站点频控中间页时按站点要求等待后重试一次。"""
+        last_reason = ""
+        for attempt in range(self._INTERSTITIAL_MAX_ATTEMPTS):
+            resp = self._request("GET", path, idempotent=True, gate=gate)
+            reason = self._interstitial_reason(resp.text)
+            if not reason:
+                return BeautifulSoup(resp.text, "html.parser")
+            last_reason = reason
+            if attempt + 1 < self._INTERSTITIAL_MAX_ATTEMPTS:
+                logger.debug(
+                    f"蜗牛命中站点频控（{reason}），"
+                    f"{self._INTERSTITIAL_RETRY_WAIT:.1f} 秒后重试：{path}"
+                )
+                time.sleep(self._INTERSTITIAL_RETRY_WAIT)
+        raise WoniuError(
+            f"蜗牛触发搜索频控，降速后仍被拦截：{last_reason}",
+            "woniu_rate_limited",
+        )
+
     def search_vods(self, keyword: str, page: int = 1) -> List[Dict[str, Any]]:
         """检索影片列表。"""
         if not keyword:
@@ -356,8 +400,7 @@ class WoniuClient:
         else:
             path = f"/vodsearch/-------------/?wd={encoded_kw}"
 
-        resp = self._request("GET", path, idempotent=True)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = self._fetch_soup(path, gate=self._search_gate)
         cards = soup.find_all(class_="video-card")
         results: List[Dict[str, Any]] = []
 
@@ -400,8 +443,7 @@ class WoniuClient:
         """读取指定影片详情页，获取解锁后的直链资源。"""
         # 必须确保登录，否则详情页直链会被屏蔽显示为“登录后可见”
         self.check_login()
-        resp = self._request("GET", f"/voddetail/{vod_id}/", idempotent=True)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = self._fetch_soup(f"/voddetail/{vod_id}/")
         items = soup.find_all(class_="pan-link-item")
         resources: List[Dict[str, Any]] = []
 

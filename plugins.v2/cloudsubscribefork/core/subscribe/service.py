@@ -1183,7 +1183,3 @@ class AutoSubscribeService:
             )
         exists, _ = self.download_chain.get_no_exists_info(meta=meta, mediainfo=media)
         return _LibraryProgress(complete=bool(exists))
-
-    def _media_exists(self, item: _ResolvedMedia, season: Optional[int]) -> bool:
-        """兼容内部调用方，仅返回媒体库是否完整。"""
-        return self._media_progress(item, season).complete

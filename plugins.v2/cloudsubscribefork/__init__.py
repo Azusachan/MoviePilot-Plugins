@@ -17,6 +17,7 @@ from app.plugins import _PluginBase
 from app.schemas.types import ChainEventType, EventType, NotificationType
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from .core import (
     CloudDriveManager,
@@ -36,6 +37,8 @@ from .core.api import (
     QRCodeService,
     RuntimeApi,
     SearchApi,
+    StrmProxyApi,
+    StrmProxyServer,
     SyncApi,
 )
 from .core.hook import MessageRoutingHook, PluginEventHandler, SubscriptionSearchHook
@@ -51,6 +54,11 @@ from .core.storage import CloudSubscribeForkDataStore
 from .core.subscribe import AutoSubscribeService
 from .drive.scanner import DriverRegistry
 from .handlers import SearchHandler, SyncHandler, SubscribeHandler, WebhookHandler
+from .search.cloudflare import (
+    close_cloudflare_solver,
+    close_idle_cloudflare_solver,
+    reap_stale_challenge_browsers,
+)
 from .search.scanner import SearchSourceRegistry
 from .subscribe import (  # noqa: F401 - 导入即注册自动订阅渠道
     create_anilist_provider,
@@ -74,6 +82,7 @@ _COMPONENT_TYPES = (
     SyncApi,
     RuntimeApi,
     MediaLibraryApi,
+    StrmProxyApi,
     QRCodeService,
     HistoryApi,
     MessageRoutingHook,
@@ -100,7 +109,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.9.60.162816353.20"
+    plugin_version = "1.7.1.62.764117252.20"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -113,6 +122,7 @@ class CloudSubscribeFork(_PluginBase):
     # 私有变量
     _scheduler: Optional[BackgroundScheduler] = None
     _offline_scheduler: Optional[BackgroundScheduler] = None
+    _browser_reaper_scheduler: Optional[BackgroundScheduler] = None
     _offline_scheduler_lock: RLock = RLock()
     _offline_monitor_lock: RLock = RLock()
     # 配置属性
@@ -200,7 +210,9 @@ class CloudSubscribeFork(_PluginBase):
     _media_server_refresh_delay: int = 0
     _emby_mediainfo_enabled: bool = False
     _platform_media_sync_enabled: bool = False
-    _platform_deep_delete_enabled: bool = False
+    _strm_proxy_server: Optional[Any] = None
+    _strm_proxy_status: Optional[Dict[str, Any]] = None
+    _platform_delete_linkage_enabled: bool = True
     _platform_transfer_history_enabled: bool = False
     _timeout_enabled: bool = True
     _timeout_default_connect: float = 30
@@ -488,7 +500,7 @@ class CloudSubscribeFork(_PluginBase):
             "media_server_refresh_delay",
             "emby_mediainfo_enabled",
             "platform_media_sync_enabled",
-            "platform_deep_delete_enabled",
+            "platform_delete_linkage_enabled",
             "video_extensions",
             "subtitle_extensions",
         }
@@ -609,6 +621,8 @@ class CloudSubscribeFork(_PluginBase):
 
         action = "插件初始化" if reset_runtime else "插件配置已应用"
         self._applied_config = copy.deepcopy(config)
+        self._sync_strm_proxy_server()
+        self._start_challenge_browser_reaper()
         from app.core.plugin import PluginManager
         PluginManager().clear_plugin_agent_tools_cache()
         logger.info(
@@ -665,8 +679,8 @@ class CloudSubscribeFork(_PluginBase):
         self._platform_media_sync_enabled = bool(
             config.get("platform_media_sync_enabled", False)
         )
-        self._platform_deep_delete_enabled = bool(
-            config.get("platform_deep_delete_enabled", False)
+        self._platform_delete_linkage_enabled = bool(
+            config.get("platform_delete_linkage_enabled", True)
         )
         if self._subscribe_handler:
             self._subscribe_handler._notify = self._notify
@@ -752,6 +766,14 @@ class CloudSubscribeFork(_PluginBase):
             for item in configured_resource_order
             if str(item).strip().lower() in supported_resource_types
         ))
+        # 目标网盘必须在优先级内：缺失则置顶，否则仍按旧网盘优先级取候选
+        target_drive = str(config.get("cloud_drive", "") or "").strip().lower()
+        if (
+                target_drive
+                and target_drive in supported_resource_types
+                and target_drive not in self._resource_type_order
+        ):
+            self._resource_type_order.insert(0, target_drive)
         configured_metadata_url = str(config.get(
             "magnet_metadata_url_template",
             "https://itorrents.org/torrent/{info_hash}.torrent",
@@ -866,6 +888,45 @@ class CloudSubscribeFork(_PluginBase):
         self._cloud_drive = self._drive_manager.active_drive
         self._cross_transfer_manager = self._drive_manager.cross_transfer_manager
 
+    def _sync_strm_proxy_server(self) -> None:
+        """按配置启动/停止播放代理监听（端口 0 表示仅使用插件路由）。"""
+        config = self._applied_config or {}
+        target = 0
+        if bool(config.get("strm_proxy_enabled", False)):
+            try:
+                target = max(0, min(int(config.get("strm_proxy_port", 0) or 0), 65535))
+            except (TypeError, ValueError):
+                target = 0
+        server = getattr(self, "_strm_proxy_server", None)
+        if server and server.running and server.port == target:
+            server.rebind(self)
+            self._strm_proxy_status = {"port": target, "running": True, "error": ""}
+            return
+        if server:
+            server.stop()
+            self._strm_proxy_server = None
+        if not target:
+            self._strm_proxy_status = {"port": 0, "running": False, "error": ""}
+            return
+        server = StrmProxyServer.acquire(self, target)
+        self._strm_proxy_server = server
+        running = bool(server and server.running)
+        error = "" if running else (StrmProxyServer.last_error or f"端口 {target} 无法绑定")
+        self._strm_proxy_status = {"port": target, "running": running, "error": error}
+        if not running:
+            logger.warning(
+                f"STRM 播放代理未生效：端口 {target} 不可用（{error}）；"
+                "配置已保存，STRM 仍按模板生成，但代理短链不会被处理"
+            )
+
+    def _stop_strm_proxy_server(self) -> None:
+        """停止播放代理监听。"""
+        server = getattr(self, "_strm_proxy_server", None)
+        if server:
+            server.stop()
+            self._strm_proxy_server = None
+        self._strm_proxy_status = {"port": 0, "running": False, "error": ""}
+
     def register_provider(self, key: str) -> bool:
         """根据网盘标识动态注册驱动。"""
         if self._drive_manager:
@@ -931,8 +992,38 @@ class CloudSubscribeFork(_PluginBase):
         except Exception as error:
             logger.error(f"榜单自动订阅立即执行失败：{error}")
 
+    def _start_challenge_browser_reaper(self) -> None:
+        """启动反盾浏览器回收定时任务（每 10 分钟一次，幂等）。"""
+        try:
+            scheduler = self._browser_reaper_scheduler
+            if scheduler and scheduler.running:
+                return
+            scheduler = BackgroundScheduler(timezone=settings.TZ)
+            scheduler.add_job(
+                func=self._reclaim_challenge_browsers,
+                trigger=IntervalTrigger(minutes=10),
+                id="CloudSubscribeFork_ChallengeBrowserReaper",
+                max_instances=1,
+                coalesce=True,
+                replace_existing=True,
+            )
+            scheduler.start()
+            self._browser_reaper_scheduler = scheduler
+        except Exception as error:
+            logger.debug(f"启动反盾浏览器回收任务失败：{error}")
+
+    def _reclaim_challenge_browsers(self) -> None:
+        """回收反盾浏览器：释放空闲会话，兜底清理热重载残留的 Chromium 进程。"""
+        try:
+            if close_idle_cloudflare_solver():
+                logger.debug("已释放空闲的反盾浏览器会话")
+            reap_stale_challenge_browsers()
+        except Exception as error:
+            logger.debug(f"回收反盾浏览器异常：{error}")
+
     def stop_service(self, preserve_subscribe_queue: bool = False):
         """停止服务"""
+        self._stop_strm_proxy_server()
         if not preserve_subscribe_queue and self._subscribe_search_queue_lock is not None:
             self.cancel_pending_subscribe_searches(shutdown=True)
             executor = self._sync_operation_executor
@@ -1007,6 +1098,20 @@ class CloudSubscribeFork(_PluginBase):
                 if self._offline_scheduler.running:
                     self._offline_scheduler.shutdown()
                 self._offline_scheduler = None
+        except Exception:
+            pass
+
+        try:
+            close_cloudflare_solver()
+        except Exception as error:
+            logger.debug(f"关闭反盾浏览器会话失败：{error}")
+
+        try:
+            if self._browser_reaper_scheduler:
+                self._browser_reaper_scheduler.remove_all_jobs()
+                if self._browser_reaper_scheduler.running:
+                    self._browser_reaper_scheduler.shutdown()
+                self._browser_reaper_scheduler = None
         except Exception:
             pass
 

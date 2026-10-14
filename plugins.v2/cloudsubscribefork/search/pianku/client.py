@@ -95,8 +95,16 @@ class PiankuClient:
             f"{self.base_url}|{self._proxy}",
             request_interval=self.request_interval,
             minimum_interval=0.5,
+            server_error_cooldown_seconds=3,
             serial_requests=True,
         )
+
+    @property
+    def is_cooling_down(self) -> bool:
+        """返回门控当前是否处于风控或服务端错误冷却状态。"""
+        if self._request_gate is None:
+            return False
+        return self._request_gate.cooldown_remaining > 0
 
     def update_config(
             self,
@@ -146,12 +154,17 @@ class PiankuClient:
         text = str(keyword or "").strip()
         if not text:
             return []
+        if self.is_cooling_down:
+            logger.debug(
+                f"片库门控处于冷却中（剩余 {self._request_gate.cooldown_remaining:.1f} 秒），"
+                f"跳过关键词 '{text}'"
+            )
+            return []
         cache_key = text.casefold()
         with self._lock:
             cached = self._page_cache.get(cache_key)
         if cached is not None:
             return [dict(item) for item in cached]
-
         url = f"{self.base_url}/vodsearch/{quote(text)}----------1---.html"
         proxies = normalize_proxies(self._proxy)
 
@@ -224,6 +237,7 @@ class PiankuClient:
         if cached is not None:
             return [dict(item) for item in cached]
 
+        started = time.monotonic()
         try:
             items = self._security().fetch_resources(
                 f"{self.base_url}/voddetail/{key}.html"
@@ -231,7 +245,10 @@ class PiankuClient:
         except PiankuGateError as error:
             raise PiankuError(str(error)) from error
         finally:
-            self._sleep(self.detail_interval)
+            # 详情页已耗时数秒，仅补齐不足的最小间隔，不再叠加固定等待
+            remaining = self.detail_interval - (time.monotonic() - started)
+            if remaining > 0:
+                self._sleep(remaining)
 
         with self._lock:
             self._resource_cache[key] = items

@@ -85,6 +85,18 @@ class MoviePilotRegistration(OwnerDelegator):
                 "summary": "测试榜单代理",
             },
             {
+                "path": "/webhook/emby",
+                "endpoint": self.api_emby_webhook,
+                "methods": ["POST"],
+                "auth": "apikey",
+            },
+            {
+                "path": "/strm/port_check",
+                "endpoint": self.api_strm_port_check,
+                "methods": ["GET"],
+                "auth": "bear",
+            },
+            {
                 "path": "/overview",
                 "endpoint": self.api_platform_overview,
                 "methods": ["GET"],

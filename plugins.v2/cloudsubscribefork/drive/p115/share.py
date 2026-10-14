@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.log import logger
 
-from ..common import DRIVE_RETRY_EXCEPTIONS
+from ..common import DRIVE_RETRY_EXCEPTIONS, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus
 from ...core.delegation import OwnerDelegator
 
@@ -223,8 +223,12 @@ class ShareService(OwnerDelegator):
         if self.is_magnet_url(share_url):
             logger.debug(f"{prefix}Magnet 文件清单需等待115离线下载完成后读取")
             return []
-
-        cache_key = f"{share_url}|{cid}|{max_depth}|{target_season}"
+        season_cache_val = (
+            tuple(sorted(int(s) for s in target_season if str(s).isdigit()))
+            if isinstance(target_season, (set, list, tuple))
+            else target_season
+        )
+        cache_key = f"{share_url}|{cid}|{max_depth}|{season_cache_val}"
         cached = self._share_file_cache.get(cache_key)
         if cached is not None:
             logger.debug(f"{prefix}复用115分享文件缓存：{share_url}")
@@ -332,16 +336,18 @@ class ShareService(OwnerDelegator):
                         continue
                     dir_name = file_info["name"]
 
-                    # 优化：如果指定了目标季数，跳过明显不匹配的季目录
-                    if target_season is not None:
-                        skip_dir = self._should_skip_season_dir(dir_name, target_season)
-                        if skip_dir:
-                            prefix = f"{log_prefix} " if log_prefix else ""
-                            logger.info(
-                                f"{prefix}跳过非目标季目录：{dir_name}（目标：S{target_season}）"
-                            )
-                            continue
-
+                    # 如果指定了目标季数，跳过明显不匹配的季目录
+                    if target_season is not None and should_skip_season_dir(dir_name, target_season):
+                        prefix = f"{log_prefix} " if log_prefix else ""
+                        season_desc = (
+                            f"S{'/S'.join(str(s) for s in sorted(int(x) for x in target_season if str(x).isdigit()))}"
+                            if isinstance(target_season, (set, list, tuple))
+                            else f"S{target_season}"
+                        )
+                        logger.info(
+                            f"{prefix}跳过非目标季目录：{dir_name}（目标：{season_desc}）"
+                        )
+                        continue
                     sub_cid = int(item.get("id", 0))
                     sub_parent_path = (
                         f"{parent_path}/{dir_name}".strip("/") if parent_path else dir_name
@@ -369,51 +375,6 @@ class ShareService(OwnerDelegator):
             logger.error(f"{prefix}列出分享文件失败：{e}")
 
         return files
-
-    def _should_skip_season_dir(self, dir_name: str, target_season: int) -> bool:
-        """
-        判断是否应该跳过该目录（明显是其他季的目录）
-
-        :param dir_name: 目录名
-        :param target_season: 目标季数
-        :return: True 表示应跳过，False 表示需要递归
-        """
-        import re
-
-        # 常见的季数目录命名模式
-        patterns = [
-            r'[Ss]eason\s*(\d+)',  # Season 1, season1
-            r'[Ss](\d+)',  # S1, s01
-            r'第(\d+)季',  # 第1季
-            r'第([一二三四五六七八九十]+)季',  # 第一季
-        ]
-
-        # 中文数字映射
-        cn_num_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-                      '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
-
-        for pattern in patterns:
-            match = re.search(pattern, dir_name)
-            if match:
-                season_str = match.group(1)
-                # 转换中文数字
-                if season_str in cn_num_map:
-                    found_season = cn_num_map[season_str]
-                else:
-                    try:
-                        found_season = int(season_str)
-                    except ValueError:
-                        continue
-
-                # 如果目录明确是其他季，跳过
-                if found_season != target_season:
-                    return True
-                else:
-                    # 明确是目标季，不跳过
-                    return False
-
-        # 目录名没有明显的季数标识，不跳过（可能包含多季或其他内容）
-        return False
 
     def transfer_share(self, share_url: str, save_path: str) -> bool:
         """
@@ -462,7 +423,7 @@ class ShareService(OwnerDelegator):
             target_name: str = None,
             source_sha1: str = None,
     ) -> bool:
-        """转存单个文件，并按源 SHA1 应用平台文件名。"""
+        """转存单个文件。"""
         if self.is_offline_url(share_url):
             return self.add_offline_download(
                 share_url, save_path, target_name=target_name
@@ -479,38 +440,13 @@ class ShareService(OwnerDelegator):
         if parent_id == -1:
             logger.error(f"无法获取或创建目标目录: {save_path}")
             return False
-        success = self._do_transfer(
-            share_code=share_code, receive_code=receive_code, file_id=file_id,
-            parent_id=parent_id, save_path=save_path
-        )
-        if success is None:
-            if target_name and (
-                self.find_file(save_path, target_name)
-                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
-            ):
-                return True
-            resolved = self._transfer_via_alternative_dir(
-                share_code=share_code,
-                receive_code=receive_code,
-                unresolved_ids=[file_id],
-                parent_id=parent_id,
-                save_path=save_path,
-                rename_items={file_id: {"target_name": target_name, "sha1": source_sha1}} if target_name else None,
-            )
-            if resolved:
-                return True
-            return False
-        if not success:
-            if target_name and (
-                self.find_file(save_path, target_name)
-                or self.rename_file_by_sha1(save_path, source_sha1, target_name)
-            ):
-                return True
-            return False
-        if success and target_name:
-            if not self.rename_file_by_sha1(save_path, source_sha1, target_name):
-                logger.debug(f"转存已完成，文件重命名进入后处理队列：{target_name}")
-        return success
+        return self._do_transfer(
+            share_code=share_code,
+            receive_code=receive_code,
+            file_id=str(file_id),
+            parent_id=parent_id,
+            save_path=save_path,
+        ) is not False
 
     def transfer_files_batch(
             self,
@@ -563,37 +499,6 @@ class ShareService(OwnerDelegator):
         if not file_ids:
             return success_ids, failed_ids
 
-        if rename_items:
-            precheck_ids = [
-                file_id
-                for file_id in file_ids
-                if str(
-                    (rename_items.get(str(file_id)) or {}).get("target_name")
-                    or ""
-                ).strip()
-            ]
-            existing, unresolved = self.rename_files_by_sha1_batch(
-                save_path, rename_items, precheck_ids, log_unresolved=False
-            )
-            if existing:
-                success_ids.extend(
-                    file_id for file_id in file_ids if str(file_id) in existing
-                )
-                logger.debug(
-                    f"115 暂存目录已存在 {len(existing)} 个目标文件，"
-                    "本轮直接复用并跳过重复转存"
-                )
-            unresolved_set = set(unresolved)
-            precheck_set = {str(file_id) for file_id in precheck_ids}
-            file_ids = [
-                file_id
-                for file_id in file_ids
-                if str(file_id) not in precheck_set
-                   or str(file_id) in unresolved_set
-            ]
-            if not file_ids:
-                return success_ids, failed_ids
-
         info = self.extract_share_info(share_url)
         share_code = info.get("share_code")
         receive_code = info.get("receive_code")
@@ -610,140 +515,42 @@ class ShareService(OwnerDelegator):
 
         page_size = max(1, min(batch_size, self.SHARE_TRANSFER_PAGE_SIZE))
         total_pages = (len(file_ids) + page_size - 1) // page_size
+        stop_requested = kwargs.get("stop_requested")
         logger.debug(
             f"115 批量转存：共 {len(file_ids)} 个文件，"
             f"分 {total_pages} 页（每页最多 {page_size} 个）"
         )
 
         for page_index in range(0, len(file_ids), page_size):
+            if stop_requested and stop_requested():
+                logger.debug(
+                    f"收到停止请求，剩余 {len(file_ids) - page_index} 个文件未转存"
+                )
+                break
             page_ids = file_ids[page_index:page_index + page_size]
             page_num = page_index // page_size + 1
-
-            # 使用逗号分隔多个文件 ID
-            file_id_str = ",".join(page_ids)
-
             if total_pages > 1:
                 logger.debug(
                     f"处理第 {page_num}/{total_pages} 页，包含 {len(page_ids)} 个文件"
                 )
 
-            success = self._do_transfer(
-                share_code=share_code,
-                receive_code=receive_code,
-                file_id=file_id_str,
-                parent_id=parent_id,
-                save_path=save_path
-            )
-
-            if success is True:
+            # 直接接收进指定目录（由调用方给出订阅名+年度+季），「已存在」视为已就绪
+            if self._do_transfer(
+                    share_code=share_code,
+                    receive_code=receive_code,
+                    file_id=",".join(page_ids),
+                    parent_id=parent_id,
+                    save_path=save_path,
+            ) is not False:
                 success_ids.extend(page_ids)
-                logger.debug(f"第 {page_num} 页转存成功")
-            elif success is None:
-                ready, unresolved = self.rename_files_by_sha1_batch(
-                    save_path, rename_items or {}, page_ids
-                )
-                success_ids.extend(ready)
-                if unresolved:
-                    alt_resolved = self._transfer_via_alternative_dir(
-                        share_code=share_code,
-                        receive_code=receive_code,
-                        unresolved_ids=unresolved,
-                        parent_id=parent_id,
-                        save_path=save_path,
-                        rename_items=rename_items,
-                    )
-                    success_ids.extend(alt_resolved)
-                    still_failed = [fid for fid in unresolved if fid not in alt_resolved]
-                    if still_failed:
-                        failed_ids.extend(still_failed)
             else:
-                logger.warning(
-                    f"第 {page_num} 页批量转存失败，停止逐文件重试以避免放大风控"
-                )
                 failed_ids.extend(page_ids)
             if page_index + len(page_ids) < len(file_ids) and batch_interval:
                 time.sleep(max(0.0, min(float(batch_interval), 60.0)))
-        if rename_items and any(
-                str(item.get("target_name") or "").strip()
-                for item in rename_items.values()
-        ):
-            self.rename_files_by_sha1_batch(save_path, rename_items, success_ids)
 
         logger.debug(f"批量转存完成: 成功 {len(success_ids)} 个，失败 {len(failed_ids)} 个")
         return success_ids, failed_ids
 
-    def _transfer_via_alternative_dir(
-            self,
-            share_code: str,
-            receive_code: str,
-            unresolved_ids: List[str],
-            parent_id: int,
-            save_path: str,
-            rename_items: Dict[str, Dict[str, str]] = None,
-    ) -> List[str]:
-        """当目标目录返回4200045（重复接收）且文件未在目标目录找到时，
-        通过创建临时切换子目录重新接收分享，并将转存文件无缝迁回目标目录。
-        """
-        if not unresolved_ids:
-            return []
-        alt_dir_name = f"transfer_{share_code}"
-        alt_save_path = f"{save_path.rstrip('/')}/{alt_dir_name}"
-        alt_parent_id = self.get_pid_by_path(alt_save_path, mkdir=True)
-        if alt_parent_id == -1:
-            logger.error(f"115 无法创建切换转存目录：{alt_save_path}")
-            return []
-        try:
-            alt_success = self._do_transfer(
-                share_code=share_code,
-                receive_code=receive_code,
-                file_id=",".join(unresolved_ids),
-                parent_id=alt_parent_id,
-                save_path=alt_save_path,
-            )
-            if alt_success is not True:
-                try:
-                    self._delete_items([alt_parent_id])
-                except Exception:
-                    pass
-                return []
-
-            # 获取转存到临时目录中的所有文件并迁移
-            alt_files = self.list_files_by_cid(alt_parent_id) or []
-            alt_fids = [
-                str(f.get("fid") or f.get("file_id") or f.get("id"))
-                for f in alt_files
-                if not f.get("is_dir") and (f.get("fid") or f.get("file_id") or f.get("id"))
-            ]
-            if alt_fids:
-                self._move_items(alt_fids, parent_id)
-                logger.debug(
-                    f"115 切换目录转存成功，已将 {len(alt_fids)} 个文件迁移至目标目录 {save_path}"
-                )
-
-            # 清理临时目录自身
-            try:
-                self._delete_items([alt_parent_id])
-            except Exception as clean_err:
-                logger.debug(f"清理临时切换转存目录失败: {clean_err}")
-
-            # 在目标目录复核已迁入的文件
-            ready, still_unresolved = self.rename_files_by_sha1_batch(
-                save_path, rename_items or {}, unresolved_ids
-            )
-            resolved_ids = list(ready)
-            # 若移动的文件数满足数量，即使个别文件未被 SHA1 立即映射，也视为成功（交由后处理自愈定位）
-            if len(alt_fids) >= len(unresolved_ids):
-                for uid in still_unresolved:
-                    if uid not in resolved_ids:
-                        resolved_ids.append(uid)
-            return resolved_ids
-        except Exception as error:
-            logger.error(f"115 切换目录转存发生异常：{error}")
-            try:
-                self._delete_items([alt_parent_id])
-            except Exception:
-                pass
-            return []
 
     def _do_transfer(
             self,
@@ -818,7 +625,6 @@ class ShareService(OwnerDelegator):
                     return False
 
             except DRIVE_RETRY_EXCEPTIONS as e:
-                last_error = e
                 if attempt < max_retries:
                     wait_time = min(30.0, 0.75 * (2 ** attempt))
                     logger.debug(f"转存异常: {e}, {wait_time:.1f}秒后重试 (尝试 {attempt + 1}/{max_retries + 1})")

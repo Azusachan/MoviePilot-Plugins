@@ -140,6 +140,7 @@ class DummyPostprocessService(PostprocessService):
         owner = types.SimpleNamespace()
         super().__init__(owner)
         self._organize_after_transfer = organize_after_transfer
+        self.organize_enabled = organize_after_transfer
         self._upgrade_mode = "replace"
         self._FINALIZE_MAX_FAILURES = 3
         self._OFFLINE_CHECK_DELAYS = [60, 120, 300, 600]
@@ -159,7 +160,7 @@ class DummyPostprocessService(PostprocessService):
     def _supported_hash_algorithms(self):
         return frozenset({"sha1", "md5"})
 
-    def _cloud_directory_snapshot(self, path, cache=None):
+    def _cloud_directory_snapshot(self, path, cache=None, algorithms=None):
         if cache and path in cache:
             return cache[path]
         return True, DirectoryFileIndex()
@@ -340,6 +341,7 @@ class TestBatchMutationsAndOrganizeContract(unittest.TestCase):
             task_map={},
             tasks_valid=True,
             subscribe_cache={},
+            organize_enabled=service.organize_enabled,
         )
         ctx.directory_snapshots["/staging"] = (True, index)
 
@@ -352,6 +354,41 @@ class TestBatchMutationsAndOrganizeContract(unittest.TestCase):
         service._cloud_batch_mutations.rename_files.assert_called_once()
         # 且在移动组中存在目标目录 /media/tv
         self.assertEqual(ctx.pending["task_1"]["staging_name"], "Target.S01E01.mp4")
+
+    def test_execute_batch_cloud_mutations_move_argument_order(self):
+        """批量移动必须按 move_files(items, save_path) 调用，并把结果写入 moved_files。"""
+        service = DummyPostprocessService(organize_after_transfer=True)
+        prepared = types.SimpleNamespace(name="Target.mkv", sha1="H")
+        moved_file = types.SimpleNamespace(name="Target.mkv", sha1="H")
+        service._cloud_batch_mutations.move_files.return_value = {"task_1": moved_file}
+
+        ctx = PostprocessBatchContext(
+            pending={
+                "task_1": {
+                    "file_name": "Target.mkv",
+                    "staging_dir": "/staging",
+                    "cloud_dir": "/media/tv",
+                    "task_type": "share",
+                }
+            },
+            pending_snapshot={},
+            due_keys=["task_1"],
+            now=1000.0,
+            monitor_token="tok",
+            task_map={},
+            tasks_valid=True,
+            subscribe_cache={},
+            organize_enabled=service.organize_enabled,
+        )
+        ctx.prepared_files["task_1"] = prepared
+
+        service._execute_batch_cloud_mutations(ctx)
+
+        args, _ = service._cloud_batch_mutations.move_files.call_args
+        self.assertEqual(args[0], {"task_1": prepared})
+        self.assertEqual(args[1], "/media/tv")
+        self.assertIs(ctx.moved_files.get("task_1"), moved_file)
+        self.assertIsNotNone(ctx.pending["task_1"].get("moved_at"))
 
     def test_execute_batch_cloud_mutations_when_organize_disabled(self):
         """当关闭自动整理时（Issue #8），文件直接加入 prepared_files 与 moved_files，跳过重命名与跨目录移动。"""
@@ -377,6 +414,7 @@ class TestBatchMutationsAndOrganizeContract(unittest.TestCase):
             task_map={},
             tasks_valid=True,
             subscribe_cache={},
+            organize_enabled=service.organize_enabled,
         )
         ctx.directory_snapshots["/staging/繁花 (2023)"] = (True, index)
 
@@ -445,6 +483,35 @@ class TestReconcilePendingState(unittest.TestCase):
         self.assertIn("task_still_pending", saved)
         self.assertEqual(saved["task_still_pending"]["fail_count"], 1)
         self.assertEqual(result["pending"], 1)
+
+
+class TestQueueSubscriptionCompletion(unittest.TestCase):
+    """订阅完成度记账必须可在无实例上下文调用（曾因静态方法引用 self 抛 NameError 导致死循环）。"""
+
+    def test_queue_subscription_completion_works_without_instance(self):
+        ctx = types.SimpleNamespace(subscription_batches={})
+        media = types.SimpleNamespace(tmdb_id=1423191)
+        item = {
+            "subscribe_id": 571,
+            "season": 1,
+            "task_type": "transfer",
+            "success_episodes": [1, 2, 3],
+        }
+
+        _postprocess.PostprocessService._queue_subscription_completion(item, media, {"k": 1}, ctx)
+
+        (key, batch), = ctx.subscription_batches.items()
+        self.assertEqual(key, (571, 1423191, 1, "transfer"))
+        self.assertEqual(sorted(batch["episodes"]), [1, 2, 3])
+
+    def test_transient_target_is_ignored(self):
+        ctx = types.SimpleNamespace(subscription_batches={})
+        media = types.SimpleNamespace(tmdb_id=1423191)
+        item = {"transient_target": True, "success_episodes": [1]}
+
+        _postprocess.PostprocessService._queue_subscription_completion(item, media, {}, ctx)
+
+        self.assertEqual(ctx.subscription_batches, {})
 
 
 if __name__ == "__main__":

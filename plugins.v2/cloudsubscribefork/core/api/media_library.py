@@ -1,5 +1,6 @@
 """媒体库 Webhook、播放与内容查询 API。"""
 
+import json
 from threading import RLock, Timer
 from typing import Any, Dict, Optional
 
@@ -12,6 +13,7 @@ try:
 except ImportError:
     from app.application.mediaserver import MediaServerHelper
 from app.log import logger
+from fastapi import Request
 from sqlalchemy import func
 
 from .. import OwnerDelegator
@@ -20,7 +22,8 @@ from ..media import media_server_tmdb_filters, tmdb_id_of
 
 class MediaLibraryApi(OwnerDelegator):
     _SYNC_DEBOUNCE_SECONDS = 2
-    _PLATFORM_SYNC_EVENTS = {"library.new", "library.deleted"}
+    _PLATFORM_SYNC_EVENTS = {"library.new"}
+    _MEDIA_DELETE_EVENTS = {"library.deleted", "item.deleted", "item.delete"}
 
     def __init__(self, owner):
         super().__init__(owner)
@@ -36,31 +39,13 @@ class MediaLibraryApi(OwnerDelegator):
             event_name = str(event_info.get("event") or event_info.get("Event") or "").strip().lower()
             channel = str(event_info.get("channel") or "").strip().lower()
             payload = event_info.get("json_object") or event_info
-            title = str(event_info.get("item_name") or event_info.get("Title") or "")
-            desc = str(event_info.get("overview") or event_info.get("Description") or "")
         else:
             event_name = str(getattr(event_info, "event", "") or "").strip().lower()
             channel = str(getattr(event_info, "channel", "") or "").strip().lower()
             payload = getattr(event_info, "json_object", None) or {}
-            title = str(getattr(event_info, "item_name", "") or payload.get("Title") or "")
-            desc = str(getattr(event_info, "overview", "") or payload.get("Description") or "")
 
-        raw_event = str(payload.get("Event") or "").strip().lower() if isinstance(payload, dict) else ""
-        raw_title = str(payload.get("Title") or "") if isinstance(payload, dict) else ""
-        raw_desc = str(payload.get("Description") or "") if isinstance(payload, dict) else ""
-
-        is_deep_delete = (
-                event_name in {"deep.delete", "deep_delete", "deepdelete"}
-                or raw_event in {"deep.delete", "deep_delete", "deepdelete"}
-                or "deep.delete" in event_name
-                or "深度删除" in title or "深度删除" in raw_title
-                or "神医" in title or "神医" in raw_title
-                or "Item Path:" in desc or "Item Path:" in raw_desc
-                or event_name in {"item.delete", "item.deleted", "library.deleted"}
-        )
-
-        if is_deep_delete:
-            return self._handle_platform_deep_delete(event_info)
+        if event_name in self._MEDIA_DELETE_EVENTS:
+            return self._handle_media_delete_notice(event_info)
 
         if not self._platform_media_sync_enabled:
             return False
@@ -88,26 +73,78 @@ class MediaLibraryApi(OwnerDelegator):
                 f"已接收平台 Emby Webhook：{server_name} - {event_name}"
             )
         return scheduled
-    def _handle_platform_deep_delete(self, event_info: Any) -> bool:
-        """按神医通知中的媒体服务器路径精确删除关联内容。"""
-        if not self._platform_deep_delete_enabled:
-            logger.info("收到神医/媒体库深度删除事件，但网盘订阅设置中「联动删除」未开启，已跳过")
+
+    async def api_emby_webhook(self, request: Request) -> dict:
+        """插件自建 Emby 通知入口（宿主适配器丢弃 JSON 报文，故自行接收）。"""
+        payload = await self._read_webhook_payload(request)
+        if not isinstance(payload, dict):
+            logger.warning("Emby 媒体库通知解析失败：报文不是有效的 JSON 对象")
+            return {"success": False, "message": "无效的 Emby 通知报文"}
+
+        server_name = str(request.query_params.get("source") or "").strip()
+        event_name = str(payload.get("Event") or "").strip()
+        item = payload.get("Item") if isinstance(payload.get("Item"), dict) else {}
+        item_path = str(item.get("Path") or "").strip()
+        logger.info(
+            f"收到 Emby 媒体库通知：event={event_name or '未知'}，"
+            f"server={server_name or '未知'}，条目={item.get('Name') or '未知'}"
+        )
+        if item_path:
+            logger.info(f"Emby 媒体库通知条目路径：{item_path}")
+
+        handled = self.handle_platform_media_webhook({
+            "event": event_name,
+            "channel": "emby",
+            "server_name": server_name,
+            "item_name": item.get("Name"),
+            "item_path": item_path,
+            "json_object": payload,
+        })
+        return {"success": True, "handled": bool(handled)}
+
+    @staticmethod
+    async def _read_webhook_payload(request: Request) -> Optional[dict]:
+        """按 原始 JSON → 表单 data 字段 的顺序解析媒体库通知报文。"""
+        raw = await request.body()
+        if raw:
+            try:
+                parsed = json.loads(raw.decode("utf-8", "ignore"))
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+        try:
+            form = await request.form()
+        except Exception:
+            return None
+        data = form.get("data")
+        if isinstance(data, str) and data.strip():
+            try:
+                parsed = json.loads(data)
+            except (TypeError, ValueError):
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _handle_media_delete_notice(self, event_info: Any) -> bool:
+        """按媒体库删除通知的条目路径，联动清理插件历史、网盘文件与本地 STRM。"""
+        if not self._platform_media_sync_enabled:
+            logger.info("收到媒体库删除通知，但总开关「接收媒体库通知」未开启，已跳过联动删除")
+            return False
+        if not self._platform_delete_linkage_enabled:
+            logger.info("收到媒体库删除通知，但「媒体库删除联动」未开启，已跳过联动删除")
             return False
         if not self._sync_handler:
-            logger.warning("深度删除联动失败：同步处理器未初始化")
+            logger.warning("媒体库删除联动失败：同步处理器未初始化")
             return False
-        paths = self._deep_delete_paths(event_info)
+        paths = self._delete_notice_paths(event_info)
         if not paths:
-            logger.warning("深度删除通知缺少有效媒体路径 (Item Path)，已跳过")
+            logger.warning("媒体库删除通知缺少有效条目路径 (Item.Path)，已跳过")
             return False
-        logger.info(
-            f"收到深度删除请求：提取到 {len(paths)} 个目标路径：{paths}，开始匹配插件转存历史..."
-        )
+        logger.info(f"收到媒体库删除通知：条目路径 {paths}，开始匹配插件转存历史")
         result = self._sync_handler.delete_by_media_server_paths(paths)
         if not result.get("matched"):
-            logger.warning(
-                f"深度删除未匹配到对应的插件历史记录（目标路径：{paths}）"
-            )
+            logger.warning(f"媒体库删除未匹配到插件历史记录：{paths}")
             return False
         message = (
             f"路径 {len(paths)} 个，匹配 {result['matched']} 条，"
@@ -117,64 +154,36 @@ class MediaLibraryApi(OwnerDelegator):
         )
         if result.get("skipped"):
             message += f"，跳过 {result['skipped']} 条"
-        logger.info(f"深度删除联动完成：{message}")
+        logger.info(f"媒体库删除联动完成：{message}")
         if self._notify:
             try:
                 self.post_message(
                     mtype=self._notification_type,
-                    title="【网盘订阅】深度联动删除完成",
+                    title="【网盘订阅】媒体库删除联动完成",
                     text=message,
                 )
             except Exception as error:
-                logger.warning(f"深度删除结果通知发送失败：{error}")
+                logger.warning(f"媒体库删除结果通知发送失败：{error}")
         return result["deleted"] > 0
 
     @classmethod
-    def _deep_delete_paths(cls, event_info: Any) -> list[str]:
-        """合并标准路径与神医 Description 中的多版本路径。"""
-        paths: list[str] = []
+    def _delete_notice_paths(cls, event_info: Any) -> list[str]:
+        """提取媒体库删除通知中的条目路径。"""
         if isinstance(event_info, dict):
             raw_path = str(event_info.get("item_path") or event_info.get("Path") or "").strip()
             payload = event_info.get("json_object") or event_info
         else:
             raw_path = str(getattr(event_info, "item_path", "") or "").strip()
             payload = getattr(event_info, "json_object", None) or {}
-            if not payload and hasattr(event_info, "dict"):
-                try:
-                    payload = event_info.dict()
-                except Exception:
-                    payload = {}
 
-        if raw_path:
-            paths.append(raw_path)
-
+        candidates = [raw_path] if raw_path else []
         item_obj = payload.get("Item") if isinstance(payload, dict) else {}
         if isinstance(item_obj, dict) and item_obj.get("Path"):
-            paths.append(str(item_obj["Path"]).strip())
+            candidates.append(str(item_obj["Path"]).strip())
 
-        description = str((payload.get("Description") if isinstance(payload, dict) else "") or (
-            getattr(event_info, "overview", "") if not isinstance(event_info, dict) else "") or "")
-        in_path_section = False
-        for raw_line in description.splitlines():
-            line = raw_line.strip()
-            if "Item Path:" in line:
-                in_path_section = True
-                _, _, inline_path = line.partition(":")
-                if inline_path.strip():
-                    paths.append(inline_path.strip())
-                continue
-            if not in_path_section:
-                continue
-            if any(marker in line for marker in (
-                    "Mount Paths:", "Item Name:", "Description:", "Other Info:"
-            )):
-                in_path_section = False
-                continue
-            if line and not line.startswith(("http://", "https://")):
-                paths.append(line)
         normalized = []
         seen = set()
-        for path in paths:
+        for path in candidates:
             value = cls._normalize_media_path(path)
             if value and value not in seen:
                 seen.add(value)
@@ -183,7 +192,7 @@ class MediaLibraryApi(OwnerDelegator):
 
     @staticmethod
     def _normalize_media_path(path: str) -> str:
-        """统一神医与媒体服务器通知中的路径分隔符。"""
+        """统一媒体服务器通知中的路径分隔符。"""
         value = str(path or "").strip().replace("\\", "/")
         while "//" in value:
             value = value.replace("//", "/")

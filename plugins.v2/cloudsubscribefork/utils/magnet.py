@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import io
+import re
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,31 @@ _TORRENT_METADATA_CACHE = create_platform_ttl_cache(
     maxsize=256,
     ttl=_TORRENT_CACHE_TTL,
 )
+_BTIH_REGEX = re.compile(r"urn:btih:([a-zA-Z0-9]{32,40})", re.IGNORECASE)
+_BARE_HASH_REGEX = re.compile(r"(?:magnet:\??|\b)([a-fA-F0-9]{40}|[A-Z2-7a-z]{32})\b", re.IGNORECASE)
+
+
+def extract_magnet_hash(text: str) -> Optional[str]:
+    """从文本或磁力链接中提取 info_hash，统一返回 40 位大写十六进制字符串。"""
+    if not text:
+        return None
+    raw = str(text).strip()
+    match = _BTIH_REGEX.search(raw)
+    h = match.group(1).upper() if match else None
+    if not h:
+        bare = _BARE_HASH_REGEX.search(raw)
+        if bare:
+            h = bare.group(1).upper()
+    if not h:
+        return None
+    if len(h) == 32:
+        try:
+            return base64.b32decode(h).hex().upper()
+        except Exception:
+            return h
+    if len(h) == 40:
+        return h
+    return None
 
 
 def configure_magnet_metadata_url(url_template: str) -> str:
