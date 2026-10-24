@@ -54,9 +54,8 @@ jobs:
           python3 -m pip install beautifulsoup4 pycryptodome qrcode torf httpx apscheduler curl_cffi sqlalchemy starlette
           python3 -m unittest discover -s tests -v
           python3 -m compileall -q plugins.v2/cloudsubscribefork
-          python3 .github/scripts/get_plugin_meta.py >/dev/null
+          python3 .github/scripts/get_plugin_meta.py --manual >/dev/null
         env:
-          GITHUB_EVENT_NAME: workflow_dispatch
           INPUT_SOURCE_DIRECTORY: plugins.v2
           INPUT_PLUGIN_ID: CloudSubscribeFork
       - uses: actions/setup-node@v4
