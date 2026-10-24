@@ -173,7 +173,7 @@ def automatic_plugins() -> list[dict[str, Any]]:
 
 def main() -> None:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
-    if event_name == "workflow_dispatch":
+    if "--manual" in sys.argv[1:] or event_name == "workflow_dispatch":
         plugins = manual_plugins()
     elif event_name == "push":
         plugins = automatic_plugins()

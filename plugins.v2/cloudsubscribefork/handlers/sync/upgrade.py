@@ -362,7 +362,7 @@ class UpgradeService(OwnerDelegator):
                         target_episodes = []
                         title_episodes = self._magnet_title_episodes(resource, season)
                         if self._is_ed2k_url(share_url):
-                            # ED2K 链接本身就是单个文件：只用该文件名的集数，避免整包标题污染
+                            # ED2K 链接是单个文件：只用该文件名的集数
                             ed2k_episodes = self._resource_title_episodes(
                                 Path(extract_ed2k_filename(share_url)).stem, season
                             )

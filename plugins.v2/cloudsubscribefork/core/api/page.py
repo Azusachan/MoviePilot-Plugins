@@ -354,12 +354,20 @@ class PageApi(OwnerDelegator):
         return StrmGenerator.proxy_identifier_variable(self._provider_reference())
 
     def _effective_strm_template(self) -> Tuple[str, str]:
-        """当前生效的 STRM 基址与模板：始终取自配置（代理只决定入口）。"""
+        """当前生效的 STRM 基址与模板：模板始终取自配置（代理端口按模板需要补全）。"""
         config = getattr(self, "_applied_config", None) or {}
-        port = config.get("strm_proxy_port", 0) if config.get("strm_proxy_enabled") else 0
+        try:
+            port = int(config.get("strm_proxy_port", 0) or 0)
+        except (TypeError, ValueError):
+            port = 0
+        template = str(
+            config.get("strm_url_template") or StrmGenerator.DEFAULT_TEMPLATE
+        )
         return (
-            StrmGenerator.with_port(config.get("strm_base_url", ""), port),
-            str(config.get("strm_url_template") or StrmGenerator.DEFAULT_TEMPLATE),
+            StrmGenerator.resolve_base_url(
+                config.get("strm_base_url", ""), template, port
+            ),
+            template,
         )
 
     def _strm_variables(self) -> List[str]:
