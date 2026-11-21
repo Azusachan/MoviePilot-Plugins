@@ -67,7 +67,7 @@ class PanSouSearchService:
         self._refresh = bool(
             refresh
             if refresh is not None
-            else getattr(self._owner, "_pansou_refresh", True)
+            else getattr(self._owner, "_pansou_refresh", False)
         )
     _PUNCT_GAP_RE = re.compile(
         r"[\s\u3000:：·•.,，。!！?？（）【】\[\]/／\\＼-]+"
@@ -324,7 +324,14 @@ class PanSouSearchService:
         groups = {}
         seen = set()
         raw_count = 0
+        filtered_count = 0
+        processed_count = 0
+        request_count = 0
+        skip_plain_title = False
         for search_key in keywords:
+            if skip_plain_title and search_key == media_title:
+                continue
+            request_count += 1
             response = client.request_search(
                 keyword=search_key,
                 cloud_types=allowed_types,
@@ -336,8 +343,14 @@ class PanSouSearchService:
                 response_mode="merge" if query.resource_list_mode else "results",
             )
             if not response or response.get("error"):
+                if search_key == keyword and keyword != media_title:
+                    skip_plain_title = True
+                reason = (response or {}).get("error") or "接口未返回结果"
+                logger.warning(f"{prefix} 搜索失败：关键词 '{search_key}'，原因：{reason}")
                 continue
             raw_count += int(response.get('raw_count') or 0)
+            filtered_count += int(response.get('filtered_count') or 0)
+            processed_count += int(response.get('processed_count') or 0)
             # Later seasons can carry a year different from the show's debut.
             strict_year = media_type != MediaType.TV or season == 1
             found = self._normalize_results(
@@ -377,8 +390,9 @@ class PanSouSearchService:
                )
                and self._media_type_matches(resource, media_type)
         ]
-        logger.debug(
-            f"{prefix} 渠道统计：关键词数={len(keywords)}，原始条目={raw_count}，"
+        logger.info(
+            f"{prefix} 渠道统计：关键词数={request_count}，原始条目={raw_count}，"
+            f"网盘筛选后={filtered_count}，截断后={processed_count}，"
             f"匹配链接={sum(len(group) for group in groups.values())}，"
             f"有效返回={len(usable)}"
         )

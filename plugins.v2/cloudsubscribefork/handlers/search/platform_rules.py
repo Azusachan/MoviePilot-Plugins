@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import time
+from importlib import import_module
 from typing import Any, Dict, List, Optional
 
 from app.log import logger
@@ -62,17 +64,27 @@ class PlatformRuleService(OwnerDelegator):
         return title
 
     @staticmethod
+    def _resolve_subscribe_chain() -> Any:
+        """解析订阅链：v2 走包根，v3 同时兼容查询模块的独立入口。"""
+        for module_name, attr_name in (
+                ("app.chain.subscribe", "SubscribeChain"),
+                ("app.chain.subscribe.query", "SubscribeQueryChain"),
+        ):
+            try:
+                module = import_module(module_name)
+            except ImportError:
+                continue
+            chain = getattr(module, attr_name, None)
+            if chain is not None:
+                return chain
+        return None
+
+    @staticmethod
     def _safe_subscribe_params(subscribe: Any) -> Optional[Dict[str, Any]]:
         """安全读取订阅参数，同时兼容 MoviePilot v2 与 v3 契约。"""
         if not subscribe:
             return None
-        try:
-            from app.chain.subscribe import SubscribeChain
-        except ImportError:
-            try:
-                from app.chain.subscribe.query import SubscribeQueryChain as SubscribeChain
-            except ImportError:
-                SubscribeChain = None
+        SubscribeChain = PlatformRuleService._resolve_subscribe_chain()
         if not SubscribeChain:
             return None
 
@@ -131,13 +143,6 @@ class PlatformRuleService(OwnerDelegator):
                 resources, season=season, target_episodes=target_episodes
             )
         try:
-            try:
-                from app.chain.subscribe import SubscribeChain
-            except ImportError:
-                try:
-                    from app.chain.subscribe.query import SubscribeQueryChain as SubscribeChain
-                except ImportError:
-                    SubscribeChain = None
             try:
                 from app.application.torrent.download import TorrentHelper
             except ImportError:
@@ -222,18 +227,29 @@ class PlatformRuleService(OwnerDelegator):
         raw_groups = getattr(subscribe, "filter_groups", None)
         if raw_groups and not hasattr(raw_groups, "_mock_return_value"):
             return list(raw_groups)
+        # 全局规则组在一次搜索内被每个搜索源各读一次，短 TTL 缓存避免重复读库。
+        cache = self.__dict__.get("_platform_rule_groups_cache")
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_platform_rule_groups_cache", cache)
+        config_key = (
+            SystemConfigKey.BestVersionFilterRuleGroups
+            if self._is_cloud_upgrade_subscribe(subscribe)
+            else SystemConfigKey.SubscribeFilterRuleGroups
+        )
+        cached = cache.get(config_key)
+        now = time.monotonic()
+        if cached and now - cached[0] < 5.0:
+            return list(cached[1])
+        groups: List[str] = []
         try:
-            config_key = (
-                SystemConfigKey.BestVersionFilterRuleGroups
-                if self._is_cloud_upgrade_subscribe(subscribe)
-                else SystemConfigKey.SubscribeFilterRuleGroups
-            )
             val = SystemConfigOper().get(config_key)
             if val and not hasattr(val, "_mock_return_value"):
-                return list(val)
+                groups = list(val)
         except Exception:
             pass
-        return []
+        cache[config_key] = (now, groups)
+        return list(groups)
 
     def rank_file_candidates(
             self,
@@ -255,13 +271,6 @@ class PlatformRuleService(OwnerDelegator):
                 reverse=True,
             )
 
-        try:
-            from app.chain.subscribe import SubscribeChain
-        except ImportError:
-            try:
-                from app.chain.subscribe.query import SubscribeQueryChain as SubscribeChain
-            except ImportError:
-                SubscribeChain = None
         try:
             from app.application.torrent.download import TorrentHelper
         except ImportError:

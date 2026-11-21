@@ -110,6 +110,21 @@ class PanSouAliasChainTests(unittest.TestCase):
         for call in calls:
             self.assertEqual(call.kwargs['cloud_types'], ['115', 'ed2k', 'magnet'])
 
+    def test_movie_year_query_error_skips_plain_retry_but_searches_aliases(self):
+        self.query.media_type = media_type.MOVIE
+        first = self.media.title + ' 2009'
+        def respond(keyword, **kwargs):
+            if keyword == first:
+                return {'error': 'fixture timeout'}
+            return {'results': [row('Fumo Chitai 2009', kind='movie')]}
+        client = self.service._pansou_client.request_search
+        client.side_effect = respond
+        self.assertEqual(len(self.service.search(self.query)), 1)
+        keywords = [call.kwargs['keyword'] for call in client.call_args_list]
+        self.assertEqual(keywords[0], first)
+        self.assertNotIn(self.media.title, keywords)
+        self.assertIn('Fumo Chitai', keywords)
+
     def test_later_season_year_is_not_compared_to_debut(self):
         self.query.season = 2
         self.service._pansou_client.request_search.return_value = dict(

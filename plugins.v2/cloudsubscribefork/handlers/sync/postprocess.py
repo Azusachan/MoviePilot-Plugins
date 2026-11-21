@@ -790,6 +790,15 @@ class PostprocessService(OwnerDelegator):
             if native_id and native_id not in task_map:
                 task_map[native_id] = task
 
+        # Pending magnet IDs also contain the subscription ID.
+        for pending_item in pending.values():
+            pending_id = str(pending_item.get("task_id") or "").upper()
+            parts = pending_id.split(":")
+            if len(parts) == 3 and parts[0] == "MAGNET":
+                native_task = task_map.get(parts[1])
+                if native_task is not None:
+                    task_map[pending_id] = native_task
+
         context = PostprocessBatchContext(
             pending=pending,
             pending_snapshot=pending_snapshot,
@@ -1517,7 +1526,10 @@ class PostprocessService(OwnerDelegator):
             item.get("moved_at")
             or (task and task.get("completed"))
         )
-        directory_valid, file_index = (False, None) if task_done else self._snapshot(ctx, staging_dir)
+        directory_valid, file_index = (
+            self._snapshot(ctx, staging_dir)
+            if not task_done and task is None else (False, {})
+        )
         if not task_done and directory_valid and file_index:
             if self._task_type(item) == "magnet":
                 # 磁力整包：目录出现内容即交由 Magnet 流程整理

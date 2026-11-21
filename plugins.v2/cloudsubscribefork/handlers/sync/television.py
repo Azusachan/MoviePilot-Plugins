@@ -11,6 +11,7 @@ from app.utils.string import StringUtils
 
 from .utils import candidate_progress, normalize_season
 from ...core import OwnerDelegator
+from ...utils.episodes import season_total_episodes
 
 
 class TelevisionSyncProcessor(OwnerDelegator):
@@ -106,20 +107,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
             total_ep = subscribe.total_episode or 0
             start_ep = subscribe.start_episode or 1
             if total_ep <= 0 and mediainfo:
-                season_episodes = (getattr(mediainfo, "seasons", None) or {}).get(season)
-                if season_episodes and isinstance(season_episodes, (list, tuple, set)):
-                    total_ep = max([int(x) for x in season_episodes if str(x).isdigit()] or [0])
-                if total_ep <= 0 and hasattr(mediainfo, "season_info"):
-                    for s_info in (mediainfo.season_info or []):
-                        s_num = getattr(s_info, "season_number", None) if not isinstance(s_info, dict) else s_info.get(
-                            "season_number")
-                        if s_num == season:
-                            ep_count = getattr(s_info, "episode_count", None) if not isinstance(s_info,
-                                                                                                dict) else s_info.get(
-                                "episode_count")
-                            if ep_count and int(ep_count) > 0:
-                                total_ep = int(ep_count)
-                                break
+                total_ep = season_total_episodes(mediainfo, season)
             expected_episodes = set(range(start_ep, total_ep + 1)) if total_ep >= start_ep else set()
             discover_manual_episodes = bool(
                 manual_resources and transient_target and not expected_episodes
@@ -230,7 +218,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
             if not manual_resources:
                 series_id = getattr(mediainfo, "tmdb_id", None) or getattr(subscribe, "tmdb_id", None) or getattr(
                     mediainfo, "title", "")
-                series_search_key = f"{getattr(mediainfo, 'type', 'tv')}:{series_id}"
+                series_search_key = f"{getattr(mediainfo, 'type', 'tv')}:{series_id}:S{season:02d}"
                 cached_series_results = getattr(self, "_series_search_cache", {}).get(series_search_key)
                 if cached_series_results is not None:
                     prefetched_results = copy.deepcopy(cached_series_results)
@@ -510,6 +498,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 resource_title=resource_title,
                                 target_season=dir_target_season,
                                 log_prefix=search_prefix,
+                                strict=bool(manual_resources),
                                 **val_kwargs,
                             ))
                             continue
