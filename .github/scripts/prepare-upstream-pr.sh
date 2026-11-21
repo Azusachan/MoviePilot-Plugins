@@ -65,7 +65,12 @@ for target in "$base" "$upstream_sha"; do
       continue
     fi
     conflicts="$(git diff --name-only --diff-filter=U)"
-    git merge --abort
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+      git merge --abort
+    fi
+    if [ -z "$conflicts" ]; then
+      conflicts="Merge strategy stopped before producing a conflict index. Inspect the strategy error in the linked run."
+    fi
     gh pr comment "$pr" --body "Upstream merge blocked by conflicts in:
 
 $conflicts

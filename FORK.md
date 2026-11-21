@@ -25,8 +25,13 @@ available in `.github/UPSTREAM_COMMIT` and in each release note.
 1. Creates a `codex/sync-upstream-<full-SHA>` branch from fork `main`, records
    `.github/UPSTREAM_TARGET`, and opens a PR
    against fork `main` **before** attempting the merge.
-2. Merges current fork `main` and the upstream commit into that branch using
-   `git merge --no-ff`. Only numeric version metadata conflicts may be resolved
+2. Merges current fork `main` normally. For the upstream merge the
+   `fork-identity` Git strategy presents the common ancestor and upstream tip
+   under the installed backend and frontend paths. It maps the plugin identifier
+   in source, tests and package metadata, then runs Git's three-way merge against
+   the real fork head. Binary assets keep their original contents. The actual
+   upstream SHA is the second parent. A merge base different from the recorded
+   upstream commit requires review. Only numeric version metadata conflicts may be resolved
    automatically. Business conflicts stop the merge: it is aborted,
    conflicting paths are commented on the PR, and its validation status fails.
    The proposal branch need not show GitHub's native conflict banner: its failed
