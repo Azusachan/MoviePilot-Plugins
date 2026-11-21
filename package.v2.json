@@ -2,14 +2,21 @@
   "CloudSubscribeFork": {
     "name": "网盘订阅助手 · Azusa",
     "description": "整合网盘能力与多渠道资源搜索，自动查找并补充订阅缺失的影视内容",
-    "labels": "订阅,网盘,转存,搜索,通知,刮削,签到,ed2k,magnet",
-    "version": "1.7.5.69.2096737462.20",
+    "labels": "自动,订阅,网盘,转存,搜索,通知,刮削,签到,电驴,磁力,115,夸克,UC,百度",
+    "version": "1.7.12.103.1499513030.20",
     "icon": "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "odomu",
     "level": 1,
     "release": true,
     "system_version": ">=2.14.6",
     "history": {
+      "v1.7.12": "修复电影洗版丢失媒体服务器基线、已解锁资源链接读取与集数覆盖解析；新增同评分大小差异阈值，细化洗版进度与403错误提示",
+      "v1.7.11": "修复HDHaven 403与会话关闭自愈，按季隔离剧集缓存，关联115离线任务并按上限读取历史",
+      "v1.7.10": "修复智能体搜索推荐候选崩溃，重构优化智能体搜索资源速度",
+      "v1.7.9": "修复MoviePilot v3下批量元数据刮削NFO写入类型错误",
+      "v1.7.8": "修复平台下载接管失败误拦截、完成通知阻塞订阅完成、失效分享重复解锁转存，STRM中转按直链凭据自动启用",
+      "v1.7.7": "修复Pansou漏搜、夸克与UC分享遍历遗漏、STRM播放认证丢失及分段读取低速问题",
+      "v1.7.6": "支持UC网盘，优化日志提示",
       "v1.7.5": "支持百度网盘",
       "v1.7.4": "支持外部服务求解CF, 修复浏览器内存占用问题",
       "v1.7.3": "修复STRM链接编码问题，修复剧集错误识别音乐问题",
@@ -88,7 +95,8 @@
       "v1.6.9.60.162816353.20": "Plex compatibility build based on upstream 09b461615754",
       "v1.7.1.62.764117252.20": "Plex compatibility build based on upstream 2d8b8104eb91",
       "v1.7.3.63.3741968699.20": "Plex compatibility build based on upstream df09e93b4f1f",
-      "v1.7.5.69.2096737462.20": "Plex compatibility build based on upstream 7cf9acb6841f"
+      "v1.7.5.69.2096737462.20": "Plex compatibility build based on upstream 7cf9acb6841f",
+      "v1.7.12.103.1499513030.20": "Plex compatibility build based on upstream 5960c0c6d392"
     }
   }
 }

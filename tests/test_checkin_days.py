@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-from plugin_env import OwnerDelegator, register_mock
+from plugin_env import OwnerDelegator, load_module, register_mock
 
 # 构造 mock 的基础依赖
 register_mock("app")
@@ -63,11 +63,8 @@ JuyingClient = mod_j.JuyingClient
 JuyingError = mod_j.JuyingError
 
 # 加载核心规范模块（无宿主依赖），校验模式文案契约
-definitions_path = os.path.join(plugins_v2_path, "cloudsubscribefork/core/definitions.py")
-spec_d = importlib.util.spec_from_file_location("cloudsubscribefork_definitions_under_test", definitions_path)
-mod_d = importlib.util.module_from_spec(spec_d)
-sys.modules["cloudsubscribefork_definitions_under_test"] = mod_d
-spec_d.loader.exec_module(mod_d)
+load_module("cloudsubscribefork.core.delegation", "plugins.v2/cloudsubscribefork/core/delegation.py")
+mod_d = load_module("cloudsubscribefork.core.definitions", "plugins.v2/cloudsubscribefork/core/definitions.py")
 
 
 class TestHDHavenClientCheckin(unittest.TestCase):

@@ -83,6 +83,7 @@ drive_common.CloudDriveFileServiceBase = object
 
 # 加载真实 cloud.py / definitions.py
 load_module("cloudsubscribefork.core.cloud", "plugins.v2/cloudsubscribefork/core/cloud.py")
+load_module("cloudsubscribefork.core.delegation", "plugins.v2/cloudsubscribefork/core/delegation.py")
 load_module("cloudsubscribefork.core.definitions", "plugins.v2/cloudsubscribefork/core/definitions.py")
 
 register_package("cloudsubscribefork.core")
@@ -90,6 +91,12 @@ register_mock("cloudsubscribefork.core.transfer")
 
 register_package("cloudsubscribefork.utils")
 register_mock("cloudsubscribefork.utils.cache", create_platform_ttl_cache=MagicMock())
+register_mock(
+    "cloudsubscribefork.utils.share_expiry",
+    is_share_expired=lambda url: False,
+    mark_share_expired=lambda *args, **kwargs: None,
+    is_expired_share_error=lambda *args, **kwargs: False,
+)
 
 register_package("cloudsubscribefork.search")
 register_module("cloudsubscribefork.search.types", RESOURCE_TYPE_DISPLAY={

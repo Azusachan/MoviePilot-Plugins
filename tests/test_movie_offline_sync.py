@@ -11,6 +11,7 @@ from plugin_env import (
     OwnerDelegator,
     ensure_package,
     install_app_mocks,
+    load_module,
     set_media_type,
 )
 
@@ -34,6 +35,12 @@ install_app_mocks(
     *[f"cloudsubscribefork.handlers.sync.{name}" for name in _SYNC_COMPONENTS],
 )
 MediaType = set_media_type(movie="movie", tv="tv")
+load_module("cloudsubscribefork.utils.episodes", "plugins.v2/cloudsubscribefork/utils/episodes.py")
+
+_step_share_expiry = ensure_package("cloudsubscribefork.utils.share_expiry")
+_step_share_expiry.is_share_expired = lambda url: False
+_step_share_expiry.mark_share_expired = lambda *args, **kwargs: None
+_step_share_expiry.is_expired_share_error = lambda *args, **kwargs: False
 
 mock_notif = ensure_package("cloudsubscribefork.handlers.notification")
 mock_notif.MediaServerNotifier = MagicMock()

@@ -25,6 +25,7 @@ from ...search.types import (
     resource_type_name,
 )
 from ...utils import MediaFileParser, parse_magnet_metadata
+from ...utils.share_expiry import is_share_expired
 
 
 class ResourceTransferService(OwnerDelegator):
@@ -596,16 +597,24 @@ class ResourceTransferService(OwnerDelegator):
             log_prefix: str = "",
     ) -> str:
         """统一处理积分搜索源的延迟解锁，并展开一次返回的多条链接。"""
+        resource_ref = str(resource.get("resource_ref") or "").strip()
+        if resource_ref and self._is_resource_ref_blacklisted(resource_ref):
+            prefix = f"{log_prefix} " if log_prefix else ""
+            logger.debug(f"{prefix}跳过已加入黑名单的资源：{resource_ref}")
+            return ""
         share_url = str(resource.get("url") or "").strip()
         if share_url:
+            if self._drop_expired_resource_link(share_url, resource_ref, log_prefix):
+                return ""
             return self._expand_resource_urls(
                 resources, resource_index, resource, share_url
             )
         if not (
                 resource.get("need_unlock") or resource.get("need_access")
         ):
-            return ""
-        resource_ref = str(resource.get("resource_ref") or "").strip()
+            # 站点已标记解锁但卡片未内嵌分享链接时，仍需读取详情页取链接，否则“已解锁资源”会在每一轮被静默丢弃、无法转存新集。
+            if not (resource.get("is_unlocked") and resource_ref):
+                return ""
         if not resource_ref:
             return ""
         source = str(resource.get("source") or "").strip().lower()
@@ -640,6 +649,10 @@ class ResourceTransferService(OwnerDelegator):
             unlock_points = int(resource.get("unlock_points") or 0)
         except (TypeError, ValueError):
             unlock_points = 0
+        is_unlocked_resource = bool(resource.get("is_unlocked"))
+        if is_unlocked_resource:
+            # 已解锁资源只读取链接，不消耗积分。
+            unlock_points = 0
         prefix = f"{log_prefix} " if log_prefix else ""
         resource_title = str(resource.get("title") or "").strip()
         if not self._search_handler.can_unlock(source):
@@ -658,15 +671,25 @@ class ResourceTransferService(OwnerDelegator):
                 f"需要 {unlock_points} 积分，当前预算不足"
             )
             return ""
-        action_label = "获取免费资源链接" if unlock_points <= 0 else "消耗积分解锁"
+        action_label = (
+            "读取已解锁资源链接"
+            if is_unlocked_resource
+            else "获取免费资源链接"
+            if unlock_points <= 0
+            else "消耗积分解锁"
+        )
         media_page_url = str(resource.get("media_page_url") or "").strip()
         media_page_suffix = f"，媒体页：{media_page_url}" if media_page_url else ""
         logger.info(
             f"{prefix}遇到尚未取得链接的 {source_label} 资源 {resource_title} "
             f"(resource_ref: {resource_ref})，尝试{action_label}{media_page_suffix}"
         )
+        unlock_payload = (
+            {**resource, "need_access": True, "unlock_points": 0}
+            if is_unlocked_resource else resource
+        )
         unlocked = self._search_handler.unlock_resource(
-            source, resource, search_label=search_label
+            source, unlock_payload, search_label=search_label
         )
         if self._stop_requested() or not unlocked:
             if not self._stop_requested():
@@ -674,17 +697,47 @@ class ResourceTransferService(OwnerDelegator):
                     f"{prefix}未能取得 {source_label} 资源链接：{resource_title}"
                 )
             return ""
-        return self._expand_resource_urls(
+        resolved_url = self._expand_resource_urls(
             resources, resource_index, resource, unlocked
         )
+        if self._drop_expired_resource_link(resolved_url, resource_ref, log_prefix):
+            return ""
+        return resolved_url
+
+    def _drop_expired_resource_link(
+            self,
+            share_url: str,
+            resource_ref: str,
+            log_prefix: str = "",
+    ) -> bool:
+        """分享已确认过期时拉黑 resource_ref 并跳过，避免每轮重复解锁转存。"""
+        if not self._is_expired_share_link(share_url):
+            return False
+        if resource_ref:
+            self._add_resource_ref_blacklist(resource_ref, "分享链接已过期")
+        prefix = f"{log_prefix} " if log_prefix else ""
+        logger.info(
+            f"{prefix}分享链接已确认过期，已加入黑名单跳过："
+            f"{self._resource_log_reference(share_url)}"
+        )
+        return True
 
     def _validate_resource_url(
             self,
             share_url: str,
             resource_label: str = "分享链接",
             log_prefix: str = "",
+            strict: bool = False,
     ) -> bool:
         """使用对应 Provider 的统一能力校验资源链接。"""
+        prefix = f"{log_prefix} " if log_prefix else ""
+        if is_share_expired(share_url):
+            message = (
+                f"{prefix}{resource_label}已确认失效（24小时内跳过）："
+                f"{self._resource_log_reference(share_url)}"
+            )
+            (logger.warning if strict else logger.debug)(message)
+            return False
         provider = self._resource_provider_for_url(share_url)
         share_service = (
             provider.require(CloudDriveCapability.SHARE_TRANSFER)
@@ -698,10 +751,11 @@ class ResourceTransferService(OwnerDelegator):
         if status.is_valid:
             return True
         prefix = f"{log_prefix} " if log_prefix else ""
-        logger.debug(
+        message = (
             f"{prefix}{resource_label}无效："
             f"{self._resource_log_reference(share_url)}，原因：{status.status_text}"
         )
+        (logger.warning if strict else logger.debug)(message)
         return False
 
     @staticmethod
@@ -776,8 +830,13 @@ class ResourceTransferService(OwnerDelegator):
             log_prefix: str = "",
             target_file_ids: Optional[List[str]] = None,
             target_file_names: Optional[List[str]] = None,
+            strict: bool = False,
     ) -> List[Dict[str, Any]]:
-        """校验分享并读取文件列表，供电影、剧集和洗版共同使用。"""
+        """校验分享并读取文件列表，供电影、剧集和洗版共同使用。
+
+        ``strict`` 用于用户手动提交的资源：失败原因升到 WARNING，避免整条同步
+        只留下「共转存 0 个文件」而看不到任何原因。
+        """
         if self._is_cloud_resource_url(share_url):
             files = self._list_cloud_resource_files(
                 self._cloud_resource_path(share_url),
@@ -810,7 +869,8 @@ class ResourceTransferService(OwnerDelegator):
             return copy.deepcopy(cached)
 
         if not self._validate_resource_url(
-                share_url, resource_label="分享链接", log_prefix=log_prefix
+                share_url, resource_label="分享链接", log_prefix=log_prefix,
+                strict=strict,
         ):
             return []
         kwargs = {}
@@ -834,9 +894,8 @@ class ResourceTransferService(OwnerDelegator):
         files = list(MediaFileParser.iter_files(files))
         if not files:
             label = resource_title or self._resource_log_reference(share_url)
-            logger.debug(
-                f"{log_prefix + ' ' if log_prefix else ''}分享链接无内容：{label}"
-            )
+            message = f"{log_prefix + ' ' if log_prefix else ''}分享链接无内容：{label}"
+            (logger.warning if strict else logger.debug)(message)
         files = self._filter_files_by_explicit_selection(
             files,
             target_file_ids=target_file_ids,

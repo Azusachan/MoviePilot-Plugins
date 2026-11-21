@@ -126,3 +126,49 @@ not universal scores; the second/third tiers include coverage-oriented fallback
 choices rather than claiming every group has been scientifically ranked.
 The policy is maintained in `search/fansubs.py`, covered by tests and preserved
 by upstream-sync. Mikan UI describes the active policy.
+
+## Fork 保留的洗版与整理说明
+“启用网盘洗版”处理网盘搜索候选。订阅必须已开启 MoviePilot 原生 `best_version`；未选择洗版范围时处理全部此类订阅，选择后只处理指定订阅。
+
+插件以 MoviePilot `pri_order`、真实整理记录、插件转存历史、媒体库路径和真实网盘文件建立旧版本基线。无法确认旧网盘文件时不执行替换；没有旧版本的普通候选仍按正常转存处理。
+
+### PT 洗版
+
+“启用 PT 洗版”默认关闭。开启后监听 MoviePilot `TransferComplete`：只有带下载器和下载 Hash、且已整理到本地存储的 PT/RSS
+文件才进入判断。符合 `best_version`、洗版范围和评分条件后，文件上传到当前网盘暂存目录，再复用统一替换与后处理链。
+
+115、123、夸克和光鸭均支持 PT 上传。上传在后台执行，不移动或删除下载器源文件，不影响保种。电视剧只处理能明确识别季集的单集文件，季包或无法确认集号的文件会跳过。
+
+洗版模式：
+
+- 保留最大文件：评分相同仅在新文件更大时替换。
+- 保留最小文件：评分相同仅在新文件更小时替换。
+- 直接替换：满足优先级条件后替换旧版本。
+- 新旧共存：保留旧文件，并为新版本生成不冲突的名称。
+
+“评分自愈间隔”用于刷新洗版基线。PT 洗版没有找到旧网盘文件时，可将符合条件的本地文件作为新的网盘版本上传。
+
+## 通知与历史
+
+- “发送消息通知”控制 MoviePilot 消息，并可选择通知类型。
+- “启用入库通知”在 STRM 或目标文件就绪后通知所选媒体服务器，不执行全库扫描。
+- Emby 媒体信息提取使用 MoviePilot 中已配置的 Emby 服务。
+- 订阅缺集检查和洗版基线通过 MoviePilot 媒体服务器接口读取，支持 Emby、Jellyfin、Plex、飞牛影视、 MediaVault、极影视和绿联影视；Emby
+  媒体流详情提取仍仅用于 Emby。
+- 媒体服务器路径映射每行使用 `媒体服务器路径#MoviePilot 路径`。
+- Webhook 支持 GET/POST、独立地址和超时。
+
+历史页支持筛选、通知、重试、单条/批量删除和从历史或媒体服务器内容发起手动网盘洗版。运行中的后处理历史允许删除其任务状态；关联文件删除必须由用户单独选择。
+
+## 平台入口
+
+- 侧栏工作台：运行任务、PT 上传进度、历史、手动资源、离线任务和缓存管理。
+- 远程命令：`/cloud_sync`、`/cloud_status`、`/cloud_link`、`/cloud_cache_clear`。
+- 智能体：查询状态、启动同步、搜索与选择资源、提交链接、清理缓存和更新配置。
+- 工作流：执行订阅搜索或处理上下文中的资源链接。
+- 仪表板：显示运行摘要、任务和转存统计。
+
+## 源码与许可
+
+源码模块和 Release 目录结构见 [`plugins.v2/cloudsubscribefork/README.md`](plugins.v2/cloudsubscribefork/README.md)
+。本插件按 [GNU General Public License v3.0](LICENSE) 许可。

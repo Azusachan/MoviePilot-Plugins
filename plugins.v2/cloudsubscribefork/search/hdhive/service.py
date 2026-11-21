@@ -178,8 +178,7 @@ class HDHiveSearchService(OwnerDelegator):
                     proxy=proxy,
                     request_interval=self._hdhive_request_interval,
                     should_stop=self._stop_requested,
-                    get_data_func=getattr(self, "get_data", None),
-                    save_data_func=getattr(self, "save_data", None),
+                    **self.storage_hooks(),
                 )
                 self._hdhive_web_client = client
                 self._hdhive_web_client_owned = True
@@ -895,9 +894,9 @@ class HDHiveSearchService(OwnerDelegator):
                         "target_not_covered": "file-list 未覆盖当前缺集",
                         "resource_invalid": "file-list 标记资源失效",
                     }.get(skip_reason, skip_reason)
-                    logger.debug(
+                    logger.info(
                         f"{search_prefix} {mode_label} 预览后跳过资源："
-                        f"{reason_label}"
+                        f"{reason_label}，slug={slug}"
                     )
                     return None
             else:
