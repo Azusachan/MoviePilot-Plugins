@@ -55,7 +55,11 @@ gh api "repos/$GH_REPO/statuses/$(git rev-parse HEAD)" \
   -f target_url="$RUN_URL" -f description='Checking merge conflicts and fork compatibility'
 published="$(git rev-parse HEAD)"
 for target in "$base" "$upstream_sha"; do
-  if ! git merge --no-ff --no-edit "$target"; then
+  strategy=()
+  if [ "$target" = "$upstream_sha" ]; then
+    strategy=(--strategy=fork-identity)
+  fi
+  if ! PATH="$PWD/.github/scripts:$PATH" git merge --no-ff --no-edit "${strategy[@]}" "$target"; then
     if python3 .github/scripts/resolve_version_conflicts.py; then
       git commit --no-edit
       continue
