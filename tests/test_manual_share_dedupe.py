@@ -40,6 +40,7 @@ load_module(
     "cloudsubscribefork.handlers.sync.utils",
     "plugins.v2/cloudsubscribefork/handlers/sync/utils.py",
 )
+load_module("cloudsubscribefork.utils.episodes", "plugins.v2/cloudsubscribefork/utils/episodes.py")
 _television = load_module(
     "cloudsubscribefork.handlers.sync.television",
     "plugins.v2/cloudsubscribefork/handlers/sync/television.py",

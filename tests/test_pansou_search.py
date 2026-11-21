@@ -42,7 +42,6 @@ dependencies.update({
     PREFIX + ".core": module(PREFIX + ".core", SearchQuery=object),
     PREFIX + ".search.magnet": module(PREFIX + ".search.magnet", clear_cache=lambda: None,
                                      normalize_magnets=lambda rows, source: rows),
-    PREFIX + ".search.matching": module(PREFIX + ".search.matching", normalize_season=lambda value: value),
     PREFIX + ".utils.http_client": module(
         PREFIX + ".utils.http_client", requests=http, RequestGate=MagicMock(),
         normalize_proxies=lambda value: value,
@@ -51,6 +50,8 @@ dependencies.update({
 })
 dependencies["app.schemas"].MediaInfo = object
 with patch.dict(sys.modules, dependencies):
+    load(PREFIX + ".core.media", "core/media.py")
+    load(PREFIX + ".search.mikan.titles", "search/mikan/titles.py")
     load(PREFIX + ".search.types", "search/types.py")
     Client = load(PREFIX + ".search.pansou.client", "search/pansou/client.py").PanSouClient
     Service = load(PREFIX + ".search.pansou.service", "search/pansou/service.py").PanSouSearchService

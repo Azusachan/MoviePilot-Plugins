@@ -83,6 +83,7 @@ drive_common.CloudDriveFileServiceBase = object
 
 # 加载真实 cloud.py / definitions.py
 load_module("cloudsubscribefork.core.cloud", "plugins.v2/cloudsubscribefork/core/cloud.py")
+load_module("cloudsubscribefork.core.delegation", "plugins.v2/cloudsubscribefork/core/delegation.py")
 load_module("cloudsubscribefork.core.definitions", "plugins.v2/cloudsubscribefork/core/definitions.py")
 
 register_package("cloudsubscribefork.core")
