@@ -28,7 +28,6 @@ from ...core.media import is_subscribe_best_version, tmdb_id_of
 from ...search.dian115 import Dian115SearchService
 from ...search.hdhaven import HDHavenSearchService
 from ...search.hdhive import HDHiveSearchService
-from ...search.http_client import RequestGateCooldown
 from ...search.matching import is_anime_media, positive_ints
 from ...search.mikan.service import filter_fansubs
 from ...search.pansou import PanSouSearchService
@@ -36,6 +35,7 @@ from ...search.registry import create_search_registry
 from ...search.scanner import SearchSourceRegistry
 from ...search.types import normalize_resource_type
 from ...utils.cache import create_platform_ttl_cache
+from ...utils.http_client import RequestGateCooldown
 
 _COMPONENT_TYPES = (
     HDHiveSearchService,
@@ -421,11 +421,25 @@ class SearchHandler:
             for provider in self._providers_with(SearchCapability.POINT_BUDGET)
         }
 
+    def can_unlock(self, source: str) -> bool:
+        """渠道能否把未解锁资源换成真实链接。"""
+        return self.supports(
+            source, SearchCapability.RESOURCE_UNLOCK
+        ) or self.supports(source, SearchCapability.RESOURCE_RESOLVE)
+
     def has_unlock_budget(self, source: str, points: Any) -> bool:
         provider = self._search_registry.get(source)
-        return bool(provider.require(
-            SearchCapability.POINT_BUDGET
-        ).has_budget(points))
+        if provider is None:
+            return False
+        if provider.supports(SearchCapability.POINT_BUDGET):
+            return bool(provider.require(
+                SearchCapability.POINT_BUDGET
+            ).has_budget(points))
+        # 非积分渠道只放行零积分资源。
+        try:
+            return int(points or 0) <= 0
+        except (TypeError, ValueError):
+            return False
 
     def source_name(self, source: str) -> str:
         return self.get_source_display_name(source)
@@ -473,14 +487,19 @@ class SearchHandler:
         except Exception as e:
             logger.debug(f"自动推送搜索运行态失败: {e}")
 
+    def _require_provider(self, source: str) -> Any:
+        """取搜索渠道；注册表按设计对未注册渠道返回 None，这里给出明确错误。"""
+        provider = self._search_registry.get(source)
+        if provider is None:
+            raise ValueError(f"搜索渠道未配置或不可用：{source}")
+        return provider
+
     def supports(self, source: str, capability: SearchCapability) -> bool:
-        try:
-            return self._search_registry.get(source).supports(capability)
-        except KeyError:
-            return False
+        provider = self._search_registry.get(source)
+        return bool(provider and provider.supports(capability))
 
     def get_source_client(self, source: str) -> Any:
-        return self._search_registry.get(source).require(
+        return self._require_provider(source).require(
             SearchCapability.ACCOUNT
         )
 
@@ -490,14 +509,20 @@ class SearchHandler:
             candidate: Dict[str, Any],
             search_label: str = "",
     ) -> Any:
-        return self._search_registry.get(source).unlock(
+        return self._require_provider(source).unlock(
             candidate, search_label=search_label
         )
 
     def preview_resource(
             self, source: str, candidate: Dict[str, Any]
     ) -> Dict[str, Any]:
-        return self._search_registry.get(source).preview(candidate)
+        return self._require_provider(source).preview(candidate)
+
+    def preview_files(
+            self, source: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """渠道自有的文件预览：由渠道按其数据形态组织结果。"""
+        return self._require_provider(source).preview_files(payload)
 
     def close(self, release_cache: bool = False) -> None:
         """释放搜索客户端。"""
@@ -650,10 +675,9 @@ class SearchHandler:
             season: Optional[int] = None,
     ) -> List[Dict]:
         source = str(source or "").strip().lower()
-        try:
-            provider = self._search_registry.get(source)
-        except KeyError as error:
-            raise ValueError("搜索渠道未配置或不可用") from error
+        provider = self._search_registry.get(source)
+        if provider is None:
+            raise ValueError("搜索渠道未配置或不可用")
         cache_key = self._search_cache_key(
             source, mediainfo, media_type, season, None, None
         )
@@ -723,9 +747,8 @@ class SearchHandler:
             logger.debug(
                 f"[{self._search_label(mediainfo, media_type, season)}][{source.upper()}] 媒体非动漫类型，跳过检索")
             return []
-        try:
-            provider = self._search_registry.get(source)
-        except KeyError:
+        provider = self._search_registry.get(source)
+        if provider is None:
             search_label = self._search_label(mediainfo, media_type, season)
             logger.warning(f"[{search_label}][{source.upper()}] 未知的搜索源")
             return []

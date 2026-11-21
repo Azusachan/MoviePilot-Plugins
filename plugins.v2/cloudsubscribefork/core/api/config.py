@@ -11,18 +11,21 @@ from .page import clear_ui_options_cache
 from .. import OwnerDelegator
 from ..config import DEFAULT_AUTO_SUBSCRIBE_USERNAME, UIConfig
 from ..services.runtime import sync_lock
-from ...utils.http_client import build_proxy_url, validate_proxy_address
+from ...utils.http_client import (
+    build_proxy_url,
+    normalize_service_url,
+    validate_proxy_address,
+)
 
 
 class ConfigApi(OwnerDelegator):
     AGENT_CONFIG_FIELDS = frozenset(
         {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_cache_ttl_minutes",
          "search_concurrency", "search_source_timeout", "search_circuit_breaker_enabled",
-         "search_circuit_breaker_threshold", "search_circuit_breaker_cooldown", "hdhive_timeout",
          "dian115_timeout", "juying_timeout", "pansou_timeout", "seedhub_timeout", "piratebay_timeout",
-         "uindex_timeout", "pinglian_timeout", "mikan_timeout", "animegarden_timeout", "woniu_timeout",
+         "uindex_timeout", "mikan_timeout", "animegarden_timeout", "woniu_timeout", "xiaoya_timeout",
          "subscription_concurrency", "pansou_result_limit", "hdhive_candidate_limit", "hdhaven_candidate_limit",
-         "woniu_result_limit", "pinglian_unlocks_per_minute"})
+         "woniu_result_limit", "xiaoya_result_limit", "xiaoya_auto_sync_days", "xiaoya_sync_url"})
     _AGENT_BOOL_FIELDS = frozenset(
         {"show_sidebar_nav", "agent_enabled", "notify", "search_cache_enabled", "search_circuit_breaker_enabled"})
     _AGENT_INT_RANGES = {"search_cache_ttl_minutes": (1, 1440), "search_concurrency": (1, 5),
@@ -31,13 +34,14 @@ class ConfigApi(OwnerDelegator):
                          "hdhaven_timeout": (5, 120),
                          "dian115_timeout": (5, 120), "juying_timeout": (5, 120),
                          "pansou_timeout": (5, 120), "seedhub_timeout": (5, 120), "piratebay_timeout": (5, 120),
-                         "uindex_timeout": (5, 120), "pinglian_timeout": (5, 120),
+                         "uindex_timeout": (5, 120),
                          "mikan_timeout": (5, 120), "animegarden_timeout": (5, 120), "woniu_timeout": (5, 120),
+                         "xiaoya_timeout": (5, 180), "xiaoya_auto_sync_days": (1, 30),
                          "subscription_concurrency": (1, 5), "pansou_result_limit": (1, 100),
                          "hdhive_candidate_limit": (1, 20), "hdhive_unlocks_per_minute": (1, 3),
                          "hdhaven_candidate_limit": (1, 20), "hdhaven_unlocks_per_minute": (1, 10),
                          "dian115_unlocks_per_minute": (1, 10), "woniu_result_limit": (1, 20),
-                         "pinglian_unlocks_per_minute": (1, 20)}
+                         "xiaoya_result_limit": (1, 80)}
 
     @staticmethod
     def _validate_search_proxy_config(payload: Dict[str, Any]) -> None:
@@ -50,6 +54,15 @@ class ConfigApi(OwnerDelegator):
         payload["search_proxy"] = normalized
         payload["search_proxy_username"] = username
         payload["search_proxy_password"] = password
+
+    @staticmethod
+    def _validate_cf_solver_config(payload: Dict[str, Any]) -> None:
+        """校验并规范化外部 Cloudflare 求解服务地址与令牌（留空表示停用）。"""
+        try:
+            payload["cf_solver_url"] = normalize_service_url(payload.get("cf_solver_url"))
+        except ValueError as error:
+            raise ValueError(f"外部过盾服务地址无效：{error}") from error
+        payload["cf_solver_key"] = str(payload.get("cf_solver_key") or "").strip()
 
     def _validate_checkin_config(
             self,
@@ -132,6 +145,7 @@ class ConfigApi(OwnerDelegator):
                 return {"success": False, "message": "配置数据格式错误"}
             UIConfig.normalize_config(payload)
             self._validate_search_proxy_config(payload)
+            self._validate_cf_solver_config(payload)
             auto_subscribe_error = self._validate_auto_subscribe_config(payload)
             if auto_subscribe_error:
                 return {"success": False, "message": auto_subscribe_error}

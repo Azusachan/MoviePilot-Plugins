@@ -1,1 +1,2 @@
 *.sh text eol=lf
+.github/scripts/git-merge-fork-identity text eol=lf

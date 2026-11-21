@@ -98,11 +98,12 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
             credential_keys=("hdhive_username", "hdhive_password"),
             error_types=(HDHiveWebError, HDHiveOpenAPIError),
             modes=("normal", "gambler"),
+            mode_labels={"normal": "普通签到", "gambler": "赌狗签到"},
             ready=_checkin_ready,
             hint=_checkin_hint,
             group_title="HDHive 签到",
             enable_cols=4,
-            mode_hint="HDHive 赌狗模式会将签到奖励乘以 -1～3 的随机倍数，最坏扣除 3 积分。",
+            group_hint="赌狗模式将签到奖励乘以 -1～3 的随机倍数，最坏扣除 3 积分。",
         )
 
     @classmethod
@@ -420,7 +421,9 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
         if not hdhive_service and ctx.get("owner"):
             try:
                 from .service import HDHiveSearchService
-                hdhive_service = HDHiveSearchService(ctx["owner"])
+                hdhive_service = HDHiveSearchService(
+                    ctx["owner"], ctx.get("drive_registry")
+                )
             except Exception:
                 hdhive_service = None
         if hdhive_service and getattr(hdhive_service, "available", False):
