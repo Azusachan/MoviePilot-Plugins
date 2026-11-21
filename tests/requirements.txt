@@ -1,0 +1,10 @@
+apscheduler
+beautifulsoup4
+curl_cffi
+httpx
+pycryptodome
+pytz
+qrcode
+sqlalchemy
+starlette
+torf
